@@ -28,5 +28,9 @@ code and later visits start and search faster.
 - `serve.py`: a local server with the isolation headers (`python3 serve.py`, then
   http://localhost:8000/examples/prose/).
 - `README-openms-wasm.md`: the JavaScript API of the module.
+- `desktop/`: the desktop application, packaged with [Neutralinojs](https://neutralino.js.org)
+  (`desktop/build.sh`; the zips are on the [releases page](https://github.com/timosachsenberg/prose-web/releases)).
+  A 3 MB program serves the application on `127.0.0.1:47815` with the isolation headers
+  (`serverHeaders`) and opens it in Chrome, Chromium or Edge; it ends when the window is closed.
 
 OpenMS is licensed under the BSD 3-Clause license (`LICENSE`).

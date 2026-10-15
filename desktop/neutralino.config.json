@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
+  "applicationId": "org.openms.prose",
+  "version": "0.1.0",
+  "defaultMode": "chrome",
+  "port": 47815,
+  "documentRoot": "/resources/",
+  "url": "/examples/prose/",
+  "enableServer": true,
+  "enableNativeAPI": true,
+  "nativeAllowList": ["app.exit"],
+  "tokenSecurity": "one-time",
+  "dataLocation": "system",
+  "logging": { "enabled": true, "writeToLogFile": false },
+  "serverHeaders": {
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp"
+  },
+  "modes": {
+    "chrome": { "width": 1400, "height": 950 },
+    "window": { "title": "ProSE", "width": 1400, "height": 950, "center": true, "exitProcessOnClose": true }
+  },
+  "cli": {
+    "binaryName": "prose",
+    "resourcesPath": "/resources/",
+    "extensionsPath": "/extensions/",
+    "binaryVersion": "6.10.0",
+    "clientVersion": "6.10.0"
+  }
+}
