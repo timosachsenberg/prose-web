@@ -6,6 +6,11 @@ a 3 MB program serves the application (resources.neu) on http://127.0.0.1:47815 
 that threads need and opens it in a window of your Chrome, Chromium or Edge. Everything stays on
 your machine and works offline. Closing the window ends the program (after about 10 s).
 
+With "with PeptDeep features" ticked (next to "Rescore with Percolator"), PeptDeep predicts the
+fragment intensities and retention time of every PSM, and their agreement with the spectrum becomes
+five more Percolator features. The models are included (resources.neu); a search with them needs
+about 0.6 GB more memory.
+
 Requirements: Google Chrome, Chromium or Microsoft Edge (Edge is part of Windows).
 
 Start
@@ -35,5 +40,6 @@ Options
 The browser profile and its caches are in the user's application data directory
 (org.openms.prose in ~/.local/share, ~/Library/Application Support or %APPDATA%).
 
-Built from OpenMS pull request #10575 (commit 4f4d152a6f), a preview, not an OpenMS release.
+Version 0.2.0, built from OpenMS pull request #10575 (commit 80a3b501c4, the threaded module with
+ONNX Runtime), a preview, not an OpenMS release.
 OpenMS: BSD 3-Clause license. Neutralinojs: MIT license.

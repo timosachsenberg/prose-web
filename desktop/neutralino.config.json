@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
   "applicationId": "org.openms.prose",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "defaultMode": "chrome",
   "port": 47815,
   "documentRoot": "/resources/",
