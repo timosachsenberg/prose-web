@@ -7,7 +7,7 @@ Percolator rescoring and optional PeptDeep rescoring features (ONNX Runtime in t
 search runs entirely in the browser; spectra and database stay on the user's machine.
 
 This is a preview built from [OpenMS pull request #10575](https://github.com/OpenMS/OpenMS/pull/10575)
-(commit e296af856f, the threaded build with ONNX Runtime, CMake preset
+(commit 80a3b501c4, the threaded build with ONNX Runtime, CMake preset
 `wasm32-emscripten-mt-onnx-release`), not an OpenMS release. The files are the npm package of that build
 (`openms.mjs`, `openms.wasm`, `openms.d.ts`, `package.json`; its version carries the commit, as the
 service worker names its caches after it), the PeptDeep models (`models/`, loaded when the PeptDeep

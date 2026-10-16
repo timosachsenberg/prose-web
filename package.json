@@ -1,6 +1,6 @@
 {
   "name": "@openms/openms-wasm-mt",
-  "version": "3.7.0-pre.e296af856f",
+  "version": "3.7.0-pre.80a3b501c4",
   "description": "OpenMS, the C++ library for computational mass spectrometry, compiled to multi-threaded WebAssembly (OpenMP) for web applications and Node.js",
   "keywords": [
     "mass-spectrometry",
