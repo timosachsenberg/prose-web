@@ -33,6 +33,30 @@ describe('resolveDesign', () => {
     expect(r.notices).toEqual([])
   })
 
+  it('fraction-major order assigns replicates by occurrence too', () => {
+    const r = resolveDesign([
+      input('a_F1_x.mzML', { condition: 'A', fraction: 1 }),
+      input('a_F1_y.mzML', { condition: 'A', fraction: 1 }),
+      input('a_F2_x.mzML', { condition: 'A', fraction: 2 }),
+      input('a_F2_y.mzML', { condition: 'A', fraction: 2 }),
+    ])
+    expect(r.rows.map((x) => x.replicate)).toEqual([1, 2, 1, 2])
+    expect(r.samples.map((s) => s.label)).toEqual(['A 1', 'A 2'])
+    expect(r.rows.map((x) => x.fractionGroup)).toEqual([1, 2, 1, 2])
+    expect(r.notices).toEqual([])
+    expect(r.summary).toBe('4 files → 2 samples · 1 condition · fractions 1–2')
+  })
+
+  it('replicates that were entered stay as they are next to numbered ones', () => {
+    const r = resolveDesign([
+      input('a_F1_x.mzML', { condition: 'A', fraction: 1, replicate: 3 }),
+      input('a_F1_y.mzML', { condition: 'A', fraction: 1 }),
+      input('a_F2_y.mzML', { condition: 'A', fraction: 2 }),
+    ])
+    expect(r.rows.map((x) => x.replicate)).toEqual([3, 1, 1])
+    expect(r.samples.map((s) => s.label)).toEqual(['A 1', 'A 3'])
+  })
+
   it('a fractionated replicate stays one sample when only fractions are given', () => {
     const r = resolveDesign([
       input('a_F1.mzML', { condition: 'A', fraction: 1 }),
@@ -164,7 +188,27 @@ describe('resolveDesign', () => {
     expect(r.samples).toHaveLength(2)
     expect(r.rows[0].sample).not.toBe(r.rows[1].sample)
     expect(new Set(r.samples.map((s) => s.label)).size).toBe(2)
-    expect(r.notices).toEqual([])
+    expect(r.notices.map((n) => n.kind)).toEqual(['duplicateFile'])
+    expect(r.notices[0].rows).toEqual([a.id, b.id])
+    expect(r.notices[0].message).toContain('run.mzML')
+    expect(r.notices[0].message).toMatch(/rename or remove/i)
+  })
+
+  it('a duplicated file name is not also called a technical replicate of itself', () => {
+    const r = resolveDesign([
+      input('run.mzML', { condition: 'A', replicate: 1 }),
+      input('run.mzML', { condition: 'A', replicate: 1 }),
+    ])
+    expect(r.notices.map((n) => n.kind)).toEqual(['duplicateFile'])
+    // The rows are still told apart as two measurements of one sample.
+    expect(r.rows.map((x) => x.techReplicate)).toEqual([1, 2])
+    const other = resolveDesign([
+      input('run.mzML', { condition: 'A', replicate: 1 }),
+      input('run.mzML', { condition: 'A', replicate: 1 }),
+      input('rerun.mzML', { condition: 'A', replicate: 1 }),
+    ])
+    expect(other.notices.map((n) => n.kind)).toEqual(['duplicateFile', 'techReplicate'])
+    expect(other.notices[1].message).toContain('run and rerun')
   })
 
   it('orders samples by condition (first appearance) and replicate', () => {
@@ -190,6 +234,50 @@ describe('resolveDesign', () => {
     expect(r.rows.map((x) => x.replicate)).toEqual([1, 1])
     expect(r.rows.map((x) => x.fraction)).toEqual([1, 1])
     expect(r.rows.every((x) => x.assumed.replicate && x.assumed.fraction)).toBe(true)
+  })
+
+  it('without a condition, fractions group the files by the same rule', () => {
+    const one = resolveDesign([
+      input('x_F1.mzML', { fraction: 1 }),
+      input('x_F2.mzML', { fraction: 2 }),
+      input('x_F3.mzML', { fraction: 3 }),
+    ])
+    expect(one.samples.map((s) => s.label)).toEqual(['Replicate 1'])
+    expect(one.rows.map((x) => x.sample)).toEqual([0, 0, 0])
+    expect(one.rows.map((x) => x.replicate)).toEqual([1, 1, 1])
+    expect(one.rows.map((x) => x.fractionGroup)).toEqual([1, 1, 1])
+    expect(one.conditions).toEqual([])
+    expect(one.summary).toBe('3 files → 1 sample · fractions 1–3')
+
+    const two = resolveDesign([
+      input('a_F1.mzML', { fraction: 1 }),
+      input('a_F2.mzML', { fraction: 2 }),
+      input('b_F1.mzML', { fraction: 1 }),
+      input('b_F2.mzML', { fraction: 2 }),
+    ])
+    expect(two.samples.map((s) => s.label)).toEqual(['Replicate 1', 'Replicate 2'])
+    expect(two.rows.map((x) => x.sample)).toEqual([0, 0, 1, 1])
+    expect(two.rows.map((x) => x.assumed.replicate)).toEqual([true, true, true, true])
+    expect(two.summary).toBe('4 files → 2 samples · fractions 1–2')
+
+    // Fraction-major order gives the same two samples.
+    const major = resolveDesign([
+      input('a_F1.mzML', { fraction: 1 }),
+      input('b_F1.mzML', { fraction: 1 }),
+      input('a_F2.mzML', { fraction: 2 }),
+      input('b_F2.mzML', { fraction: 2 }),
+    ])
+    expect(major.rows.map((x) => x.sample)).toEqual([0, 1, 0, 1])
+  })
+
+  it('a file with neither condition, replicate nor fraction stays its own sample next to fractionated ones', () => {
+    const r = resolveDesign([
+      input('x_F1.mzML', { fraction: 1 }),
+      input('x_F2.mzML', { fraction: 2 }),
+      input('solo.mzML'),
+    ])
+    expect(r.samples.map((s) => s.label)).toEqual(['Replicate 1', 'solo'])
+    expect(r.rows.map((x) => x.sample)).toEqual([0, 0, 1])
   })
 
   it('without a condition, a given replicate still groups the files', () => {

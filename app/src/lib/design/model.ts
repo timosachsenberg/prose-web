@@ -36,7 +36,13 @@ export type Sample = {
 }
 
 export type Notice = {
-  kind: 'techReplicate' | 'fractionGap' | 'unevenFractions' | 'multiplexed' | 'unknownColumn'
+  kind:
+    | 'techReplicate'
+    | 'fractionGap'
+    | 'unevenFractions'
+    | 'multiplexed'
+    | 'unknownColumn'
+    | 'duplicateFile'
   message: string
   /** Ids of the rows concerned; empty for notices about a loaded file. */
   rows: string[]
@@ -80,7 +86,13 @@ function ranges(sorted: number[]): string {
 const names = (stems: string[]) =>
   stems.length <= 2 ? stems.join(' and ') : `${stems.slice(0, -1).join(', ')} and ${stems[stems.length - 1]}`
 
-type SampleGroup = { rows: number[]; condition: string | null; replicate: number }
+type SampleGroup = {
+  rows: number[]
+  condition: string | null
+  replicate: number
+  /** Without a condition: the replicate number was worked out from the fractions. */
+  derived: boolean
+}
 
 export function resolveDesign(inputs: DesignInput[]): DesignResolution {
   const n = inputs.length
@@ -90,45 +102,50 @@ export function resolveDesign(inputs: DesignInput[]): DesignResolution {
   const givenTech = inputs.map((i) => positiveInt(i.techReplicate))
   const fraction = givenFraction.map((f) => f ?? 1)
 
-  // Replicates. A blank one is numbered per condition in file order; a file whose fraction was already
-  // seen in the current replicate starts the next one (A: F1 F2 F1 F2 gives 1 1 2 2; unfractionated
-  // files all repeat fraction 1, so they give 1 2 3). A file without a condition is its own replicate.
+  // Replicates. A blank one is numbered by order of appearance within its condition: the n-th file with
+  // a given fraction number is replicate n (F1 F2 F1 F2 and F1 F1 F2 F2 both give replicates 1 2 for each
+  // fraction; unfractionated files all have fraction 1, so they give 1 2 3). Files without a condition
+  // but with a fraction form one implicit group that is numbered the same way. Replicates that were
+  // entered stay as they are. A file with neither condition nor fraction is its own sample.
   const replicate: number[] = new Array(n)
-  const counters = new Map<string, { current: number; seen: Set<number> }>()
+  const standalone: boolean[] = new Array(n)
+  const derived: boolean[] = new Array(n).fill(false)
+  const occurrences = new Map<string, Map<number, number>>()
   for (let i = 0; i < n; i++) {
+    standalone[i] = condition[i] === null && givenReplicate[i] === undefined && givenFraction[i] === undefined
     const given = givenReplicate[i]
     if (given !== undefined) {
       replicate[i] = given
-    } else if (condition[i] === null) {
+    } else if (standalone[i]) {
       replicate[i] = 1
     } else {
-      let c = counters.get(condition[i]!)
-      if (!c) counters.set(condition[i]!, (c = { current: 1, seen: new Set() }))
-      if (c.seen.has(fraction[i])) {
-        c.current += 1
-        c.seen.clear()
-      }
-      c.seen.add(fraction[i])
-      replicate[i] = c.current
+      const group = condition[i] === null ? '\0' : `c\0${condition[i]}`
+      let seen = occurrences.get(group)
+      if (!seen) occurrences.set(group, (seen = new Map()))
+      const count = (seen.get(fraction[i]) ?? 0) + 1
+      seen.set(fraction[i], count)
+      replicate[i] = count
+      derived[i] = condition[i] === null
     }
   }
 
-  // Samples: Condition + Replicate. Without a condition a given replicate still groups files; without
-  // either, the file stands alone.
+  // Samples: Condition + Replicate. Without a condition, files with a replicate or a fraction are grouped
+  // by their replicate number; any other file stands alone.
   const groups = new Map<string, SampleGroup>()
   const groupOf: SampleGroup[] = new Array(n)
   for (let i = 0; i < n; i++) {
     const key =
       condition[i] !== null
         ? `c\0${condition[i]}\0${replicate[i]}`
-        : givenReplicate[i] !== undefined
-          ? `r\0${replicate[i]}`
-          : `f\0${i}`
+        : standalone[i]
+          ? `f\0${i}`
+          : `r\0${replicate[i]}`
     let g = groups.get(key)
     if (!g) {
-      groups.set(key, (g = { rows: [], condition: condition[i], replicate: replicate[i] }))
+      groups.set(key, (g = { rows: [], condition: condition[i], replicate: replicate[i], derived: false }))
     }
     g.rows.push(i)
+    g.derived ||= derived[i]
     groupOf[i] = g
   }
 
@@ -148,7 +165,7 @@ export function resolveDesign(inputs: DesignInput[]): DesignResolution {
     let label =
       g.condition !== null
         ? `${g.condition} ${g.replicate}`
-        : g.rows.length === 1
+        : g.rows.length === 1 && !g.derived
           ? fileStem(inputs[g.rows[0]].fileName)
           : `Replicate ${g.replicate}`
     if (usedLabels.has(label)) {
@@ -211,12 +228,31 @@ export function resolveDesign(inputs: DesignInput[]): DesignResolution {
 
   const notices: Notice[] = []
 
+  // The same file name twice: the rows stay apart here, but a design needs one name per file.
+  const byName = new Map<string, number[]>()
+  inputs.forEach((input, i) => {
+    const list = byName.get(input.fileName)
+    if (list) list.push(i)
+    else byName.set(input.fileName, [i])
+  })
+  for (const [name, list] of byName) {
+    if (list.length < 2) continue
+    notices.push({
+      kind: 'duplicateFile',
+      message: `${name} is listed ${list.length} times. Rename or remove one of them: every file needs its own name.`,
+      rows: list.map((i) => inputs[i].id),
+    })
+  }
+
   // The same sample and fraction twice: kept as technical replicates, with a way to change it.
   for (const list of sameMeasurement.values()) {
     if (list.length < 2 || !list.some((i) => autoTech[i])) continue
+    // The same file listed twice is reported above; it is not a technical replicate of itself.
+    const distinct = [...new Set(list.map((i) => inputs[i].fileName))]
+    if (distinct.length < 2) continue
     const s = samples[sample[list[0]]]
     const where = rows[list[0]].assumed.fraction ? s.label : `${s.label}, fraction ${fraction[list[0]]}`
-    const files = names(list.map((i) => fileStem(inputs[i].fileName)))
+    const files = names(distinct.map(fileStem))
     notices.push({
       kind: 'techReplicate',
       message: `${files} are the same sample (${where}) and are kept as technical replicates.`,

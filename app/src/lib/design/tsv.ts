@@ -3,7 +3,7 @@ import { positiveInt, type Notice } from './model'
 
 /** The lines of a text file, without a byte-order mark and with CRLF or LF endings. */
 export function readLines(text: string): string[] {
-  return text.replace(/^﻿/, '').split(/\r\n|\n|\r/)
+  return text.replace(/^\ufeff/, '').split(/\r\n|\n|\r/)
 }
 
 /** The trimmed cells of one tab-separated line. */

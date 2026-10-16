@@ -22,6 +22,16 @@ const clean = (value: string) => value.replace(/[\t\r\n]+/g, ' ')
  * repeated under two conditions would declare a paired design.
  */
 export function writeDesignTsv(r: DesignResolution): string {
+  // OpenMS needs a unique (Spectra_Filepath, Label), and the label is always 1 here.
+  const count = new Map<string, number>()
+  for (const row of r.rows) count.set(clean(row.fileName), (count.get(clean(row.fileName)) ?? 0) + 1)
+  const duplicates = [...count].filter(([, c]) => c > 1).map(([name]) => name)
+  if (duplicates.length > 0) {
+    throw new Error(
+      `Cannot write design.tsv: file name used more than once: ${duplicates.join(', ')}. ` +
+        'Rename or remove the duplicates.',
+    )
+  }
   const order = r.rows
     .map((row, i) => ({ row, i }))
     .sort((a, b) => a.row.fractionGroup - b.row.fractionGroup || a.row.fraction - b.row.fraction || a.i - b.i)
@@ -124,19 +134,23 @@ export function parseDesignTsv(text: string): { inputs: Partial<DesignInput>[]; 
     const c = col(name)
     return c >= 0 ? (row[c] ?? '') : ''
   }
+  // The biological unit of a row: MSstats_BioReplicate, else Sample, else (as in OpenMS, where the
+  // sample defaults to the fraction group) Fraction_Group.
+  const unitOf = (row: string[]) => {
+    const column = ['msstats_bioreplicate', 'sample', 'fraction_group'].find((name) => col(name) >= 0)
+    return (column && cell(row, column)) || undefined
+  }
   const raw: Raw[] = []
   for (const row of fileTable.slice(1)) {
     const fileName = cell(row, 'spectra_filepath')
     if (fileName === '') continue
-    const sample = cell(row, 'sample')
-    const fromSample = bySample.get(sample)
-    const bio = cell(row, 'msstats_bioreplicate')
+    const fromSample = bySample.get(cell(row, 'sample'))
     raw.push({
       fileName,
       fraction: intCell(cell(row, 'fraction')),
       label: cell(row, 'label'),
       condition: fromSample ? fromSample.condition : cell(row, 'msstats_condition') || undefined,
-      unit: fromSample ? fromSample.unit : bio || (col('msstats_bioreplicate') < 0 ? sample || undefined : undefined),
+      unit: fromSample ? fromSample.unit : unitOf(row),
     })
   }
 

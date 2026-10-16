@@ -86,6 +86,18 @@ describe('writeDesignTsv', () => {
     )
   })
 
+  it('refuses to write a design with a file name used twice', () => {
+    const r = resolveDesign([
+      input('run.mzML', { condition: 'A', replicate: 1 }),
+      input('run.mzML', { condition: 'A', replicate: 2 }),
+      input('other.mzML', { condition: 'A', replicate: 3 }),
+    ])
+    expect(r.rows).toHaveLength(3)
+    expect(() => writeDesignTsv(r)).toThrow(Error)
+    expect(() => writeDesignTsv(r)).toThrow(/run\.mzML/)
+    expect(() => writeDesignTsv(r)).not.toThrow(/other\.mzML/)
+  })
+
   it('leaves the condition empty without one and keeps tabs out of the cells', () => {
     const r = resolveDesign([input('a\tb.mzML')])
     expect(writeDesignTsv(r)).toBe([HEADER, '1\t1\ta b.mzML\t1\t1\t\t1', ''].join('\n'))
@@ -133,14 +145,45 @@ describe('parseDesignTsv', () => {
     expect(inputs).toEqual([{ fileName: 'a.mzML', condition: 'A', replicate: 1, fraction: 1 }])
   })
 
-  it('works with only the mandatory columns', () => {
+  it('works with only the mandatory columns: the fraction group is the sample', () => {
     const text = 'Fraction_Group\tFraction\tSpectra_Filepath\n1\t1\ta.mzML\n1\t2\tb.mzML\n'
     const { inputs, notices } = parseDesignTsv(text)
     expect(notices).toEqual([])
     expect(inputs).toEqual([
-      { fileName: 'a.mzML', fraction: 1 },
-      { fileName: 'b.mzML', fraction: 2 },
+      { fileName: 'a.mzML', replicate: 1, fraction: 1 },
+      { fileName: 'b.mzML', replicate: 1, fraction: 2 },
     ])
+  })
+
+  it('two fraction groups of two fractions are two samples', () => {
+    const text = [
+      'Fraction_Group\tFraction\tSpectra_Filepath',
+      '1\t1\ta_F1.mzML',
+      '1\t2\ta_F2.mzML',
+      '2\t1\tb_F1.mzML',
+      '2\t2\tb_F2.mzML',
+    ].join('\n')
+    const { inputs } = parseDesignTsv(text)
+    expect(inputs.map((i) => [i.replicate, i.fraction])).toEqual([
+      [1, 1],
+      [1, 2],
+      [2, 1],
+      [2, 2],
+    ])
+    const r = resolveDesign(withIds(inputs))
+    expect(r.summary).toBe('4 files → 2 samples · fractions 1–2')
+    expect(r.rows.map((x) => x.fractionGroup)).toEqual([1, 1, 2, 2])
+    expect(r.notices).toEqual([])
+  })
+
+  it('Sample, when there is one, takes precedence over the fraction group', () => {
+    const text = [
+      'Fraction_Group\tFraction\tSpectra_Filepath\tLabel\tSample',
+      '1\t1\ta.mzML\t1\tS1',
+      '2\t1\tb.mzML\t1\tS1',
+    ].join('\n')
+    const { inputs } = parseDesignTsv(text)
+    expect(inputs.map((i) => i.replicate)).toEqual([1, 1])
   })
 
   it('takes the biological unit from Sample when there is no MSstats_BioReplicate', () => {
