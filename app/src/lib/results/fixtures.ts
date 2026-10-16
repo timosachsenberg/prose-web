@@ -5,6 +5,9 @@ import { makeTables } from './synthetic'
 
 // Shared by the results tests; not part of the app.
 
+/** The cutoffs of a search that did not limit anything: every PSM and protein counts. */
+export const cutoffs = { psmFdr: 1, proteinFdr: 1 }
+
 /** Two files: control 1 and EGF 1. */
 export function sampleDesign(): DesignResolution {
   return resolveDesign([

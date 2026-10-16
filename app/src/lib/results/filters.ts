@@ -3,7 +3,7 @@
 // copy of any such array. No row is ever turned into an object.
 
 import { columnDef } from './columns'
-import type { Level, ResultModel } from './model'
+import { peptideCounts, qLimit, type Level, type ResultModel } from './model'
 
 export type FilterState = {
   /** Words that all have to match, case-insensitively, anywhere in a row (see `applyFilters`). */
@@ -11,7 +11,8 @@ export type FilterState = {
   /**
    * The q-value limit of the level (a protein's own, a peptide's best PSM, a PSM's). It can only
    * tighten the search: a value above the search's FDR (`ResultModel.psmFdr` / `proteinFdr`) works
-   * like the search's FDR, and so does NaN.
+   * like the search's FDR, and so does NaN. The Peptides table shows its PSM counts at this cutoff:
+   * pass it on to `sortRows` and `toCsv` (or use `peptideCounts(m, maxQ)` for the cells).
    */
   maxQ: number
   /** Proteins only: at least this many peptides with PSMs. 0 = any. */
@@ -33,11 +34,6 @@ export function defaultFilters(): FilterState {
 
 const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean)
 const matches = (haystack: string, tokens: string[]) => tokens.every((t) => haystack.includes(t))
-
-/** The limit that applies: `maxQ`, but not above the search's cutoff (NaN or missing: the cutoff). */
-function qLimit(maxQ: number, cutoff: number) {
-  return maxQ <= cutoff ? maxQ : cutoff // false for NaN, too
-}
 
 /** In at least one condition, at least `need` of its biological samples have a PSM for the protein. */
 function foundInReplicates(m: ResultModel, protein: number, need: number): boolean {
@@ -127,11 +123,11 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
   const out = new Uint32Array(ps.count)
   const limit = qLimit(f.maxQ, m.psmFdr)
   const mask = peptideMask(m, f)
-  const only = f.peptideFilter ?? -1
+  const only = f.peptideFilter
   for (let i = 0; i < ps.count; i++) {
     const k = ps.peptide[i]
     if (!mask[k] || (!f.showDecoys && ps.decoy[i]) || ps.qValue[i] > limit) continue
-    if (only >= 0 && k !== only) continue
+    if (only !== undefined && k !== only) continue // an index that is no peptide matches nothing
     out[kept++] = i
   }
   return out.slice(0, kept)
@@ -141,10 +137,22 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
  * A sorted copy of `rows` by the column `key` (an id of `columns.ts`: "qValue", "psms", "accession",
  * "sample:1", ...). Numbers sort numerically with missing values (NaN) last in both directions, text
  * case-insensitively by UTF-16 code unit. Rows with equal keys stay in the order they have in `rows`.
+ *
+ * `maxQ` is the q-value limit of the filter state that made `rows`: the peptide counts ("psms",
+ * "foundIn", "sample:<n>" of the peptides) are those at that cutoff (see `peptideCounts`). The other
+ * columns do not depend on it.
  */
-export function sortRows(m: ResultModel, level: Level, rows: Uint32Array, key: string, dir: 'asc' | 'desc'): Uint32Array {
+export function sortRows(
+  m: ResultModel,
+  level: Level,
+  rows: Uint32Array,
+  key: string,
+  dir: 'asc' | 'desc',
+  maxQ: number = NaN,
+): Uint32Array {
   const def = columnDef(m, level, key)
   if (!def) throw new Error(`Cannot sort the ${level} table by "${key}"`)
+  const counts = peptideCounts(m, level === 'peptides' ? maxQ : NaN)
   const n = rows.length
   const order = new Uint32Array(n)
   for (let i = 0; i < n; i++) order[i] = i
@@ -152,14 +160,14 @@ export function sortRows(m: ResultModel, level: Level, rows: Uint32Array, key: s
     const sign = dir === 'desc' ? -1 : 1
     const keys = new Float64Array(n)
     for (let i = 0; i < n; i++) {
-      const x = def.number(m, rows[i])
+      const x = def.number(m, rows[i], counts)
       keys[i] = x === x ? sign * x : Infinity
     }
     order.sort((a, b) => keys[a] - keys[b] || a - b) // Infinity - Infinity is NaN, which falls through
   } else {
     const sign = dir === 'desc' ? -1 : 1
     const keys: string[] = new Array(n)
-    for (let i = 0; i < n; i++) keys[i] = def.text!(m, rows[i]).toLowerCase()
+    for (let i = 0; i < n; i++) keys[i] = def.text!(m, rows[i], counts).toLowerCase()
     order.sort((a, b) => (keys[a] === keys[b] ? a - b : keys[a] < keys[b] ? -sign : sign))
   }
   const sorted = new Uint32Array(n)

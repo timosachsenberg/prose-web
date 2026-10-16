@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import type { DesignInput } from '../design/model'
-import { sampleDesign, sampleTables } from './fixtures'
+import { cutoffs, sampleDesign, sampleTables } from './fixtures'
 import { applyFilters, defaultFilters, sortRows, type FilterState } from './filters'
-import { buildModel } from './model'
+import { buildModel, peptideCounts } from './model'
 import { makeLargeTables, makeTables, syntheticDesign } from './synthetic'
 
-const model = () => buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false })
+const model = () => buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, ...cutoffs })
 const all: FilterState = { ...defaultFilters(), showDecoys: true }
 const rows = (...r: number[]) => Uint32Array.from(r)
 
@@ -55,6 +55,26 @@ describe('applyFilters', () => {
     expect(applyFilters(m, 'peptides', { ...all, minPeptides: 2 })).toEqual(rows(0, 1, 2, 3, 4))
   })
 
+  it('minPeptides counts plain sequences, not modified forms', () => {
+    const tables = makeTables({
+      files: ['a.mzML'],
+      proteins: [
+        { accession: 'oxidised', sequence: 'AAAAAMKCCCCCK' },
+        { accession: 'two', sequence: 'AAAAAMKDDDDDK' },
+      ],
+      peptides: [
+        { sequence: 'AAAAAMK', proteins: [0, 1] },
+        { sequence: 'AAAAAMK', proforma: 'AAAAAM[Oxidation]K', mods: [{ position: 5, name: 'Oxidation' }], proteins: [0, 1] },
+        { sequence: 'DDDDDK', proteins: [1] },
+      ],
+      psms: [{ peptide: 0 }, { peptide: 1 }, { peptide: 2 }],
+    })
+    const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
+    expect(Array.from(m.protein.peptides)).toEqual([1, 2]) // not 2 and 3
+    expect(applyFilters(m, 'proteins', { ...all, minPeptides: 2 })).toEqual(rows(1))
+    expect(applyFilters(m, 'peptides', { ...all, minPeptides: 2 })).toEqual(rows(0, 1, 2)) // the table lists the forms
+  })
+
   it('maxQ uses the protein, best-PSM and PSM q-values; a missing q-value passes', () => {
     const m = model()
     expect(applyFilters(m, 'proteins', { ...all, maxQ: 0.003 })).toEqual(rows(0, 2)) // 0.001, 0.002
@@ -67,7 +87,7 @@ describe('applyFilters', () => {
       peptides: [{ sequence: 'AAAAAK', proteins: [0] }],
       psms: [{ peptide: 0, qValue: NaN }],
     })
-    const n = buildModel(noQ, resolveDesign([input('a.mzML')]), { showTechReplicates: false })
+    const n = buildModel(noQ, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
     for (const level of ['proteins', 'peptides', 'psms'] as const) {
       expect(applyFilters(n, level, { ...all, maxQ: 0.001 })).toEqual(rows(0))
     }
@@ -85,6 +105,47 @@ describe('applyFilters', () => {
     expect(applyFilters(m, 'peptides', { ...all, maxQ: 0.05 })).toEqual(rows(0, 1, 2, 3))
     expect(applyFilters(m, 'proteins', { ...all, maxQ: 0.05 })).toEqual(rows(0, 1, 2))
     expect(applyFilters(m, 'proteins', { ...all, maxQ: 0.003 })).toEqual(rows(0, 2))
+  })
+
+  it('the peptide counts follow the peptide cutoff, like the PSM table', () => {
+    // a 1 % search; one peptide has a PSM at q 0.0005 and five at 0.005, in six samples
+    const files = [1, 2, 3, 4, 5, 6].map((i) => `s${i}.mzML`)
+    const design = resolveDesign(files.map((f, i) => input(f, { condition: 'A', replicate: i + 1 })))
+    const tables = makeTables({
+      files,
+      proteins: [
+        { accession: 'P1', sequence: 'AAAAAKCCCCCK' },
+        { accession: 'P2', sequence: 'DDDDDK' },
+      ],
+      peptides: [
+        { sequence: 'AAAAAK', proteins: [0] },
+        { sequence: 'CCCCCK', proteins: [0] },
+        { sequence: 'DDDDDK', proteins: [1] },
+      ],
+      psms: [
+        ...[0.0005, 0.005, 0.005, 0.005, 0.005, 0.005].map((qValue, file) => ({ peptide: 0, file, qValue })),
+        { peptide: 1, file: 0, qValue: 0.0008 },
+        { peptide: 1, file: 1, qValue: 0.0008 },
+        { peptide: 2, file: 0, qValue: 0.003 },
+      ],
+    })
+    const m = buildModel(tables, design, { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.01 })
+    const tight = { ...all, maxQ: 0.001 }
+
+    const peptides = applyFilters(m, 'peptides', tight)
+    expect(peptides).toEqual(rows(0, 1)) // best PSM ≤ 0.001
+    // psms: peptide 0 has the 1 PSM that the PSM table shows behind the same cutoff, not 6
+    const shown = applyFilters(m, 'psms', tight)
+    expect(shown).toEqual(rows(0, 6, 7))
+    expect(Array.from(peptideCounts(m, tight.maxQ).psms)).toEqual([1, 2, 0])
+    // sorted by PSMs: peptide 1 (2 PSMs) before peptide 0 (1); at the search's cutoff 0 (6) is first
+    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc', tight.maxQ)).toEqual(rows(1, 0))
+    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc')).toEqual(rows(0, 1))
+    expect(sortRows(m, 'peptides', peptides, 'foundIn', 'desc', tight.maxQ)).toEqual(rows(1, 0))
+    expect(sortRows(m, 'peptides', peptides, 'sample:1', 'desc', tight.maxQ)).toEqual(rows(1, 0))
+    // the PSM and protein levels are not affected by it
+    expect(sortRows(m, 'proteins', applyFilters(m, 'proteins', all), 'psms', 'desc', tight.maxQ)).toEqual(rows(0, 1))
+    expect(Array.from(m.protein.psms)).toEqual([8, 1])
   })
 
   it('protein and peptide filters restrict the lower levels', () => {
@@ -108,7 +169,7 @@ describe('applyFilters', () => {
         { peptide: 2 },
       ],
     })
-    const m = buildModel(tables, resolveDesign([input('x.mzML')]), { showTechReplicates: false })
+    const m = buildModel(tables, resolveDesign([input('x.mzML')]), { showTechReplicates: false, ...cutoffs })
     expect(applyFilters(m, 'peptides', { ...all, proteinFilter: 0 })).toEqual(rows(0, 2))
     expect(applyFilters(m, 'peptides', { ...all, proteinFilter: 1 })).toEqual(rows(1, 2))
     expect(applyFilters(m, 'psms', { ...all, proteinFilter: 0 })).toEqual(rows(0, 2, 3, 4))
@@ -116,6 +177,11 @@ describe('applyFilters', () => {
     expect(applyFilters(m, 'psms', { ...all, peptideFilter: 2 })).toEqual(rows(2, 4))
     expect(applyFilters(m, 'psms', { ...all, proteinFilter: 1, peptideFilter: 0 })).toEqual(rows())
     expect(applyFilters(m, 'psms', { ...all, proteinFilter: 99 })).toEqual(rows())
+    expect(applyFilters(m, 'psms', { ...all, proteinFilter: -1 })).toEqual(rows())
+    expect(applyFilters(m, 'peptides', { ...all, proteinFilter: -1 })).toEqual(rows())
+    expect(applyFilters(m, 'psms', { ...all, peptideFilter: -1 })).toEqual(rows())
+    expect(applyFilters(m, 'psms', { ...all, peptideFilter: 99 })).toEqual(rows())
+    expect(applyFilters(m, 'psms', { ...all, peptideFilter: 0.5 })).toEqual(rows())
     // they do not restrict their own level or the one above
     expect(applyFilters(m, 'proteins', { ...all, proteinFilter: 0, peptideFilter: 1 })).toEqual(rows(0, 1))
     expect(applyFilters(m, 'peptides', { ...all, peptideFilter: 1 })).toEqual(rows(0, 1, 2))
@@ -146,7 +212,7 @@ describe('applyFilters', () => {
       peptides: found.map((_, i) => ({ sequence: 'AAAAAK', proteins: [i] })),
       psms: found.flatMap((files, peptide) => files.map((file) => ({ peptide, file }))),
     })
-    const m = buildModel(tables, design, { showTechReplicates: false })
+    const m = buildModel(tables, design, { showTechReplicates: false, ...cutoffs })
     expect(Array.from(m.protein.foundIn)).toEqual([3, 2, 2, 3])
     const keep = (n: number) => applyFilters(m, 'proteins', { ...all, minReplicatesInCondition: n })
     expect(keep(0)).toEqual(rows(0, 1, 2, 3))
@@ -170,8 +236,9 @@ describe('applyFilters', () => {
       psms: found.flatMap((files, peptide) => files.map((file) => ({ peptide, file }))),
     })
     for (const showTechReplicates of [false, true]) {
-      const m = buildModel(tables, design, { showTechReplicates })
-      expect(Array.from(m.protein.foundIn)).toEqual(showTechReplicates ? [2, 2] : [1, 2])
+      const m = buildModel(tables, design, { showTechReplicates, ...cutoffs })
+      expect(m.samples).toHaveLength(showTechReplicates ? 3 : 2)
+      expect(Array.from(m.protein.foundIn)).toEqual([1, 2]) // biological samples, not columns
       expect(applyFilters(m, 'proteins', { ...all, minReplicatesInCondition: 2 })).toEqual(rows(1))
     }
   })
@@ -190,7 +257,7 @@ describe('applyFilters', () => {
       ],
       psms: [{ peptide: 0, file: 0 }, { peptide: 0, file: 1 }, { peptide: 1, file: 0 }],
     })
-    const m = buildModel(tables, design, { showTechReplicates: false })
+    const m = buildModel(tables, design, { showTechReplicates: false, ...cutoffs })
     expect(applyFilters(m, 'proteins', { ...all, minReplicatesInCondition: 1 })).toEqual(rows(0, 1))
     expect(applyFilters(m, 'proteins', { ...all, minReplicatesInCondition: 2 })).toEqual(rows(0))
   })
@@ -235,7 +302,7 @@ describe('sortRows', () => {
       peptides: [{ sequence: 'AAAAAK', proteins: [] }],
       psms: [{ peptide: 0, qValue: 0.3 }, { peptide: 0, qValue: NaN }, { peptide: 0, qValue: 0.1 }, { peptide: 0, qValue: 0.2 }],
     })
-    const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false })
+    const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
     const every = applyFilters(m, 'psms', all)
     expect(sortRows(m, 'psms', every, 'qValue', 'asc')).toEqual(rows(2, 3, 0, 1))
     expect(sortRows(m, 'psms', every, 'qValue', 'desc')).toEqual(rows(0, 3, 2, 1))
@@ -255,7 +322,7 @@ describe('performance', () => {
   it('filters and sorts 150k PSMs in under 300 ms', () => {
     const tables = makeLargeTables(150000, 20000, 4000)
     expect(tables.psms.count).toBe(150000)
-    const m = buildModel(tables, syntheticDesign(tables.files), { showTechReplicates: false })
+    const m = buildModel(tables, syntheticDesign(tables.files), { showTechReplicates: false, ...cutoffs })
 
     const t0 = performance.now()
     const kept = applyFilters(m, 'psms', { ...defaultFilters(), maxQ: 0.05, hideContaminants: true, text: 'a' })
@@ -277,5 +344,14 @@ describe('performance', () => {
     console.info(`filter + sort of all ${everything.length} PSMs: ${ms1.toFixed(1)} ms`)
     expect(everything.length).toBe(150000)
     expect(ms1).toBeLessThan(300)
+
+    // the Peptides table at a cutoff below the search's counts the PSMs once more
+    const t2 = performance.now()
+    const q = { ...defaultFilters(), maxQ: 0.003 }
+    const peptides = sortRows(m, 'peptides', applyFilters(m, 'peptides', q), 'psms', 'desc', q.maxQ)
+    const ms2 = performance.now() - t2
+    console.info(`filter + sort of ${peptides.length} peptides with recounted PSMs: ${ms2.toFixed(1)} ms`)
+    expect(peptides.length).toBeGreaterThan(1000)
+    expect(ms2).toBeLessThan(300)
   })
 })

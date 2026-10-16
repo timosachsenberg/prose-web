@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { cutoffs } from './fixtures'
 import { buildModel } from './model'
 import { loadDebugResult, makeLargeTables, makeTables, syntheticDesign } from './synthetic'
 
@@ -37,7 +38,7 @@ describe('makeLargeTables', () => {
   it('has a design that gives six samples in two conditions', () => {
     const d = syntheticDesign(t.files)
     expect(d.samples.map((s) => s.label)).toEqual(['control 1', 'control 2', 'control 3', 'EGF 1', 'EGF 2', 'EGF 3'])
-    const m = buildModel(t, d, { showTechReplicates: false })
+    const m = buildModel(t, d, { showTechReplicates: false, ...cutoffs })
     expect(m.samples).toHaveLength(6)
   })
 })

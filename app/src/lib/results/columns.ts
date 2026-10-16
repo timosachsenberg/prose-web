@@ -2,10 +2,13 @@
 // its id ("psms", "qValue", "sample:1"); `sortRows` takes an id as key and `toCsv` a list of ids.
 // The per-sample counts of proteins and peptides are the columns "sample:<n>" (n = the index into
 // `ResultModel.samples`); in `toCsv` the id "samples" stands for all of them.
+//
+// The peptide counts ("psms", "foundIn", "sample:<n>") depend on the cutoff of the Peptides table
+// (see `peptideCounts`): the getters get the counts to read as their third argument.
 
-import type { Level, ResultModel } from './model'
+import type { Level, PeptideCounts, ResultModel } from './model'
 
-type Get<T> = (m: ResultModel, row: number) => T
+type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
 
 export type ColumnDef = {
   /** The header in a CSV file. */
@@ -16,10 +19,14 @@ export type ColumnDef = {
   text?: Get<string>
   /** How the column prints in a CSV file when that differs from the number or text. */
   csv?: Get<string>
+  /** The CSV cells are text (and need protection against spreadsheet formulas), not numbers. */
+  csvText: boolean
 }
 
-const num = (header: string, number: Get<number>, csv?: Get<string>): ColumnDef => ({ header, number, csv })
-const str = (header: string, text: Get<string>, csv?: Get<string>): ColumnDef => ({ header, text, csv })
+const num = (header: string, number: Get<number>, csv?: Get<string>): ColumnDef => ({ header, number, csv, csvText: false })
+const str = (header: string, text: Get<string>, csv?: Get<string>): ColumnDef => ({ header, text, csv, csvText: true })
+/** A column that sorts by a number and prints as text. */
+const label = (header: string, number: Get<number>, csv: Get<string>): ColumnDef => ({ header, number, csv, csvText: true })
 
 const accessions = (m: ResultModel, peptide: number) =>
   Array.from(m.peptide.proteins[peptide], (p) => m.tables.proteins.accession[p])
@@ -45,22 +52,17 @@ const peptides: Record<string, ColumnDef> = {
   sequence: str('Sequence', (m, k) => m.tables.peptides.sequence[k]),
   length: num('Length', (m, k) => m.tables.peptides.sequence[k].length),
   proteins: str('Proteins', (m, k) => accessions(m, k)[0] ?? '', (m, k) => accessions(m, k).join(';')),
-  psms: num('PSMs', (m, k) => m.peptide.psms[k]),
+  psms: num('PSMs', (_, k, c) => c.psms[k]),
   bestQ: num('Best PSM q-value', (m, k) => m.peptide.bestQ[k]),
-  foundIn: num('Found in', (m, k) => {
-    const nS = m.samples.length
-    let found = 0
-    for (let s = 0; s < nS; s++) if (m.peptide.perSample[k * nS + s] > 0) found++
-    return found
-  }),
+  foundIn: num('Found in', (_, k, c) => c.foundIn[k]),
   contaminant: num('Contaminant', (m, k) => m.peptide.contaminant[k]),
   decoy: num('Decoy', (m, k) => m.tables.peptides.decoy[k]),
 }
 
 const psms: Record<string, ColumnDef> = {
   // sorts by the file's position in the search, prints its name
-  file: num('File', (m, i) => m.tables.psms.file[i], (m, i) => m.tables.files[m.tables.psms.file[i]]),
-  sample: num('Sample', (m, i) => m.psmSample[i], (m, i) => m.samples[m.psmSample[i]].label),
+  file: label('File', (m, i) => m.tables.psms.file[i], (m, i) => m.tables.files[m.tables.psms.file[i]]),
+  sample: label('Sample', (m, i) => m.psmSample[i], (m, i) => m.samples[m.psmSample[i]].label),
   nativeId: str('Spectrum', (m, i) => m.tables.psms.nativeId[i]),
   rt: num('RT (s)', (m, i) => m.tables.psms.rt[i]),
   mz: num('m/z', (m, i) => m.tables.psms.mz[i]),
@@ -83,15 +85,21 @@ const psms: Record<string, ColumnDef> = {
 
 const tables: Record<Level, Record<string, ColumnDef>> = { proteins, peptides, psms }
 
-/** The column `id` of a level, or `undefined`. "sample:<n>" is the count of sample column n (proteins and peptides). */
+/**
+ * The column `id` of a level, or `undefined`. "sample:<n>" is the count of sample column n (proteins
+ * and peptides; the protein counts are at the search's PSM FDR, the peptide counts are the third
+ * argument of the getter).
+ */
 export function columnDef(m: ResultModel, level: Level, id: string): ColumnDef | undefined {
   if (Object.hasOwn(tables[level], id)) return tables[level][id]
   const match = level !== 'psms' ? /^sample:(\d+)$/.exec(id) : null
   const sample = match ? Number(match[1]) : -1
   if (sample < 0 || sample >= m.samples.length) return undefined
   const nS = m.samples.length
-  const counts = level === 'proteins' ? m.protein.perSample : m.peptide.perSample
-  return num(m.samples[sample].label, (_, row) => counts[row * nS + sample])
+  const header = m.samples[sample].label
+  return level === 'proteins'
+    ? num(header, (m, p) => m.protein.perSample[p * nS + sample])
+    : num(header, (_, k, c) => c.perSample[k * nS + sample])
 }
 
 /** The ids of `columns` with "samples" replaced by "sample:0" ... "sample:<n - 1>". Unknown ids throw. */
