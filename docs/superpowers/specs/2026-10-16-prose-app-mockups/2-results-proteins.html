@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ProSE · Results · Proteins</title><link rel="stylesheet" href="style.css">
+<style>
+  .layout { display: grid; grid-template-columns: 1fr 470px; gap: 0; height: calc(100vh - 52px); }
+  .main { padding: 16px 20px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+  .side { border-left: 1px solid var(--border); background: var(--background); padding: 16px 18px; overflow: hidden; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .stat { background: var(--background); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat .v { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+  .stat .n { color: var(--muted-fg); font-size: 12px; }
+  .tablewrap { background: var(--background); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: 1; }
+  th.grp { text-align: center; border-bottom: 1px solid var(--border); color: var(--foreground); font-weight: 600; padding: 6px 4px 4px; }
+  th.smp, td.smp { text-align: right; padding-left: 4px; padding-right: 8px; width: 46px; }
+  td.smp.none { color: #d4d4d8; }
+  th.sep, td.sep { border-left: 1px solid var(--border); }
+  .cov { display: inline-flex; align-items: center; gap: 6px; }
+  .covbar { width: 54px; height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
+  .covbar i { display: block; height: 100%; background: var(--cover-strong); border-radius: 3px; }
+  .seq { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; line-height: 1; }
+  .seqrow { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 9px; }
+  .seqrow .pos { width: 30px; text-align: right; color: var(--muted-fg); font-size: 11px; padding-top: 2px; }
+  .blocks { display: flex; gap: 6px; }
+  .block { display: flex; }
+  .aa { width: 8.4px; text-align: center; padding: 2px 0 3px; position: relative; }
+  .aa.c { background: var(--cover); color: #1e3a8a; }
+  .aa.m::after { content: ""; position: absolute; left: 50%; top: -4px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--ion-y); }
+  .legend { display: flex; gap: 14px; color: var(--muted-fg); font-size: 12px; align-items: center; margin: 8px 0 14px; }
+  .sw { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .found { display: grid; grid-template-columns: 70px repeat(3, 1fr); gap: 4px; align-items: center; font-size: 12px; }
+  .cellf { height: 18px; border-radius: 4px; background: var(--muted); text-align: center; line-height: 18px; color: var(--muted-fg); }
+  .cellf.y { background: #dbeafe; color: #1e3a8a; font-weight: 500; }
+</style></head>
+<body>
+<div class="topbar">
+  <div class="brand">ProSE<small>OpenMS search engine</small></div>
+  <nav class="nav"><a>New search</a><a class="active">Results</a><a>History</a></nav>
+  <div class="chip">EGF time course · 6 files · finished 14:32 · 2 min 41 s</div>
+  <div class="spacer"></div>
+  <span class="btn sm">Save project</span><span class="btn sm">Export ▾</span>
+</div>
+<div class="layout">
+  <div class="main">
+    <div class="stats">
+      <div class="stat"><div class="v">3,412</div><div class="n">protein groups · 1 % FDR</div></div>
+      <div class="stat"><div class="v">28,905</div><div class="n">peptides</div></div>
+      <div class="stat"><div class="v">96,318</div><div class="n">PSMs · 31 % of MS2</div></div>
+      <div class="stat"><div class="v">+14.2 %</div><div class="n">PSMs from rescoring</div></div>
+      <div class="stat"><div class="v">1.8 ppm</div><div class="n">median precursor error</div></div>
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <div class="tabs"><span>Overview</span><span class="active">Proteins<b>3,412</b></span><span>Peptides<b>28,905</b></span><span>PSMs<b>96,318</b></span><span>Samples</span><span>QC</span></div>
+      <div class="row"><span class="btn sm">Columns</span><span class="btn sm primary">Export CSV · 2,918 rows</span></div>
+    </div>
+    <div class="row">
+      <div class="input" style="width:260px"><span class="hint">⌕</span><span class="hint">Accession, gene, description, peptide…</span></div>
+      <div class="select">Protein FDR ≤ 1 % <span class="hint">(q ≤ 0.01)</span></div>
+      <div class="select">≥ 2 peptides</div>
+      <div class="select">Found in ≥ 2 replicates of a condition</div>
+      <span class="chip">Contaminants hidden ✕</span>
+      <span class="btn sm ghost">+ Filter</span>
+      <div class="spacer"></div><span class="hint">2,918 of 3,412</span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th colspan="6" style="border-bottom:none"></th><th class="grp sep" colspan="2">control</th><th class="grp sep" colspan="2">EGF</th><th class="sep" style="border-bottom:none"></th></tr>
+          <tr><th>Accession</th><th>Gene</th><th>Description</th><th>Coverage</th><th class="num">Peptides</th><th class="num">PSMs ↓</th>
+              <th class="smp sep">1</th><th class="smp">2</th><th class="smp sep">1</th><th class="smp">1·TR</th><th class="sep">Found in</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="row" style="justify-content:space-between"><div><div class="hint mono">P02768 · ALB_HUMAN</div><h1 style="margin:2px 0 0">Albumin</h1></div><span class="btn sm ghost">✕</span></div>
+    <div class="row" style="margin:10px 0 4px"><span class="badge">Coverage 78.3 %</span><span class="badge">46 peptides</span><span class="badge">1,284 PSMs</span><span class="badge">585 aa · 69.4 kDa</span></div>
+    <div class="legend"><span><span class="sw" style="background:var(--cover)"></span>covered by peptides at 1 % FDR</span><span><span class="sw" style="background:var(--ion-y);width:6px;height:6px;border-radius:50%"></span>modified site</span></div>
+    <div class="seq" id="coverage"></div>
+    <h2 style="font-size:13px;font-weight:600;margin:16px 0 8px">Found in samples</h2>
+    <div class="found">
+      <span></span><span class="hint" style="text-align:center">rep 1</span><span class="hint" style="text-align:center">rep 2</span><span class="hint" style="text-align:center">TR</span>
+      <span>control</span><span class="cellf y">412</span><span class="cellf y">398</span><span></span>
+      <span>EGF</span><span class="cellf y">241</span><span></span><span class="cellf y">233</span>
+    </div>
+    <h2 style="font-size:13px;font-weight:600;margin:16px 0 6px">Peptides <span class="hint" style="font-weight:400">· click to see PSMs</span></h2>
+    <table style="font-size:12px"><thead><tr><th>Sequence</th><th class="num">PSMs</th><th class="num">best q</th></tr></thead><tbody id="peps"></tbody></table>
+  </div>
+</div>
+<script>
+const proteins = [
+  ["P02768","ALB","Albumin",78.3,46,1284,[412,398,241,233],"4 / 4"],
+  ["P68871","HBB","Hemoglobin subunit beta",91.2,17,644,[201,188,131,124],"4 / 4"],
+  ["P01857","IGHG1","Immunoglobulin heavy constant gamma 1",63.0,21,512,[160,151,103,98],"4 / 4"],
+  ["P00533","EGFR","Epidermal growth factor receptor",22.4,19,207,[18,21,86,82],"4 / 4"],
+  ["P62258","YWHAE","14-3-3 protein epsilon",58.8,14,163,[44,40,40,39],"4 / 4"],
+  ["P27361","MAPK3","Mitogen-activated protein kinase 3",31.5,9,58,[0,0,30,28],"2 / 4"],
+  ["Q13480","GAB1","GRB2-associated-binding protein 1",12.7,6,41,[0,3,19,19],"3 / 4"],
+  ["P29353","SHC1","SHC-transforming protein 1",18.9,7,39,[2,0,19,18],"3 / 4"],
+  ["P62993","GRB2","Growth factor receptor-bound protein 2",44.1,8,37,[8,7,11,11],"4 / 4"],
+  ["P04626","ERBB2","Receptor tyrosine-protein kinase erbB-2",6.3,4,15,[0,0,8,7],"2 / 4"],
+  ["Q9Y6K9","IKBKG","NF-kappa-B essential modulator",9.8,3,11,[3,4,2,2],"4 / 4"],
+];
+const rows = document.getElementById("rows");
+proteins.forEach((p, i) => {
+  const smp = p[6].map((n, j) => `<td class="smp ${n ? "" : "none"} ${j % 2 === 0 ? "sep" : ""}">${n || "–"}</td>`).join("");
+  rows.insertAdjacentHTML("beforeend", `<tr class="${i === 0 ? "sel" : ""}"><td class="mono">${p[0]}</td><td><b style="font-weight:600">${p[1]}</b></td>
+    <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${p[2]}</td>
+    <td><span class="cov"><span class="covbar"><i style="width:${p[3]}%"></i></span><span class="hint">${p[3].toFixed(0)} %</span></span></td>
+    <td class="num">${p[4]}</td><td class="num">${p[5].toLocaleString("en")}</td>${smp}<td class="sep hint">${p[7]}</td></tr>`);
+});
+const albumin = "MKWVTFISLLFLFSSAYSRGVFRRDAHKSEVAHRFKDLGEENFKALVLIAFAQYLQQCPFEDHVKLVNEVTEFAKTCVADESAENCDKSLHTLFGDKLCTVATLRETYGEMADCCAKQEPERNECFLQHKDDNPNLPRLVRPEVDVMCTAFHDNEETFLKKYLYEIARRHPYFYAPELLFFAKRYKAAFTECCQAADKAACLLPKLDELRDEGKASSAKQRLKCASLQKFGERAFKAWAVARLSQRFPKAEFAEVSKLVTDLTKVHTECCHGDLLECADDRADLAKYICENQDSISSKLKECCEKPLLEKSHCIAEVENDEMPADLPSLAADFVESKDVCKNYAEAKDVFLGMFLYEYARRHPDYSVVLLLRLAKTYETTLEKCCAAADPHECYAKVFDEFKPLVEEPQNLIKQNCELFEQLGEYKFQNALLVRYTKKVPQVSTPTLVEVSRNLGKVGSKCCKHPEAKRMPCAEDYLSVVLNQLCVLHEKTPVSDRVTKCCTESLVNRRPCFSALEVDETYVPKEFNAETFTFHADICTLSEKERQIKKQTALVELVKHKPKATKEQLKAVMDDFAAFVEKCCKADDKETCFAEEGKKLVAASQAALGL";
+const peptides = [["DAHKSEVAHR",31,"2e-5"],["FKDLGEENFK",48,"1e-6"],["ALVLIAFAQYLQQCPFEDHVK",112,"<1e-6"],["LVNEVTEFAK",96,"<1e-6"],["TCVADESAENCDK",22,"3e-5"],
+  ["SLHTLFGDK",41,"1e-6"],["LCTVATLR",18,"4e-4"],["ETYGEMADCCAK",27,"2e-5"],["RHPYFYAPELLFFAK",35,"<1e-6"],["AAFTECCQAADK",29,"1e-5"],["LDELRDEGK",9,"2e-3"],
+  ["AEFAEVSK",54,"<1e-6"],["LVTDLTK",61,"<1e-6"],["VHTECCHGDLLECADDR",33,"3e-6"],["YICENQDSISSK",44,"<1e-6"],["LKECCEKPLLEK",15,"7e-4"],
+  ["DVFLGMFLYEYAR",38,"<1e-6"],["HPDYSVVLLLR",52,"<1e-6"],["VFDEFKPLVEEPQNLIK",47,"<1e-6"],["QNCELFEQLGEYK",57,"<1e-6"],["KVPQVSTPTLVEVSR",63,"<1e-6"],
+  ["MPCAEDYLSVVLNQLCVLHEK",21,"5e-6"],["RPCFSALEVDETYVPK",30,"1e-6"],["EFNAETFTFHADICTLSEK",26,"2e-6"],["AVMDDFAAFVEK",39,"<1e-6"],["QTALVELVK",58,"<1e-6"]];
+const covered = new Array(albumin.length).fill(false), mod = new Set([140, 297, 552]);
+for (const [p] of peptides) { const at = albumin.indexOf(p); if (at >= 0) for (let i = at; i < at + p.length; ++i) covered[i] = true; }
+const cov = document.getElementById("coverage");
+for (let r = 0; r < albumin.length; r += 40) {
+  let blocks = "";
+  for (let b = r; b < Math.min(r + 40, albumin.length); b += 10) {
+    let aa = ""; for (let i = b; i < Math.min(b + 10, albumin.length); ++i) aa += `<span class="aa ${covered[i] ? "c" : ""} ${mod.has(i) ? "m" : ""}">${albumin[i]}</span>`;
+    blocks += `<span class="block">${aa}</span>`;
+  }
+  cov.insertAdjacentHTML("beforeend", `<div class="seqrow"><span class="pos">${r + 1}</span><span class="blocks">${blocks}</span></div>`);
+}
+const pt = document.getElementById("peps");
+peptides.slice(0, 7).forEach(([s, n, q]) => pt.insertAdjacentHTML("beforeend", `<tr><td class="mono">${s}</td><td class="num">${n}</td><td class="num">${q}</td></tr>`));
+</script>
+</body></html>

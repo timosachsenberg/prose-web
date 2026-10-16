@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>ProSE · New search</title><link rel="stylesheet" href="style.css">
+<style>
+  .design td { padding: 6px 10px; }
+  .design .cell { display: inline-block; min-width: 64px; padding: 3px 7px; border: 1px solid transparent; border-radius: 5px; }
+  .design .cell.edit { border-color: var(--border); background: #fff; }
+  .settings { grid-template-columns: repeat(4, 1fr); }
+  .mods { display: flex; gap: 6px; flex-wrap: wrap; }
+  .footer { position: fixed; left: 0; right: 0; bottom: 0; height: 60px; background: rgba(255,255,255,.96); border-top: 1px solid var(--border);
+            display: flex; align-items: center; padding: 0 calc((100% - 1080px) / 2); gap: 12px; }
+  .opt { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; }
+  .opt + .opt { border-top: 1px solid var(--border); }
+  .opt .t { font-weight: 600; }
+</style></head>
+<body>
+<div class="topbar">
+  <div class="brand">ProSE<small>OpenMS search engine</small></div>
+  <nav class="nav"><a class="active">New search</a><a>Results</a><a>History</a></nav>
+  <div class="spacer"></div>
+  <span class="chip"><span class="dot"></span>OpenMS 3.7 · 16 threads · works offline</span>
+</div>
+
+<div class="page">
+  <h1>New search</h1>
+  <p class="lead">Spectra and database stay on this computer.</p>
+
+  <div class="card">
+    <div class="card-h"><h2>Spectra</h2><span class="sub">6 files · 1.9 GB</span><div class="spacer"></div>
+      <div class="row"><span class="btn sm ghost">Paste from spreadsheet</span><span class="btn sm">Load design (SDRF, design.tsv)</span><span class="btn sm">Save design.tsv</span><span class="btn sm">Add files</span></div></div>
+    <div class="card-b">
+      <div class="row" style="margin-bottom:10px">
+        <span class="badge">6 files → 3 samples · 2 conditions · fractions 1–2</span>
+        <span class="hint">Empty fields: unfractionated, replicates numbered in file order. Greyed values are assumed.</span>
+      </div>
+      <table class="design">
+        <thead><tr><th>File</th><th>Condition</th><th>Replicate</th><th>Fraction</th><th class="num">Spectra</th><th class="num">Size</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ctrl_a_F1.mzML</td><td><span class="cell edit">control</span></td><td><span class="cell edit">1</span></td><td><span class="cell edit">1</span></td><td class="num">31,204</td><td class="num">312 MB</td><td class="hint">✕</td></tr>
+          <tr><td class="mono">ctrl_a_F2.mzML</td><td><span class="cell edit">control</span></td><td><span class="cell edit">1</span></td><td><span class="cell edit">2</span></td><td class="num">29,876</td><td class="num">301 MB</td><td class="hint">✕</td></tr>
+          <tr><td class="mono">ctrl_b_F1.mzML</td><td><span class="cell edit">control</span></td><td><span class="cell edit">2</span></td><td><span class="cell edit">1</span></td><td class="num">30,511</td><td class="num">309 MB</td><td class="hint">✕</td></tr>
+          <tr><td class="mono">ctrl_b_F2.mzML</td><td><span class="cell edit">control</span></td><td><span class="cell edit">2</span></td><td><span class="cell edit">2</span></td><td class="num">30,002</td><td class="num">305 MB</td><td class="hint">✕</td></tr>
+          <tr><td class="mono">egf_30min.mzML</td><td><span class="cell edit">EGF</span></td><td><span class="cell auto">1</span></td><td><span class="cell auto">–</span></td><td class="num">33,918</td><td class="num">344 MB</td><td class="hint">✕</td></tr>
+          <tr><td class="mono">egf_30min_reinject.mzML</td><td><span class="cell edit">EGF</span></td><td><span class="cell edit">1</span></td><td><span class="cell auto">–</span></td><td class="num">33,640</td><td class="num">341 MB</td><td class="hint">✕</td></tr>
+        </tbody>
+      </table>
+      <div class="notice" style="margin-top:10px">⚠&nbsp; <span><b>egf_30min</b> and <b>egf_30min_reinject</b> are the same sample (EGF, replicate 1) and are kept as technical replicates. <u>Change</u></span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>Protein database</h2></div>
+    <div class="card-b grid" style="grid-template-columns: 2fr 1fr 1fr">
+      <div><span class="label">FASTA</span><div class="input" style="width:100%"><span class="mono">UP000005640_9606.fasta</span><span class="hint" style="margin-left:auto">20,652 proteins</span></div></div>
+      <div><span class="label">Decoys</span><div class="select" style="width:100%">Generate (reversed)</div></div>
+      <div><span class="label">Contaminants</span><div class="select" style="width:100%">Add cRAP (116)</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>Search settings</h2><span class="sub">Preset</span><div class="select" style="min-width:230px">Orbitrap HCD · tryptic</div><div class="spacer"></div><span class="btn sm ghost">All 76 parameters ›</span></div>
+    <div class="card-b grid settings">
+      <div><span class="label">Enzyme</span><div class="select" style="width:100%">Trypsin/P</div></div>
+      <div><span class="label">Missed cleavages</span><div class="input" style="width:100%">2</div></div>
+      <div><span class="label">Precursor tolerance</span><div class="input" style="width:100%">10 <span class="hint" style="margin-left:auto">ppm</span></div></div>
+      <div><span class="label">Fragment tolerance</span><div class="input" style="width:100%">20 <span class="hint" style="margin-left:auto">ppm</span></div></div>
+      <div style="grid-column: span 2"><span class="label">Fixed modifications</span><div class="input" style="width:100%"><span class="badge">Carbamidomethyl (C)</span></div></div>
+      <div style="grid-column: span 2"><span class="label">Variable modifications</span><div class="input" style="width:100%"><span class="badge">Oxidation (M)</span><span class="badge">Acetyl (Protein N-term)</span></div></div>
+      <div><span class="label">PSM FDR</span><div class="input" style="width:100%">1<span style="margin-left:2px">%</span><span class="hint" style="margin-left:auto">q ≤ 0.01</span></div><div class="row" style="margin-top:6px;gap:4px"><span class="chip">0.1 %</span><span class="chip" style="border-color:#18181b;color:#18181b">1 %</span><span class="chip">5 %</span></div></div>
+      <div><span class="label">Protein FDR</span><div class="input" style="width:100%">1<span style="margin-left:2px">%</span><span class="hint" style="margin-left:auto">q ≤ 0.01</span></div><div class="row" style="margin-top:6px;gap:4px"><span class="chip">0.1 %</span><span class="chip" style="border-color:#18181b;color:#18181b">1 %</span><span class="chip">5 %</span></div></div>
+      <div><span class="label">Charges</span><div class="input" style="width:100%">2 – 5</div></div>
+      <div><span class="label">Peptide length</span><div class="input" style="width:100%">7 – 40</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h2>Rescoring</h2></div>
+    <div class="card-b">
+      <div class="opt"><span class="switch on"></span><div><div class="t">Percolator</div><div class="hint">Learns from targets and decoys which PSM features separate them; typically 10–20 % more PSMs at the same FDR.</div></div></div>
+      <div class="opt"><span class="switch on"></span><div style="flex:1"><div class="t">PeptDeep predictions</div><div class="hint">Adds agreement with predicted fragment intensities and retention times as Percolator features. Loads 17 MB of models once; needs about 0.6 GB more memory.</div></div>
+        <div><span class="label">Instrument</span><div class="select" style="min-width:150px">Q Exactive / Orbitrap</div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <span class="hint">6 files in 3 samples · 20,652 proteins + decoys · estimated memory 2.6 GB of 4 GB</span>
+  <div class="spacer"></div>
+  <span class="btn">Save as preset</span>
+  <span class="btn primary">Start search <span class="kbd" style="background:#27272a;color:#a1a1aa;border-color:#3f3f46">Ctrl ↵</span></span>
+</div>
+</body></html>

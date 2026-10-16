@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Modification encoding</title><link rel="stylesheet" href="style.css">
+<style>
+  :root { --mod-bg: #d7f5ea; --mod-fg: #065f46; --mod: #1baf7a; }
+  body { background: #fafafa; }
+  .wrap { padding: 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .opt h2 { font-size: 14px; font-weight: 650; margin: 0 0 2px; }
+  .opt .sub { color: var(--muted-fg); font-size: 12px; margin-bottom: 12px; min-height: 34px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12.5px; }
+  .m { background: var(--mod-bg); color: var(--mod-fg); border-radius: 3px; padding: 0 1px; }
+  .m sup, .nt { font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 9px; font-weight: 600; }
+  .m sup { margin-left: 1px; }
+  .nt { color: var(--mod-fg); vertical-align: super; margin-right: 1px; }
+  .pf .br { color: var(--mod-fg); font-weight: 600; }
+  .lc { color: var(--mod-fg); font-weight: 700; text-decoration: underline; text-decoration-color: var(--mod); text-underline-offset: 2px; }
+  .modcol { color: var(--muted-fg); font-size: 12px; }
+  .cov { font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 13px; letter-spacing: 0; margin-top: 14px; }
+  .cov span { display: inline-block; width: 11px; text-align: center; padding: 3px 0; position: relative; }
+  .cov .c { background: var(--cover); color: #1e3a8a; }
+  .cov .mm::after { content: ""; position: absolute; left: 50%; top: -3px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--mod); }
+  .cov .mt { background: var(--mod-bg); color: var(--mod-fg); font-weight: 700; }
+  .rec { border: 2px solid var(--primary); }
+  .tag { font-size: 11px; font-weight: 600; background: var(--primary); color: #fff; border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+  td { padding: 6px 8px; }
+  .pro { color: var(--ok); } .con { color: #b91c1c; }
+  ul { margin: 12px 0 0; padding-left: 16px; font-size: 12px; } li { margin: 2px 0; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="card opt rec"><div class="card-b">
+    <h2>A · Marked residue<span class="tag">proposal</span></h2>
+    <div class="sub">One colour means "modified"; a short label says which. Hover: full Unimod name, Δ mass, site localization.</div>
+    <table><thead><tr><th>Peptide</th><th class="num">PSMs</th></tr></thead><tbody>
+      <tr><td class="mono"><span class="nt">ac</span>DAHKSEVAHR</td><td class="num">12</td></tr>
+      <tr><td class="mono">AV<span class="m">M<sup>ox</sup></span>DDFAAFVEK</td><td class="num">39</td></tr>
+      <tr><td class="mono">YICENQD<span class="m">S<sup>ph</sup></span>ISSK</td><td class="num">6</td></tr>
+      <tr><td class="mono">DVFLG<span class="m">M<sup>ox</sup></span>FLYEYAR</td><td class="num">14</td></tr>
+    </tbody></table>
+    <div class="cov" id="covA"></div>
+    <ul><li class="pro">readable at a glance, sorts and searches like plain sequences</li><li class="pro">works for any modification (label, not colour)</li><li class="con">labels need a short form (ox, ph, ac, de, …)</li></ul>
+  </div></div>
+
+  <div class="card opt"><div class="card-b">
+    <h2>B · ProForma text</h2>
+    <div class="sub">The HUPO-PSI standard notation, as written to exports; unambiguous, but long in tables.</div>
+    <table><thead><tr><th>Peptide</th><th class="num">PSMs</th></tr></thead><tbody class="pf">
+      <tr><td class="mono"><span class="br">[Acetyl]-</span>DAHKSEVAHR</td><td class="num">12</td></tr>
+      <tr><td class="mono">AVM<span class="br">[Oxidation]</span>DDFAAFVEK</td><td class="num">39</td></tr>
+      <tr><td class="mono">YICENQDS<span class="br">[Phospho]</span>ISSK</td><td class="num">6</td></tr>
+      <tr><td class="mono">DVFLGM<span class="br">[Oxidation]</span>FLYEYAR</td><td class="num">14</td></tr>
+    </tbody></table>
+    <div class="cov" id="covB"></div>
+    <ul><li class="pro">standard; what CSV export and copy write anyway</li><li class="con">columns get wide; sequences no longer line up</li></ul>
+  </div></div>
+
+  <div class="card opt"><div class="card-b">
+    <h2>C · Lower-case + column</h2>
+    <div class="sub">Modified residue in lower case, the modifications in an extra column (as several search engines do).</div>
+    <table><thead><tr><th>Peptide</th><th>Modifications</th><th class="num">PSMs</th></tr></thead><tbody>
+      <tr><td class="mono">DAHKSEVAHR</td><td class="modcol">Acetyl (N-term)</td><td class="num">12</td></tr>
+      <tr><td class="mono">AV<span class="lc">m</span>DDFAAFVEK</td><td class="modcol">Oxidation (M3)</td><td class="num">39</td></tr>
+      <tr><td class="mono">YICENQD<span class="lc">s</span>ISSK</td><td class="modcol">Phospho (S8)</td><td class="num">6</td></tr>
+      <tr><td class="mono">DVFLG<span class="lc">m</span>FLYEYAR</td><td class="modcol">Oxidation (M6)</td><td class="num">14</td></tr>
+    </tbody></table>
+    <div class="cov" id="covC"></div>
+    <ul><li class="pro">compact, familiar from MaxQuant-like tables</li><li class="con">N-terminal mods invisible in the sequence; lower case is easy to miss</li></ul>
+  </div></div>
+</div>
+<script>
+const seq = "QNCELFEQLGEYKFQNALLVRYTKKVPQVSTPTLVEVSRNLGKVGSKCC";
+const covered = (i) => (i >= 0 && i < 13) || (i >= 24 && i < 39);
+const mods = { 30: "ph", 9: "" };
+for (const [id, style] of [["covA", "dot"], ["covB", "dot"], ["covC", "tint"]]) {
+  let h = "";
+  for (let i = 0; i < seq.length; ++i) {
+    const isMod = i === 30;
+    const cls = isMod && style === "tint" ? "mt" : `${covered(i) ? "c" : ""} ${isMod ? "mm" : ""}`;
+    h += `<span class="${cls}">${seq[i]}</span>`;
+    if (i % 10 === 9) h += "&nbsp;";
+  }
+  document.getElementById(id).innerHTML = `<div class="hint" style="margin-bottom:4px">coverage map</div>${h}`;
+}
+</script>
+</body></html>
