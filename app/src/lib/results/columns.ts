@@ -1,0 +1,106 @@
+// The columns of the three tables: what their sort keys and CSV columns mean. A column is named by
+// its id ("psms", "qValue", "sample:1"); `sortRows` takes an id as key and `toCsv` a list of ids.
+// The per-sample counts of proteins and peptides are the columns "sample:<n>" (n = the index into
+// `ResultModel.samples`); in `toCsv` the id "samples" stands for all of them.
+
+import type { Level, ResultModel } from './model'
+
+type Get<T> = (m: ResultModel, row: number) => T
+
+export type ColumnDef = {
+  /** The header in a CSV file. */
+  header: string
+  /** The value, for a column that sorts and prints as a number (NaN = missing). */
+  number?: Get<number>
+  /** The value, for a column that sorts and prints as text. */
+  text?: Get<string>
+  /** How the column prints in a CSV file when that differs from the number or text. */
+  csv?: Get<string>
+}
+
+const num = (header: string, number: Get<number>, csv?: Get<string>): ColumnDef => ({ header, number, csv })
+const str = (header: string, text: Get<string>, csv?: Get<string>): ColumnDef => ({ header, text, csv })
+
+const accessions = (m: ResultModel, peptide: number) =>
+  Array.from(m.peptide.proteins[peptide], (p) => m.tables.proteins.accession[p])
+
+const proteins: Record<string, ColumnDef> = {
+  accession: str('Accession', (m, p) => m.tables.proteins.accession[p]),
+  description: str('Description', (m, p) => m.tables.proteins.description[p]),
+  score: num('Score', (m, p) => m.tables.proteins.score[p]),
+  qValue: num('q-value', (m, p) => m.tables.proteins.qValue[p]),
+  length: num('Length', (m, p) => m.tables.proteins.sequence[p].length),
+  coverage: num('Coverage (%)', (m, p) => m.protein.coverage[p], (m, p) => (m.protein.coverage[p] * 100).toFixed(1)),
+  peptides: num('Peptides', (m, p) => m.protein.peptides[p]),
+  psms: num('PSMs', (m, p) => m.protein.psms[p]),
+  foundIn: num('Found in', (m, p) => m.protein.foundIn[p]),
+  group: num('Group', (m, p) => m.tables.proteins.group[p]),
+  contaminant: num('Contaminant', (m, p) => m.protein.contaminant[p]),
+  decoy: num('Decoy', (m, p) => m.tables.proteins.decoy[p]),
+}
+
+const peptides: Record<string, ColumnDef> = {
+  // ProForma, as the table has it: all modifications, fixed ones too
+  peptide: str('Peptide', (m, k) => m.tables.peptides.proforma[k]),
+  sequence: str('Sequence', (m, k) => m.tables.peptides.sequence[k]),
+  length: num('Length', (m, k) => m.tables.peptides.sequence[k].length),
+  proteins: str('Proteins', (m, k) => accessions(m, k)[0] ?? '', (m, k) => accessions(m, k).join(';')),
+  psms: num('PSMs', (m, k) => m.peptide.psms[k]),
+  bestQ: num('Best PSM q-value', (m, k) => m.peptide.bestQ[k]),
+  foundIn: num('Found in', (m, k) => {
+    const nS = m.samples.length
+    let found = 0
+    for (let s = 0; s < nS; s++) if (m.peptide.perSample[k * nS + s] > 0) found++
+    return found
+  }),
+  contaminant: num('Contaminant', (m, k) => m.peptide.contaminant[k]),
+  decoy: num('Decoy', (m, k) => m.tables.peptides.decoy[k]),
+}
+
+const psms: Record<string, ColumnDef> = {
+  // sorts by the file's position in the search, prints its name
+  file: num('File', (m, i) => m.tables.psms.file[i], (m, i) => m.tables.files[m.tables.psms.file[i]]),
+  sample: num('Sample', (m, i) => m.psmSample[i], (m, i) => m.samples[m.psmSample[i]].label),
+  nativeId: str('Spectrum', (m, i) => m.tables.psms.nativeId[i]),
+  rt: num('RT (s)', (m, i) => m.tables.psms.rt[i]),
+  mz: num('m/z', (m, i) => m.tables.psms.mz[i]),
+  charge: num('Charge', (m, i) => m.tables.psms.charge[i]),
+  peptide: str('Peptide', (m, i) => m.tables.peptides.proforma[m.tables.psms.peptide[i]]),
+  sequence: str('Sequence', (m, i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]]),
+  proteins: str(
+    'Proteins',
+    (m, i) => accessions(m, m.tables.psms.peptide[i])[0] ?? '',
+    (m, i) => accessions(m, m.tables.psms.peptide[i]).join(';'),
+  ),
+  score: num('Score', (m, i) => m.tables.psms.score[i]),
+  qValue: num('q-value', (m, i) => m.tables.psms.qValue[i]),
+  pep: num('PEP', (m, i) => m.tables.psms.pep[i]),
+  precursorErrorPpm: num('Precursor error (ppm)', (m, i) => m.tables.psms.precursorErrorPpm[i]),
+  isotopeError: num('Isotope error', (m, i) => m.tables.psms.isotopeError[i]),
+  deltaMass: num('Delta mass (Da)', (m, i) => m.tables.psms.deltaMass[i]),
+  decoy: num('Decoy', (m, i) => m.tables.psms.decoy[i]),
+}
+
+const tables: Record<Level, Record<string, ColumnDef>> = { proteins, peptides, psms }
+
+/** The column `id` of a level, or `undefined`. "sample:<n>" is the count of sample column n (proteins and peptides). */
+export function columnDef(m: ResultModel, level: Level, id: string): ColumnDef | undefined {
+  if (Object.hasOwn(tables[level], id)) return tables[level][id]
+  const match = level !== 'psms' ? /^sample:(\d+)$/.exec(id) : null
+  const sample = match ? Number(match[1]) : -1
+  if (sample < 0 || sample >= m.samples.length) return undefined
+  const nS = m.samples.length
+  const counts = level === 'proteins' ? m.protein.perSample : m.peptide.perSample
+  return num(m.samples[sample].label, (_, row) => counts[row * nS + sample])
+}
+
+/** The ids of `columns` with "samples" replaced by "sample:0" ... "sample:<n - 1>". Unknown ids throw. */
+export function expandColumns(m: ResultModel, level: Level, columns: string[]): string[] {
+  const ids: string[] = []
+  for (const id of columns) {
+    if (id === 'samples' && level !== 'psms') for (let s = 0; s < m.samples.length; s++) ids.push(`sample:${s}`)
+    else if (columnDef(m, level, id)) ids.push(id)
+    else throw new Error(`Unknown column "${id}" of the ${level} table`)
+  }
+  return ids
+}
