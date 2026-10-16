@@ -25,6 +25,7 @@ mkdir -p "$WORK/resources" "$WORK/bin"
 cp "$DESKTOP/neutralino.config.json" "$WORK/"
 cp "$REPO/openms.mjs" "$REPO/openms.wasm" "$REPO/package.json" "$WORK/resources/"
 cp -r "$REPO/examples" "$WORK/resources/"
+cp -r "$REPO/models" "$WORK/resources/"   # PeptDeep, loaded by the application on first use
 rm -rf "$WORK/resources/examples/node"
 
 # Neutralino's client library (the server prepends the connection token to any *neutralino.js)

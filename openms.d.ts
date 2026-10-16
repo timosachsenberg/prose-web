@@ -852,6 +852,7 @@ interface EmbindModule {
   getOpenMSDataPath(): string;
   setLogEnabled(_0: EmbindString, _1: boolean): void;
   isLogEnabled(_0: EmbindString): boolean;
+  hasONNXRuntime(): boolean;
   mountHostDirectory(_0: EmbindString, _1: EmbindString): void;
   unmount(_0: EmbindString): void;
   Param: {

@@ -18,7 +18,8 @@
 </head>
 <body>
   <h1>ProSE in the browser</h1>
-  <p class="subtitle">The OpenMS search engine ProSE, compiled to WebAssembly, with Percolator rescoring.
+  <p class="subtitle">The OpenMS search engine ProSE, compiled to WebAssembly, with Percolator rescoring and,
+    optionally, PeptDeep predictions of fragment intensities and retention times (ONNX Runtime).
     The search runs entirely in your browser: your spectra and database stay on your machine.</p>
 
   <p><a class="button" href="examples/prose/">Open the application</a></p>
@@ -34,7 +35,13 @@
         skipped, it needs at least 100).</li>
     <li>Your own mzML and FASTA files.</li>
   </ol>
-  <p>Click a PSM for the annotated spectrum, the fragment coverage and the mass errors.</p>
+  <p>Click a PSM for the annotated spectrum, the fragment coverage, the mass errors and all PSM features.</p>
+  <p>Tick <strong>with PeptDeep features</strong> next to <em>Rescore with Percolator</em> to add PeptDeep
+    (AlphaPeptDeep) predictions: the agreement of the predicted fragment intensities and retention time with each
+    PSM becomes five more Percolator features (<code>ms2_cosine</code>, <code>ms2_spectral_angle</code>,
+    <code>ms2_pearson</code>, <code>ms2_frac_pred_found</code>, <code>rt_abs_error</code>). The models (17&nbsp;MB)
+    load on first use. The example data is too small and synthetic to gain from it; real label-free HCD data
+    does (+5.7&nbsp;% PSMs at 1&nbsp;% FDR in the OpenMS benchmark).</p>
 
   <h2>Desktop application</h2>
   <p>The same application as a small program that works offline, with all threads, in a window of your
@@ -57,15 +64,15 @@
         need, and caches the 30 MB module. Later visits start faster and search faster, because the browser keeps
         the compiled module. A hard reload (Shift+Reload) bypasses the service worker.</li>
     <li>The module can use 4 GB of memory. For large searches (e.g. semi-specific against a large database), set
-        <code>database:chunk_size</code> under <em>All parameters</em>.</li>
+        <code>database:chunk_size</code> under <em>All parameters</em>. PeptDeep needs about 0.6 GB more.</li>
     <li>Without a server: <a href="prose-single-file.html" download>prose-single-file.html</a> (9.6 MB) is the
         same application in one file that opens from disk, on one thread (a page opened from a file cannot be
-        cross-origin isolated).</li>
+        cross-origin isolated), without PeptDeep.</li>
     <li>The <a href="examples/browser/">general OpenMS demo</a>: peptide masses, digestion, an mzML viewer.</li>
   </ul>
 
   <p class="note">A preview built from <a href="https://github.com/OpenMS/OpenMS/pull/10575">OpenMS pull request
-    #10575</a> (commit 4f4d152a6f, threaded build), not an OpenMS release.
+    #10575</a> (commit e296af856f, threaded build with ONNX Runtime), not an OpenMS release.
     <a href="https://github.com/timosachsenberg/prose-web">Source of this page</a> ·
     <a href="https://github.com/timosachsenberg/prose-web/blob/main/README-openms-wasm.md">JavaScript API</a> ·
     <a href="https://github.com/timosachsenberg/prose-web/blob/main/LICENSE">License</a>.</p>

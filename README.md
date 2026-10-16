@@ -2,13 +2,16 @@
 
 **https://timosachsenberg.github.io/prose-web/**
 
-The OpenMS search engine ProSE compiled to WebAssembly, with its web application and in-process
-Percolator rescoring. The search runs entirely in the browser; spectra and database stay on the
-user's machine.
+The OpenMS search engine ProSE compiled to WebAssembly, with its web application, in-process
+Percolator rescoring and optional PeptDeep rescoring features (ONNX Runtime in the module). The
+search runs entirely in the browser; spectra and database stay on the user's machine.
 
 This is a preview built from [OpenMS pull request #10575](https://github.com/OpenMS/OpenMS/pull/10575)
-(commit 4f4d152a6f, threaded build), not an OpenMS release. The files are the assembled npm package
-(`openms.mjs`, `openms.wasm`, `openms.d.ts`, `package.json`) and its demo applications (`examples/`).
+(commit e296af856f, the threaded build with ONNX Runtime, CMake preset
+`wasm32-emscripten-mt-onnx-release`), not an OpenMS release. The files are the npm package of that build
+(`openms.mjs`, `openms.wasm`, `openms.d.ts`, `package.json`; its version carries the commit, as the
+service worker names its caches after it), the PeptDeep models (`models/`, loaded when the PeptDeep
+option is first used) and the demo applications (`examples/`).
 
 ## Threads on GitHub Pages
 
@@ -22,6 +25,8 @@ code and later visits start and search faster.
 
 - `index.html`: the start page; `examples/prose/`: the ProSE application; `examples/browser/`: the
   general demo (peptide masses, digestion, mzML viewer).
+- `models/`: the PeptDeep models of the PeptDeep option (MS2 intensities 15.5 MB, retention time
+  2.7 MB; from https://archive.openms.de/openms/models).
 - `data/`: example data (OpenMS test data): `DatabaseSuitability_*` (the data of the TOPP test
   ProSE_11_rescore; set the fragment mass tolerance to 10) and `SimpleSearchEngine_1.*`.
 - `prose-single-file.html`: the application as one file that opens from disk (single-threaded).
