@@ -1,20 +1,25 @@
-// The page's side of the engine: OpenMS runs in a Web Worker (worker.ts), and `EngineClient` sends it
-// requests and turns its answers into promises. As in the ProSE example of the module
-// (`examples/prose/app.mjs`), an error the worker does not catch, e.g. a WebAssembly trap on one of
-// OpenMS' threads, ends the module: the pending calls are rejected and a new worker is started.
+// The page's side of the engine: OpenMS runs in Web Workers (worker.ts), and `EngineClient` sends them
+// requests and turns their answers into promises. As in the ProSE example of the module
+// (`examples/prose/app.mjs`), an error a worker does not catch, e.g. a WebAssembly trap on one of
+// OpenMS' threads, ends its module: its pending calls are rejected and a new worker is started.
 //
-// Every search runs in a new worker (the module's memory grows with each search and never shrinks).
-// That worker keeps the results for `idXML()`, `annotate()` and `predict()` until the next search.
+// Two workers:
+// - The search worker: a new one for every search (the module's memory grows with each search and never
+//   shrinks). It keeps the results of its search for `idXML()` until the next search.
+// - The viewer worker, for `annotate()` and `predict()`: started on their first call, with 2 threads, and
+//   kept. They never wait behind a search, and they do not take the search's memory.
 
 import type { AnnotationOptions, PeakAnnotationResult, PredictedIon } from './openms-types'
 import {
   isTrapMessage,
+  RELOAD,
   trapMessage,
   type EngineCall,
   type EngineCalls,
   type EngineInfo,
   type EngineRequest,
   type EngineResponse,
+  type EngineStage,
   type SearchOutcome,
   type SearchProgress,
   type SearchRequest,
@@ -31,7 +36,8 @@ export interface WorkerLike {
 }
 
 /**
- * - `trap`: OpenMS stopped (a WebAssembly trap or out of memory); it was restarted.
+ * - `trap`: OpenMS stopped (a WebAssembly trap or out of memory); the message says whether it was
+ *   restarted.
  * - `cancelled`: `cancel()` (or a new search) ended the worker first.
  * - `failed`: OpenMS reported an error (e.g. an invalid parameter; the worker goes on), or it could not
  *   be loaded.
@@ -53,7 +59,12 @@ export interface EngineClientOptions {
   createWorker?: () => WorkerLike
   /** The base URL of the app's files (`openms/`, `fasta/`); default: Vite's BASE_URL on this page. */
   baseUrl?: string
+  /** How long a worker may take to load OpenMS before it counts as failed; default 30 s. */
+  startTimeoutMs?: number
 }
+
+/** The threads of the viewer worker. */
+export const VIEWER_THREADS = 2
 
 interface Pending {
   type: EngineCall
@@ -62,17 +73,30 @@ interface Pending {
   onProgress?: (progress: SearchProgress) => void
 }
 
+type Role = 'search' | 'viewer'
+
 /** One worker with its module. */
 interface Session {
+  role: Role
   worker: WorkerLike
   ready: Promise<EngineInfo>
   state: 'loading' | 'ready' | 'failed'
   /** It ran a request other than init (a fresh module is needed for a search). */
   used: boolean
+  /** Its calls in flight, in the order sent (the worker handles them in that order). */
+  pending: Map<number, Pending>
+  /** What the search in flight is doing, from the worker's stage messages. */
+  searchStage: EngineStage
+  /** Searches in flight, also those still waiting for the module. */
+  searches: number
 }
 
 function cancelled(type: EngineCall): string {
   return type === 'search' ? 'The search was cancelled.' : 'The request was cancelled.'
+}
+
+function loadFailure(detail: string): string {
+  return `OpenMS could not be loaded (${detail || 'the worker stopped'}). ${RELOAD}`
 }
 
 function moduleWorker(): WorkerLike {
@@ -82,31 +106,50 @@ function moduleWorker(): WorkerLike {
 export class EngineClient {
   readonly #createWorker: () => WorkerLike
   readonly #baseUrl: string
-  #session: Session | null = null
+  readonly #startTimeoutMs: number
+  #search: Session | null = null
+  #viewer: Session | null = null
   #threads = 1
   #nextId = 0
-  readonly #pending = new Map<number, Pending>()
 
   constructor(options: EngineClientOptions = {}) {
     this.#createWorker = options.createWorker ?? moduleWorker
     this.#baseUrl = options.baseUrl ?? new URL(import.meta.env.BASE_URL, document.baseURI).href
+    this.#startTimeoutMs = options.startTimeoutMs ?? 30_000
   }
 
-  /** Loads OpenMS with `threads` threads (again, in a new worker, if it runs already). */
+  /** Loads OpenMS for the searches with `threads` threads (again, in a new worker, if it runs already). */
   async init(threads: number): Promise<EngineInfo> {
     this.#threads = threads
-    return this.#start().ready
+    return this.#start('search').ready
   }
 
   /** Searches the files in a fresh module: a new worker, or that of init() if it has run nothing else. */
   async search(req: SearchRequest, onProgress: (p: SearchProgress) => void): Promise<SearchOutcome> {
-    let session = this.#current()
-    if (session.used || session.state === 'failed') session = this.#start()
+    if (!this.#search) throw new Error('EngineClient: call init() first.')
+    let session = this.#search
+    if (session.used || session.state === 'failed') session = this.#start('search')
     session.used = true
-    return this.#call(session, 'search', { request: req }, onProgress)
+    session.searchStage = 'reading'
+    session.searches++
+    try {
+      return await this.#call(session, 'search', { request: req }, onProgress)
+    } finally {
+      session.searches--
+    }
   }
 
-  /** The fragment ions of `peptide` (`peptides.openms`) matched to the peaks (copied, not transferred). */
+  /** The results of the last search as idXML, while its worker runs (until the next search). */
+  async idXML(): Promise<Uint8Array> {
+    if (!this.#search) throw new Error('EngineClient: call init() first.')
+    this.#search.used = true
+    return this.#call(this.#search, 'idXML', {})
+  }
+
+  /**
+   * The fragment ions of `peptide` (`peptides.openms`) matched to the peaks (copied, not transferred:
+   * the page keeps its spectra). In the viewer worker.
+   */
   async annotate(
     mz: Float32Array,
     intensity: Float32Array,
@@ -114,72 +157,90 @@ export class EngineClient {
     charge: number,
     opts: AnnotationOptions,
   ): Promise<PeakAnnotationResult> {
-    const session = this.#current()
-    session.used = true
     const [m, i] = [mz.slice(), intensity.slice()]
     const args = { mz: m, intensity: i, peptide, charge, options: opts }
-    return this.#call(session, 'annotate', args, undefined, [m.buffer, i.buffer])
+    return this.#call(this.#viewerSession(), 'annotate', args, undefined, [m.buffer, i.buffer])
   }
 
-  /** PeptDeep's fragment intensities of `peptide` (`peptides.openms`). */
+  /** PeptDeep's fragment intensities of `peptide` (`peptides.openms`). In the viewer worker. */
   async predict(peptide: string, charge: number, nce: number, instrument: string): Promise<PredictedIon[]> {
-    const session = this.#current()
-    session.used = true
-    return this.#call(session, 'predict', { peptide, charge, nce, instrument })
+    return this.#call(this.#viewerSession(), 'predict', { peptide, charge, nce, instrument })
   }
 
-  /** The results of the last search as idXML, while its worker runs (until the next search). */
-  async idXML(): Promise<Uint8Array> {
-    const session = this.#current()
-    session.used = true
-    return this.#call(session, 'idXML', {})
-  }
-
-  /** Ends the worker (the pending calls are rejected as cancelled) and starts a new one. */
+  /**
+   * Cancels the search in flight: ends the search worker (its pending calls are rejected as cancelled)
+   * and starts a new one. Nothing happens without a search in flight; the viewer goes on.
+   */
   cancel(): void {
-    if (this.#session) this.#start()
+    if (this.#search && this.#search.searches > 0) this.#start('search')
   }
 
-  #current(): Session {
-    if (!this.#session) throw new Error('EngineClient: call init() first.')
-    return this.#session
+  #viewerSession(): Session {
+    if (!this.#viewer || this.#viewer.state === 'failed') this.#start('viewer')
+    return this.#viewer!
   }
 
-  /** Ends the current worker, if any, and starts a new one with the threads of the last init(). */
-  #start(): Session {
-    this.#stop((p) => new EngineError('cancelled', cancelled(p.type)))
+  #current(role: Role): Session | null {
+    return role === 'search' ? this.#search : this.#viewer
+  }
+
+  /**
+   * Ends the worker of `role`, if any (its pending calls are rejected as cancelled), and starts a new one.
+   * Its module counts as failed if it is not loaded within the start timeout.
+   */
+  #start(role: Role): Session {
+    const old = this.#current(role)
+    if (old) for (const p of this.#stop(old)) p.reject(new EngineError('cancelled', cancelled(p.type)))
+
     const worker = this.#createWorker()
-    const ready = this.#post(worker, 'init', { threads: this.#threads, baseUrl: this.#baseUrl })
-    const session: Session = { worker, ready, state: 'loading', used: false }
-    this.#session = session
+    const pending = new Map<number, Pending>()
+    const threads = role === 'search' ? this.#threads : VIEWER_THREADS
+    const init = this.#post(worker, pending, 'init', { threads, baseUrl: this.#baseUrl })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      const message = `OpenMS did not start within ${this.#startTimeoutMs / 1000} s. ${RELOAD}`
+      timer = setTimeout(() => reject(new EngineError('failed', message)), this.#startTimeoutMs)
+    })
+    const session: Session = {
+      role,
+      worker,
+      ready: Promise.race([init, timeout]).finally(() => clearTimeout(timer)),
+      state: 'loading',
+      used: false,
+      pending,
+      searchStage: 'reading',
+      searches: 0,
+    }
+    if (role === 'search') this.#search = session
+    else this.#viewer = session
     worker.onmessage = ({ data }) => this.#receive(session, data as EngineResponse)
     worker.onerror = (event) => {
       event.preventDefault()
-      this.#crashed(session, event.message)
+      void this.#crashed(session, event.message, this.#stage(session))
     }
-    ready.then(
+    session.ready.then(
       () => {
         if (session.state === 'loading') session.state = 'ready'
       },
-      () => {
-        session.state = 'failed'
+      (e: unknown) => {
+        // a timeout or a failed init: the module is not usable
+        if (session.state === 'failed') return
+        for (const p of this.#stop(session)) p.reject(e as Error)
       },
     )
     return session
   }
 
-  /** Terminates the current worker (its session cannot be used any more) and rejects the pending calls. */
-  #stop(error: (p: Pending) => Error) {
-    if (this.#session) {
-      this.#session.state = 'failed'
-      this.#session.worker.terminate()
-    }
-    const pending = [...this.#pending.values()]
-    this.#pending.clear()
-    for (const p of pending) p.reject(error(p))
+  /** Terminates the worker of `session` (it cannot be used any more) and hands back its pending calls. */
+  #stop(session: Session): Pending[] {
+    session.state = 'failed'
+    session.worker.terminate()
+    const pending = [...session.pending.values()]
+    session.pending.clear()
+    return pending
   }
 
-  /** A request, once the module is loaded (the init error otherwise). */
+  /** A request, once the module is loaded (the load error otherwise). */
   async #call<K extends EngineCall>(
     session: Session,
     type: K,
@@ -192,12 +253,15 @@ export class EngineClient {
     } catch (e) {
       throw e instanceof EngineError && e.kind === 'cancelled' ? new EngineError('cancelled', cancelled(type)) : e
     }
-    if (this.#session !== session || session.state === 'failed') throw new EngineError('cancelled', cancelled(type))
-    return this.#post(session.worker, type, args, onProgress, transfer)
+    if (this.#current(session.role) !== session || session.state === 'failed') {
+      throw new EngineError('cancelled', cancelled(type))
+    }
+    return this.#post(session.worker, session.pending, type, args, onProgress, transfer)
   }
 
   #post<K extends EngineCall>(
     worker: WorkerLike,
+    pending: Map<number, Pending>,
     type: K,
     args: EngineCalls[K]['args'],
     onProgress?: (p: SearchProgress) => void,
@@ -205,44 +269,66 @@ export class EngineClient {
   ): Promise<EngineCalls[K]['result']> {
     const id = this.#nextId++
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { type, resolve: resolve as (r: never) => void, reject, onProgress })
+      pending.set(id, { type, resolve: resolve as (r: never) => void, reject, onProgress })
       try {
         worker.postMessage({ id, type, ...args } as EngineRequest, { transfer })
       } catch (e) {
-        this.#pending.delete(id)
+        pending.delete(id)
         reject(e)
       }
     })
   }
 
   #receive(session: Session, data: EngineResponse) {
-    if (this.#session !== session) return
-    const pending = this.#pending.get(data.id)
+    // a late answer of a worker that was replaced (cancelled, crashed): ignored
+    if (this.#current(session.role) !== session || session.state === 'failed') return
+    const pending = session.pending.get(data.id)
     if (!pending) return
     if (data.type === 'progress') {
       pending.onProgress?.(data.progress)
       return
     }
-    this.#pending.delete(data.id)
-    if (data.type === 'result') pending.resolve(data.result as never)
-    else if (data.trap || isTrapMessage(data.error)) {
-      this.#pending.set(data.id, pending) // rejected with the other pending calls
-      this.#crashed(session, data.error)
-    } else pending.reject(new EngineError('failed', data.error))
+    if (data.type === 'stage') {
+      session.searchStage = data.stage
+      return
+    }
+    if (data.type === 'result') {
+      session.pending.delete(data.id)
+      pending.resolve(data.result as never)
+    } else if (data.trap || isTrapMessage(data.error)) {
+      void this.#crashed(session, data.error, data.stage)
+    } else {
+      session.pending.delete(data.id)
+      pending.reject(new EngineError('failed', pending.type === 'init' ? loadFailure(data.error) : data.error))
+    }
+  }
+
+  /** What the worker of `session` is doing: its first pending call (or the stage of its search). */
+  #stage(session: Session): EngineStage {
+    if (session.state === 'loading') return 'loading'
+    const first = session.pending.values().next().value
+    if (!first || first.type === 'init') return 'loading'
+    return first.type === 'search' ? session.searchStage : first.type
   }
 
   /**
-   * OpenMS stopped: rejects the pending calls and starts a new worker. If the module did not even load,
-   * no new one is started here (the next search tries again).
+   * OpenMS stopped: starts a new worker of the same role, waits until it is ready (at most the start
+   * timeout), then rejects the pending calls with a message that says what was interrupted and whether
+   * OpenMS was restarted. A module that did not even load is not restarted (the next call tries again).
    */
-  #crashed(session: Session, detail: string) {
-    if (this.#session !== session || session.state === 'failed') return
+  async #crashed(session: Session, detail: string, stage: EngineStage) {
+    if (this.#current(session.role) !== session || session.state === 'failed') return
     const loaded = session.state === 'ready'
-    this.#stop(() =>
-      loaded
-        ? new EngineError('trap', trapMessage(detail))
-        : new EngineError('failed', `OpenMS could not be loaded (${detail || 'the worker stopped'}).`),
+    const pending = this.#stop(session)
+    if (!loaded) {
+      for (const p of pending) p.reject(new EngineError('failed', loadFailure(detail)))
+      return
+    }
+    const next = this.#start(session.role)
+    const restarted = await next.ready.then(
+      () => true,
+      () => false,
     )
-    if (loaded) this.#start()
+    for (const p of pending) p.reject(new EngineError('trap', trapMessage(stage, detail, restarted)))
   }
 }

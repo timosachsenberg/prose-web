@@ -1,18 +1,19 @@
 // The engine worker: OpenMS (the threaded module of `public/openms`) in a module Web Worker, so that
-// the page never waits for it. `EngineClient` (client.ts) starts it, a new one for every search, and
-// sends requests {id, type, ...arguments}; the worker answers {id, type: "result" | "error"} and sends
-// {id, type: "progress"} during a search. Requests are handled one after the other. The results of the
-// search stay in the module (for idXML) until the worker ends.
+// the page never waits for it. `EngineClient` (client.ts) starts two kinds: a search worker (a new one
+// for every search; it keeps the results for idXML) and a viewer worker (annotate, predict). The page
+// sends requests {id, type, ...arguments}; the worker answers {id, type: "result" | "error"}, and during
+// a search sends {id, type: "progress"} and {id, type: "stage"} (reading the files, searching). Errors
+// say what the worker was doing (`stage`). Requests are handled one after the other.
 
-import type createOpenMSType from '../../../public/openms/openms'
 import { annotate, engineInfo, idXML, loadModels, MS2_MODEL_FILE, predict, runSearch, transferList } from './core'
-import type { MainModule, ProSEResultSet } from './openms-types'
+import type { MainModule, OpenMSFactory, ProSEResultSet } from './openms-types'
 import {
   isTrapMessage,
   type EngineCall,
   type EngineCalls,
   type EngineRequest,
   type EngineResponse,
+  type EngineStage,
   type SearchProgress,
 } from './protocol'
 
@@ -30,6 +31,8 @@ let baseUrl = ''
 /** The results of the search of this worker. */
 let results: ProSEResultSet | null = null
 let contaminants: string | null = null
+/** What the worker is doing, for the errors. */
+let stage: EngineStage = 'loading'
 
 async function fetchAsset(path: string): Promise<Response> {
   const response = await fetch(new URL(path, baseUrl))
@@ -38,8 +41,8 @@ async function fetchAsset(path: string): Promise<Response> {
 }
 
 /** A PeptDeep model of the package (`openms/models/`). */
-async function fetchModel(file: string): Promise<Uint8Array> {
-  return new Uint8Array(await (await fetchAsset(`openms/models/${file}`)).arrayBuffer())
+async function fetchModel(file: string): Promise<Blob> {
+  return (await fetchAsset(`openms/models/${file}`)).blob()
 }
 
 function loaded(): MainModule {
@@ -53,10 +56,11 @@ type Handlers = { [K in EngineCall]: (request: RequestOf<K>) => Promise<Reply<K>
 
 const handlers: Handlers = {
   async init({ threads, baseUrl: url }) {
+    stage = 'loading'
     if (!OpenMS) {
       baseUrl = url
       const moduleUrl = new URL('openms/openms.mjs', baseUrl).href
-      const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleUrl)) as { default: typeof createOpenMSType }
+      const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleUrl)) as { default: OpenMSFactory }
       OpenMS = await createOpenMS({ numThreads: threads, print: () => {}, printErr: (line: string) => console.debug(line) })
       OpenMS.setLogEnabled('info', false)
     }
@@ -65,30 +69,34 @@ const handlers: Handlers = {
 
   async search({ id, request }) {
     const OpenMS = loaded()
+    const enter = (s: 'reading' | 'searching') => {
+      if (stage === s) return
+      stage = s
+      scope.postMessage({ id, type: 'stage', stage: s })
+    }
+    const progress = (p: SearchProgress) => scope.postMessage({ id, type: 'progress', progress: p })
+    enter('reading')
     results?.delete()
     results = null
-    const progress = (p: SearchProgress) => scope.postMessage({ id, type: 'progress', progress: p })
     if (request.peptdeep) {
       progress({ label: 'Loading the PeptDeep models...', file: -1, fraction: 0 })
       await loadModels(OpenMS, fetchModel)
     }
     if (request.contaminants && contaminants === null) contaminants = await (await fetchAsset('fasta/crap.fasta')).text()
     progress({ label: 'Reading the files...', file: -1, fraction: 0 })
-    const files = []
-    for (const { file } of request.files) files.push({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) })
-    const database = { name: request.database.name, bytes: new Uint8Array(await request.database.arrayBuffer()) }
 
-    const outcome = runSearch(
+    const outcome = await runSearch(
       OpenMS,
       {
-        files,
-        database,
+        files: request.files.map(({ file }) => ({ name: file.name, data: file })),
+        database: { name: request.database.name, data: request.database },
         contaminants: request.contaminants ? contaminants : null,
         parameters: request.parameters,
         rescore: request.rescore,
         peptdeep: request.peptdeep,
       },
       progress,
+      enter,
     )
     results = outcome.results
     const { summary, tables, spectra, seconds } = outcome
@@ -96,10 +104,12 @@ const handlers: Handlers = {
   },
 
   async annotate({ mz, intensity, peptide, charge, options }) {
+    stage = 'annotate'
     return { result: annotate(loaded(), mz, intensity, peptide, charge, options) }
   },
 
   async predict({ peptide, charge, nce, instrument }) {
+    stage = 'predict'
     const OpenMS = loaded()
     if (!OpenMS.hasONNXRuntime()) throw new Error('predictMS2: this OpenMS module was built without ONNX Runtime.')
     await loadModels(OpenMS, fetchModel, [MS2_MODEL_FILE])
@@ -107,6 +117,7 @@ const handlers: Handlers = {
   },
 
   async idXML() {
+    stage = 'idXML'
     if (!results) throw new Error('No search results: idXML is available for the open search only.')
     const bytes = idXML(loaded(), results)
     return { result: bytes, transfer: [bytes.buffer] }
@@ -121,7 +132,7 @@ async function handle(request: EngineRequest) {
   } catch (e) {
     const error = String((e as Error)?.message ?? e)
     const trap = e instanceof WebAssembly.RuntimeError || isTrapMessage(error)
-    scope.postMessage({ id: request.id, type: 'error', error, trap })
+    scope.postMessage({ id: request.id, type: 'error', error, trap, stage })
   }
 }
 

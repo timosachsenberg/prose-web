@@ -74,30 +74,60 @@ export interface EngineCalls {
 
 export type EngineCall = keyof EngineCalls
 
+/** What the worker is doing: what a trap interrupted. */
+export type EngineStage = 'loading' | 'reading' | 'searching' | 'idXML' | 'annotate' | 'predict'
+
 /** A message of the page to the worker. */
 export type EngineRequest = { [K in EngineCall]: { id: number; type: K } & EngineCalls[K]['args'] }[EngineCall]
 
 /** A message of the worker to the page, about request `id`. */
 export type EngineResponse =
   | { id: number; type: 'result'; result: unknown }
-  | { id: number; type: 'error'; error: string; trap: boolean }
+  | { id: number; type: 'error'; error: string; trap: boolean; stage: EngineStage }
   | { id: number; type: 'progress'; progress: SearchProgress }
+  | { id: number; type: 'stage'; stage: EngineStage }
 
 /**
- * Whether an error message means that OpenMS stopped or cannot go on: a WebAssembly trap
- * (`RuntimeError: unreachable`, ...), an Emscripten abort, or OpenMS' OutOfMemory (the module lives on
- * after that, but with its memory grown to the limit, and WebAssembly memory does not shrink).
+ * Whether an error message is that of a WebAssembly trap or an Emscripten abort, after which the module
+ * cannot go on: `RuntimeError: unreachable`, `RuntimeError: memory access out of bounds`,
+ * `Aborted(OOM)`, "out of memory". OpenMS' own exceptions (`InvalidValue: …`, also `OutOfMemory: …`,
+ * after which the module lives on) are not.
  */
 export function isTrapMessage(message: string): boolean {
-  return /unreachable|out of memory|OutOfMemory|Aborted|RuntimeError|out of bounds|bad_alloc/i.test(message)
+  return /RuntimeError|unreachable|out of memory|Aborted\(/i.test(message)
 }
 
-/** The message of the calls that a trap ended (OpenMS is restarted then). */
-export function trapMessage(detail: string): string {
+const interrupted: Record<EngineStage, string> = {
+  loading: 'while loading',
+  reading: 'while reading the files',
+  searching: 'while searching',
+  idXML: 'while writing the idXML',
+  annotate: 'while annotating the spectrum',
+  predict: 'while predicting the spectrum',
+}
+
+const advice: Record<EngineStage, string> = {
+  loading: '.',
+  reading: ', most likely out of memory: search fewer or smaller files at a time.',
+  searching:
+    ', most likely out of memory: a search can use at most the 4 GB a WebAssembly module can address. Set ' +
+    'database:chunk_size (e.g. 2000) under All parameters to build and search the index in parts, or use fewer ' +
+    'variable modifications or a narrower enzyme specificity.',
+  idXML: ', most likely out of memory. The idXML of this search is no longer available.',
+  annotate: '.',
+  predict: '.',
+}
+
+/** The advice to reload when OpenMS cannot be started again. */
+export const RELOAD = 'Reload the page to start OpenMS again.'
+
+/**
+ * The message of the calls that a trap ended, by what the worker was doing; `restarted`: a new worker
+ * is ready (else the page has to be reloaded).
+ */
+export function trapMessage(stage: EngineStage, detail: string, restarted: boolean): string {
   return (
-    `OpenMS stopped (${detail || 'a WebAssembly trap'}), most likely out of memory: a search can use at most the ` +
-    '4 GB a WebAssembly module can address. Set database:chunk_size (e.g. 2000) under All parameters to build ' +
-    'and search the index in parts, or use fewer variable modifications or a narrower enzyme specificity. ' +
-    'OpenMS was restarted.'
+    `OpenMS stopped ${interrupted[stage]} (${detail || 'a WebAssembly trap'})${advice[stage]} ` +
+    (restarted ? 'OpenMS was restarted.' : RELOAD)
   )
 }
