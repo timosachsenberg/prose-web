@@ -1,3 +1,5 @@
+import type { ParamEntry } from '../engine/protocol'
+
 // Modifications as ProSE names them ("Oxidation (M)", "Acetyl (Protein N-term)", "Gln->pyro-Glu (N-term Q)"):
 // one residue per name. The page shows the residues of one modification together ("Phospho (STY)") and
 // accepts such a name as input, expanded to one modification per residue.
@@ -62,4 +64,20 @@ export function groupModifications(specs: string[]): { label: string; specs: str
     }
   }
   return groups.map(({ label, specs }) => ({ label, specs }))
+}
+
+/**
+ * The fixed and variable modifications of `values` that are not among ProSE's names (the allowed
+ * values of its parameter definitions). Nothing without the definitions (OpenMS not loaded yet).
+ */
+export function unknownModifications(values: Record<string, unknown>, entries: ParamEntry[]): string[] {
+  const unknown: string[] = []
+  for (const name of ['modifications:fixed', 'modifications:variable']) {
+    const valid = entries.find((e) => e.name === name)?.validStrings
+    const list = values[name]
+    if (!valid || !Array.isArray(list)) continue
+    const known = new Set(valid)
+    for (const spec of list) if (!known.has(spec) && !unknown.includes(spec)) unknown.push(spec)
+  }
+  return unknown
 }

@@ -14,6 +14,7 @@
     onChange,
     ariaLabel,
     inGroup = false,
+    fit = false,
     class: className,
   }: {
     id?: string
@@ -25,6 +26,8 @@
     ariaLabel?: string
     /** Inside an InputGroup (with an addon), without a border of its own. */
     inGroup?: boolean
+    /** As wide as its text (the first number of a range). */
+    fit?: boolean
     class?: string
   } = $props()
 
@@ -56,6 +59,7 @@
 {#if inGroup}
   <InputGroup.Input
     {id}
+    style={fit ? `width: calc(${Math.max(text.length, 1)}ch + 0.75rem)` : undefined}
     value={text}
     inputmode={kind === 'int' ? 'numeric' : 'decimal'}
     autocomplete="off"

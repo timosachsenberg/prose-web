@@ -6,19 +6,13 @@
   import { Switch } from '$lib/components/ui/switch'
   import { engineState } from '$lib/engine/app-engine.svelte'
   import { searchForm as form } from '$lib/search/form.svelte'
+  import { choiceLabel, INSTRUMENT_LABELS } from '$lib/settings/labels'
   import ChoiceSelect from './ChoiceSelect.svelte'
 
-  const instrumentLabels: Record<string, string> = {
-    QE: 'Q Exactive / Orbitrap',
-    Lumos: 'Orbitrap Lumos / Fusion',
-    timsTOF: 'timsTOF',
-    SciexTOF: 'SCIEX TOF',
-    ThermoTOF: 'Thermo TOF (Astral)',
-  }
   const instruments = $derived(
-    (form.entry('peptdeep:instrument')?.validStrings ?? Object.keys(instrumentLabels)).map((v) => ({
+    (form.entry('peptdeep:instrument')?.validStrings ?? Object.keys(INSTRUMENT_LABELS)).map((v) => ({
       value: v,
-      label: instrumentLabels[v] ?? v,
+      label: choiceLabel('peptdeep:instrument', v),
     })),
   )
 

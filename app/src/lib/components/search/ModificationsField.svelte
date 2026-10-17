@@ -7,12 +7,14 @@
   import * as Command from '$lib/components/ui/command'
   import * as Popover from '$lib/components/ui/popover'
   import { expandModification, groupModifications } from '$lib/settings/modifications'
+  import { cn } from '$lib/utils'
 
   let {
     labelId,
     kind,
     value,
     options,
+    trusted = new Set<string>(),
     onChange,
   }: {
     labelId: string
@@ -21,6 +23,8 @@
     value: string[]
     /** ProSE's modification names (`validStrings`); undefined until OpenMS is loaded. */
     options: string[] | undefined
+    /** Names known to be valid before OpenMS is loaded (those of the presets). */
+    trusted?: ReadonlySet<string>
     onChange: (value: string[]) => void
   } = $props()
 
@@ -29,8 +33,30 @@
   let open = $state(false)
   let query = $state('')
 
-  const groups = $derived(groupModifications(value))
   const known = $derived(options ? new Map(options.map((o) => [o.toLowerCase(), o])) : null)
+  const validNames = $derived(options ? new Set(options) : null)
+
+  /**
+   * Each badge with its state: `unknown` once OpenMS is loaded and the name is not among its names;
+   * `unverified` while it is loading for a name that no preset uses (typed, checked when the search starts).
+   */
+  const groups = $derived(
+    groupModifications(value).map((g) => {
+      const state: 'ok' | 'unknown' | 'unverified' = validNames
+        ? g.specs.some((s) => !validNames.has(s))
+          ? 'unknown'
+          : 'ok'
+        : g.specs.some((s) => !trusted.has(s))
+          ? 'unverified'
+          : 'ok'
+      return { ...g, state }
+    }),
+  )
+  const titles = {
+    ok: undefined,
+    unknown: 'OpenMS does not know this modification: remove it and choose one from the list.',
+    unverified: 'Not checked yet: OpenMS is still loading. The name is checked when the search starts.',
+  }
 
   /** The typed name expanded to ProSE's names, if they all exist (or anything without the list). */
   const expansion = $derived.by(() => {
@@ -71,8 +97,16 @@
   aria-labelledby={labelId}
   class="flex min-h-8 flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-1.5 py-1">
   {#each groups as g (g.label)}
-    <span class="inline-flex h-5 items-center gap-0.5 rounded-[5px] border bg-muted pr-0.5 pl-1.5 text-[11.5px] font-medium">
+    <span
+      class={cn(
+        'inline-flex h-5 items-center gap-0.5 rounded-[5px] border bg-muted pr-0.5 pl-1.5 text-[11.5px] font-medium',
+        g.state === 'unknown' && 'border-destructive/60 bg-destructive/5 text-destructive',
+        g.state === 'unverified' && 'border-dashed border-muted-foreground/60 bg-background',
+      )}
+      title={titles[g.state]}
+      data-state={g.state}>
       {g.label}
+      {#if g.state !== 'ok'}<span class="sr-only">({g.state === 'unknown' ? 'unknown to OpenMS' : 'not checked yet'})</span>{/if}
       <button
         type="button"
         class="rounded-sm p-px text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
@@ -87,13 +121,13 @@
       <PlusIcon class="size-3" />{groups.length === 0 ? 'Add' : ''}
     </Popover.Trigger>
     <Popover.Content class="w-80 p-0" align="start">
-      <Command.Root shouldFilter={false}>
+      <Command.Root shouldFilter={false} label="Find a modification">
         <Command.Input bind:value={query} placeholder="Oxidation (M), Phospho (STY), TMT6plex…" aria-label="Find a modification" />
         <Command.List>
           {#if expansion}
-            <Command.Group heading="Several residues">
+            <Command.Group heading={options ? "Several residues" : "Typed name"}>
               <Command.Item value={'expand:' + expansion.join('|')} onSelect={() => add(expansion)}>
-                Add {expansion.join(', ')}
+                Add {expansion.join(', ')}{options ? '' : ' (checked once OpenMS is loaded)'}
               </Command.Item>
             </Command.Group>
           {/if}

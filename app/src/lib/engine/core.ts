@@ -20,6 +20,7 @@ import type {
   ResultTables,
   StoredSpectra,
 } from './openms-types'
+import { formatBytes } from '../format/bytes'
 import type { EngineInfo, SearchProgress } from './protocol'
 
 /** The accession prefix of the contaminants the app appends (the results model reads it). */
@@ -104,10 +105,8 @@ const DIRECTORY_MODE = 0o777
 
 const encoder = new TextEncoder()
 
-/** Bytes for people: "7.8 GB", "850 MB" (decimal units). */
-export function formatSize(bytes: number): string {
-  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`
-}
+/** Bytes for people: "7.8 GB", "850 MB" (binary units, as everywhere in the app). */
+export const formatSize = formatBytes
 
 /**
  * The database with contaminants: the user's FASTA, then the entries of `crap` with `CON__` before

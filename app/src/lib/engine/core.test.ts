@@ -201,7 +201,7 @@ describe('the module', () => {
     const budget = inputBudget(OpenMS)
     expect(budget).toBeGreaterThan(1.5e9) // a fresh module: about 2.5 GB
     expect(budget).toBeLessThan(2.7e9)
-    const huge = { name: 'huge.mzML', data: { size: 7.8e9 } as Blob }
+    const huge = { name: 'huge.mzML', data: { size: 7.8 * 2 ** 30 } as Blob }
     await expect(stageInputs(OpenMS, { files: [huge], database, contaminants: null })).rejects.toThrow(
       `The files total 7.8 GB; this browser engine can hold about ${formatSize(budget)} at once: search fewer files at a time.`,
     )

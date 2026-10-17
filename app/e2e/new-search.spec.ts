@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 
 // The New search page without running a search: the design table, its notices, paste, the rescoring
@@ -22,6 +23,30 @@ test('one file needs no design; two files show it with assumed values', async ({
 
   await addFiles(page, ['run_b.mzML'])
   await expect(page.getByTestId('design-summary')).toHaveText('2 files → 2 samples')
+
+  // every editable cell looks like an input; assumed values are grey italic placeholders
+  const condition = page.getByLabel('Condition of run_a.mzML')
+  const replicate = page.getByLabel('Replicate of run_b.mzML', { exact: true })
+  await expect(condition).toHaveAttribute('placeholder', '') // no assumed condition: an empty input
+  const look = await replicate.evaluate((el) => {
+    const style = getComputedStyle(el)
+    const placeholder = getComputedStyle(el, '::placeholder')
+    return { border: style.borderTopColor, color: placeholder.color, italic: placeholder.fontStyle }
+  })
+  expect(look.border).not.toBe('rgba(0, 0, 0, 0)')
+  expect(look.italic).toBe('italic')
+  expect(look.color).not.toBe('rgb(161, 161, 170)') // zinc-400 is too faint (2.6:1)
+
+  // an entry that is not valid stays, marked, until it is corrected
+  await replicate.fill('1.5')
+  await replicate.press('Tab')
+  await expect(replicate).toHaveValue('1.5')
+  await expect(replicate).toHaveAttribute('aria-invalid', 'true')
+  await replicate.fill('')
+  await expect(replicate).toHaveAttribute('aria-invalid', 'false')
+
+  // the table header sticks over long tables
+  expect(await page.locator('thead th').first().evaluate((el) => getComputedStyle(el).position)).toBe('sticky')
   await page.getByLabel('Condition of run_a.mzML').fill('EGF')
   await page.getByLabel('Condition of run_b.mzML').fill('EGF')
   await expect(page.getByTestId('design-summary')).toHaveText('2 files → 2 samples · 1 condition')
@@ -37,7 +62,10 @@ test('one file needs no design; two files show it with assumed values', async ({
 
   // the same replicate twice: a technical replicate notice with "Change"
   await page.getByLabel('Replicate of run_b.mzML', { exact: true }).fill('1')
-  await expect(page.getByText('are the same sample (EGF 1) and are kept as technical replicates')).toBeVisible()
+  const notice = page.locator('[data-slot="notice"]')
+  await expect(notice.filter({ hasText: 'are the same sample (EGF 1) and are kept as technical replicates' })).toBeVisible()
+  // one polite live region announces the notices
+  await expect(page.locator('[aria-live="polite"][aria-atomic="true"]')).toHaveText(/^1 notice: run_a and run_b/)
   await page.getByRole('button', { name: 'Change' }).click()
   await expect(page.getByLabel('Replicate of run_b.mzML', { exact: true })).toBeFocused()
 })
@@ -45,7 +73,7 @@ test('one file needs no design; two files show it with assumed values', async ({
 test('the same file name twice disables Save design.tsv and says why', async ({ page }) => {
   await page.goto('./')
   await addFiles(page, ['same.mzML', 'same.mzML'])
-  await expect(page.getByText('same.mzML is listed 2 times')).toBeVisible()
+  await expect(page.locator('[data-slot="notice"]').filter({ hasText: 'same.mzML is listed 2 times' })).toBeVisible()
   const save = page.getByRole('button', { name: 'Save design.tsv' })
   await expect(save).toHaveAttribute('aria-disabled', 'true')
   await save.hover()
@@ -110,6 +138,8 @@ test('Start search waits for a database and a PSM FDR above 0', async ({ page })
   })
   await expect(page.getByTestId('fasta-proteins')).toHaveText('2 proteins')
   await expect(start).toBeEnabled()
+  await expect(start).toHaveAttribute('aria-keyshortcuts', 'Control+Enter')
+  await expect(start.locator('kbd')).toHaveAttribute('aria-hidden', 'true')
   await expect(page.getByTestId('search-plan')).toContainText('1 file · 2 proteins + 116 cRAP + decoys · estimated memory')
 
   // a user preset without an FDR filter (FDR:PSM 0) cannot start: the cutoffs must be above 0
@@ -117,4 +147,76 @@ test('Start search waits for a database and a PSM FDR above 0', async ({ page })
   await page.getByRole('option', { name: 'No filter' }).click()
   await expect(page.getByText('Set a PSM FDR above 0 %.')).toBeVisible()
   await expect(start).toBeDisabled()
+})
+
+test('Cancel while OpenMS loads ends at once; typed modifications are checked when it is loaded', async ({ page }) => {
+  test.setTimeout(120_000)
+  // hold the module back, so that the search is started while OpenMS loads
+  await page.route('**/openms.wasm', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 8000))
+    await route.continue().catch(() => {})
+  })
+  await page.goto('./')
+  await expect(page.getByTestId('engine-status')).toHaveText('Loading OpenMS…')
+  await page.getByRole('button', { name: 'Try the example' }).click()
+  await expect(page.getByTestId('fasta-proteins')).toContainText('proteins')
+
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  await expect(page.getByTestId('search-progress')).toContainText('Starting OpenMS')
+
+  // on another view, the top bar shows the running search and leads back to it
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'History' }).click()
+  const indicator = page.getByTestId('topbar-search-progress')
+  await expect(indicator).toBeVisible()
+  await indicator.click()
+  await expect(page).toHaveURL(/#\/search$/)
+  await expect(indicator).toHaveCount(0)
+
+  const cancelled = Date.now()
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByText('The search was cancelled.')).toBeVisible({ timeout: 2000 })
+  expect(Date.now() - cancelled).toBeLessThan(2000)
+  await expect(page.getByTestId('engine-status')).toHaveText('Loading OpenMS…') // it goes on loading
+
+  // a name typed while OpenMS loads is marked as not checked yet ...
+  await page.getByRole('button', { name: 'Add a variable modification' }).click()
+  await page.getByLabel('Find a modification').fill('Foo (X)')
+  await page.getByRole('option', { name: /Add Foo \(X\)/ }).click()
+  await expect(page.locator('[data-state="unverified"]')).toContainText('Foo (X)')
+
+  // ... and checked when the search starts (OpenMS loaded by then)
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  const error = page.getByTestId('search-error')
+  await expect(error).toContainText('Before the search: Unknown modification: Foo (X).', { timeout: 60_000 })
+  await expect(page.locator('[data-state="unknown"]')).toContainText('Foo (X)')
+  await expect(page.getByText(/^Unknown modification: Foo \(X\)\./)).toBeVisible() // why Start is disabled
+  await expect(page.getByRole('button', { name: /^Start search/ })).toBeDisabled()
+})
+
+test('an engine error names the stage and the file, with OpenMS\' text as detail', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.goto('./')
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 60_000 })
+  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles([
+    { name: 'good.mzML', mimeType: 'application/xml', buffer: readFileSync('public/example/DatabaseSuitability_in_spec.mzML') },
+    { name: 'broken.mzML', mimeType: 'application/xml', buffer: Buffer.from('<?xml version="1.0"?><mzML><run><spectrumList count="2">not really') },
+  ])
+  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles({
+    name: 'db.fasta',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('>sp|P1|A\nPEPTIDEK\n>sp|P2|B\nAAAK\n'),
+  })
+  await page.getByRole('switch', { name: 'Percolator' }).click() // faster
+  await page.getByRole('button', { name: /^Start search/ }).click()
+
+  const error = page.getByTestId('search-error')
+  await expect(error).toContainText(
+    'While searching file 2 of 2 (broken.mzML): Parse Error. The file may be incomplete or not valid mzML.',
+    { timeout: 60_000 },
+  )
+  const detail = error.locator('details')
+  await expect(detail).not.toHaveAttribute('open')
+  await expect(detail.locator('summary')).toHaveText('OpenMS message')
+  await expect(detail).toContainText('XMLHandler')
+  await expect(page.getByText('The search stopped: see the message above.')).toBeVisible()
 })

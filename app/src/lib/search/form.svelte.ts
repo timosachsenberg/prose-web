@@ -7,7 +7,8 @@ import { engineState } from '../engine/app-engine.svelte'
 import type { ParamEntry } from '../engine/protocol'
 import { changedParameters, copyValue, copyValues, defaultsOf, sameValue } from '../settings/parameters'
 import { BUILTIN_PRESETS, DEFAULT_PRESET_ID, loadPresets, savePreset, type Preset } from '../settings/presets'
-import { countProteins, countSpectra, formatBytes, isFasta, isMzML } from './files'
+import { formatBytes } from '../format/bytes'
+import { countProteins, countSpectra, isFasta, isMzML } from './files'
 
 export type FileRow = DesignFields & {
   id: string

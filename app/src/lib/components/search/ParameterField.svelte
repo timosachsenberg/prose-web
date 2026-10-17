@@ -8,6 +8,7 @@
   import { Switch } from '$lib/components/ui/switch'
   import { Textarea } from '$lib/components/ui/textarea'
   import type { ParamEntry } from '$lib/engine/protocol'
+  import { choiceLabel } from '$lib/settings/labels'
   import ChoiceSelect from './ChoiceSelect.svelte'
   import ModificationsField from './ModificationsField.svelte'
   import NumberField from './NumberField.svelte'
@@ -57,7 +58,7 @@
   <ChoiceSelect
     {id}
     value={String(value)}
-    options={entry.validStrings.map((v) => ({ value: v, label: v }))}
+    options={entry.validStrings.map((v) => ({ value: v, label: choiceLabel(entry.name, v) }))}
     onChange={(v) => onChange(v)} />
 {:else if entry.type === 'int' || entry.type === 'double'}
   <NumberField

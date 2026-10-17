@@ -1,5 +1,6 @@
 <script lang="ts">
-  // An editable cell of the design table. Empty, it shows the assumed value greyed (the placeholder);
+  // An editable cell of the design table: always drawn as an input. Empty, it shows the assumed value
+  // grey and italic (the placeholder); an entry that is not valid stays, marked, until it is corrected.
   // Enter and the arrow keys move up and down the column, as in a spreadsheet.
   import { positiveInt } from '$lib/design/model'
   import { cn } from '$lib/utils'
@@ -16,7 +17,7 @@
   }: {
     value: string | number | undefined
     kind: 'text' | 'int'
-    /** The assumed value, shown greyed while the cell is empty. */
+    /** The assumed value, shown grey and italic while the cell is empty. */
     placeholder?: string
     label: string
     /** For moving between rows: the column name and the row index. */
@@ -26,16 +27,19 @@
     onChange: (value: string | number | undefined) => void
   } = $props()
 
-  // what the user is typing, until the cell loses focus
-  let draft = $state<string | null>(null)
-  const text = $derived(draft ?? (value === undefined ? '' : String(value)))
-  const invalid = $derived(kind === 'int' && text.trim() !== '' && positiveInt(Number(text.trim())) === undefined)
+  // What the user typed, while it differs from what the model holds: during typing, and after it for an
+  // entry that is not valid (the model then holds "not entered"). A change from elsewhere (paste, load)
+  // replaces it.
+  let draft = $state<{ text: string; value: string | number | undefined } | null>(null)
+  const shown = $derived(draft !== null && draft.value === value ? draft.text : value === undefined ? '' : String(value))
+  const invalid = $derived(kind === 'int' && shown.trim() !== '' && positiveInt(Number(shown.trim())) === undefined)
 
   function edit(event: Event & { currentTarget: HTMLInputElement }) {
-    draft = event.currentTarget.value
-    const t = draft.trim()
-    if (kind === 'text') onChange(t === '' ? undefined : draft)
-    else onChange(t === '' ? undefined : positiveInt(Number(t)))
+    const text = event.currentTarget.value
+    const t = text.trim()
+    const next = t === '' ? undefined : kind === 'text' ? text : positiveInt(Number(t))
+    draft = { text, value: next }
+    onChange(next)
   }
 
   function move(event: KeyboardEvent & { currentTarget: HTMLInputElement }) {
@@ -63,12 +67,13 @@
   data-row={row}
   {list}
   {placeholder}
-  value={text}
+  value={shown}
   oninput={edit}
   onkeydown={move}
-  onblur={() => (draft = null)}
+  onblur={() => {
+    if (!invalid) draft = null
+  }}
   class={cn(
-    'h-7 w-full rounded-[5px] border px-2 text-[13px] transition-colors outline-none placeholder:text-zinc-400 placeholder:italic focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
-    text === '' ? 'border-transparent bg-transparent hover:border-input' : 'border-input bg-background',
-    invalid && 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20',
+    'h-7 w-full rounded-[5px] border border-input bg-background px-2 text-[13px] transition-colors outline-none placeholder:text-muted-foreground placeholder:italic hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
+    invalid && 'border-destructive bg-destructive/5 focus-visible:border-destructive focus-visible:ring-destructive/20',
   )} />

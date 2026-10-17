@@ -4,7 +4,7 @@
   import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
   import { searchForm as form } from '$lib/search/form.svelte'
-  import Notice from './Notice.svelte'
+  import NoticeList from './NoticeList.svelte'
 
   let { dragging = false }: { dragging?: boolean } = $props()
 
@@ -53,11 +53,9 @@
         e.currentTarget.value = ''
       }} />
     <p class="text-xs text-muted-foreground">
-      The example searches a 6.5 MB run twice, as two replicates, against its FASTA.
+      The example searches one run (2,789 spectra) twice, as two replicates, against its FASTA.
     </p>
-    {#each form.notices as message, k (k)}
-      <Notice onDismiss={() => form.notices.splice(k, 1)}>{message}</Notice>
-    {/each}
+    <NoticeList items={form.notices.map((message, k) => ({ message, onDismiss: () => form.notices.splice(k, 1) }))} />
     <p class="text-xs text-muted-foreground">
       Desktop app (works offline, all threads):
       {#each downloads as d, k (d.platform)}

@@ -3,19 +3,15 @@
   import * as Card from '$lib/components/ui/card'
   import { Label } from '$lib/components/ui/label'
   import { CRAP_PROTEINS, searchForm as form } from '$lib/search/form.svelte'
+  import { choiceLabel } from '$lib/settings/labels'
   import ChoiceSelect from './ChoiceSelect.svelte'
 
   let input = $state<HTMLInputElement | null>(null)
 
-  const decoyLabels: Record<string, string> = {
-    auto: 'Use the database’s, else generate',
-    generate: 'Generate',
-    ignore: 'None (no FDR)',
-  }
   const decoyOptions = $derived(
     (form.entry('decoys')?.validStrings ?? ['auto', 'generate', 'ignore']).map((v) => ({
       value: v,
-      label: decoyLabels[v] ?? v,
+      label: choiceLabel('decoys', v),
     })),
   )
 

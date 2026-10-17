@@ -29,12 +29,3 @@ export async function countProteins(file: Blob, chunkSize = CHUNK): Promise<numb
   }
   return count
 }
-
-/** Sizes for people, in decimal units: "312 MB", "1.9 GB", "6.5 MB". */
-export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '0 B'
-  const units = ['B', 'kB', 'MB', 'GB', 'TB']
-  const e = Math.min(units.length - 1, Math.floor(Math.log10(bytes) / 3))
-  const value = bytes / 1000 ** e
-  return `${value < 10 && e > 1 ? value.toFixed(1) : Math.round(value)} ${units[e]}`
-}

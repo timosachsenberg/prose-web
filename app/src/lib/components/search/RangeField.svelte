@@ -26,7 +26,7 @@
 </script>
 
 <InputGroup.Root class="h-8 bg-background shadow-none" aria-labelledby={labelId}>
-  <NumberField value={from} kind="int" {min} inGroup ariaLabel={fromLabel} onChange={onFrom} class="w-[calc(2.5ch+0.625rem)] flex-none pr-0" />
-  <span class="text-muted-foreground" aria-hidden="true">–</span>
-  <NumberField value={to} kind="int" {min} inGroup ariaLabel={toLabel} onChange={onTo} class="w-0 min-w-0 flex-1 pl-1" />
+  <NumberField value={from} kind="int" {min} inGroup fit ariaLabel={fromLabel} onChange={onFrom} class="flex-none pr-0" />
+  <span class="px-1.5" aria-hidden="true">–</span>
+  <NumberField value={to} kind="int" {min} inGroup ariaLabel={toLabel} onChange={onTo} class="w-0 min-w-0 flex-1 pl-0" />
 </InputGroup.Root>

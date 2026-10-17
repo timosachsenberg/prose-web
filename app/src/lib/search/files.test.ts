@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countProteins, countSpectra, formatBytes, isFasta, isMzML } from './files'
+import { countProteins, countSpectra, isFasta, isMzML } from './files'
 
 describe('files', () => {
   it('reads the spectrum count from the spectrum list of an mzML', async () => {
@@ -24,13 +24,5 @@ describe('files', () => {
     expect(isFasta('db.fa')).toBe(true)
     expect(isFasta('db.faa')).toBe(true)
     expect(isFasta('db.txt')).toBe(false)
-  })
-
-  it('formats sizes in decimal units', () => {
-    expect(formatBytes(312e6)).toBe('312 MB')
-    expect(formatBytes(1.94e9)).toBe('1.9 GB')
-    expect(formatBytes(6.5e6)).toBe('6.5 MB')
-    expect(formatBytes(1200)).toBe('1 kB')
-    expect(formatBytes(0)).toBe('0 B')
   })
 })

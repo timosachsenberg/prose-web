@@ -27,7 +27,7 @@
   const tooLarge = (q: number) => max !== undefined && q > max * (1 + 1e-9)
   const invalid = $derived(typed === null || tooLarge(typed))
   const hint = $derived(
-    typed === null ? '0 – 100 %' : tooLarge(typed) ? `at most ${formatPercent(max!)}` : formatQ(typed),
+    typed === null ? '> 0 – 100 %' : tooLarge(typed) ? `at most ${formatPercent(max!)}` : formatQ(typed),
   )
 
   function edit(event: Event & { currentTarget: HTMLInputElement }) {

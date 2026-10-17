@@ -39,8 +39,9 @@ export function matchFiles(names: string[], fileNames: string[]): number[] {
 
 const headerNames: [Field, RegExp][] = [
   ['techReplicate', /tech/i],
-  ['file', /file|spectra_filepath|^run$|^raw$|data file/i],
-  ['condition', /condition|^group$|factor value/i],
+  // MaxQuant's experimental design template: Name (the raw file), Fraction, Experiment, PTM
+  ['file', /file|spectra_filepath|^run$|^raw$|data file|^name$/i],
+  ['condition', /condition|^group$|factor value|^experiment$/i],
   ['replicate', /replicate|^rep\.?$/i],
   ['fraction', /^fraction(?!_?group)|fraction identifier/i],
 ]
@@ -58,7 +59,8 @@ const notIn = (names: string[]) => `Not in the table: ${names.join(', ')}.`
 
 /**
  * Rows copied from a spreadsheet (tab-separated). With a header, its columns are read by name (File,
- * Condition, Replicate, Fraction, Tech. replicate, in any order). Without one, the columns are File,
+ * Condition, Replicate, Fraction, Tech. replicate, in any order; MaxQuant's Name and Experiment are File
+ * and Condition). Without one, the columns are File,
  * Condition, Replicate, Fraction, Tech. replicate if the first column names files, else Condition,
  * Replicate, Fraction, Tech. replicate for the files in table order (one row per file). Only the columns
  * pasted change; an empty cell clears its field.

@@ -14,10 +14,11 @@
   import { applyDesign } from '$lib/design/paste'
   import { parseSdrf } from '$lib/design/sdrf'
   import { download } from '$lib/download'
-  import { formatBytes } from '$lib/search/files'
+  import { cn } from '$lib/utils'
+  import { formatBytes } from '$lib/format/bytes'
   import { searchForm as form } from '$lib/search/form.svelte'
   import DesignCell from './DesignCell.svelte'
-  import Notice from './Notice.svelte'
+  import NoticeList from './NoticeList.svelte'
   import PasteDialog from './PasteDialog.svelte'
 
   let addInput = $state<HTMLInputElement | null>(null)
@@ -71,10 +72,25 @@
     input?.select()
   }
 
+  // the design's notices (from two files on), then what adding, pasting, loading or saving could not use
+  const notices = $derived([
+    ...(multi
+      ? design.notices.map((n) => ({
+          message: n.message,
+          action: n.kind === 'techReplicate' ? { label: 'Change', run: () => change(n) } : undefined,
+        }))
+      : []),
+    ...form.notices.map((message, k) => ({ message, onDismiss: () => form.notices.splice(k, 1) })),
+    ...(saveError ? [{ message: saveError, onDismiss: () => (saveError = null) }] : []),
+  ])
+
   const headerButton = 'h-7 px-2.5 text-xs'
+  // the header stays visible over long tables (it sticks below the top of the window)
+  const th = 'sticky top-0 z-10 bg-card px-2.5 py-2 font-medium shadow-[inset_0_-1px_0_var(--border)]'
 </script>
 
-<Card.Root size="sm" class="gap-3 rounded-lg shadow-none">
+<!-- overflow visible: the sticky table header needs the window as its scroll container -->
+<Card.Root size="sm" class="gap-3 overflow-visible rounded-lg shadow-none">
   <Card.Header class="flex flex-wrap items-center gap-x-2.5 gap-y-2">
     <Card.Title class="text-[14px] font-semibold">Spectra</Card.Title>
     <span class="text-muted-foreground">{form.filesLine}</span>
@@ -128,25 +144,25 @@
       </div>
     {/if}
 
-    <div class="relative w-full overflow-x-auto">
+    <div class="relative w-full">
       <table class="w-full border-collapse tabular-nums">
         <thead>
-          <tr class="border-b text-left text-xs text-muted-foreground">
-            <th scope="col" class="px-2.5 py-2 font-medium">File</th>
+          <tr class="text-left text-xs text-muted-foreground">
+            <th scope="col" class={th}>File</th>
             {#if multi}
-              <th scope="col" class="w-[150px] px-2.5 py-2 font-medium">Condition</th>
-              <th scope="col" class="w-[110px] px-2.5 py-2 font-medium">Replicate</th>
-              <th scope="col" class="w-[110px] px-2.5 py-2 font-medium">Fraction</th>
+              <th scope="col" class="{th} w-[150px]">Condition</th>
+              <th scope="col" class="{th} w-[110px]">Replicate</th>
+              <th scope="col" class="{th} w-[110px]">Fraction</th>
               {#if form.advanced}
-                <th scope="col" class="w-[110px] px-2.5 py-2 font-medium">Tech. replicate</th>
-                <th scope="col" class="px-2.5 py-2 text-right font-medium" title="OpenMS Fraction_Group: the files of one measurement of one sample"
+                <th scope="col" class="{th} w-[110px]">Tech. replicate</th>
+                <th scope="col" class="{th} text-right" title="OpenMS Fraction_Group: the files of one measurement of one sample"
                   >Fraction group</th>
-                <th scope="col" class="px-2.5 py-2 font-medium" title="Condition + Replicate">Sample</th>
+                <th scope="col" class={th} title="Condition + Replicate">Sample</th>
               {/if}
             {/if}
-            <th scope="col" class="px-2.5 py-2 text-right font-medium">Spectra</th>
-            <th scope="col" class="px-2.5 py-2 text-right font-medium">Size</th>
-            <th scope="col" class="w-8 px-1 py-2"><span class="sr-only">Remove</span></th>
+            <th scope="col" class="{th} text-right">Spectra</th>
+            <th scope="col" class="{th} text-right">Size</th>
+            <th scope="col" class={cn(th, 'w-8 px-1')}><span class="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody>
@@ -163,7 +179,6 @@
                     column="condition"
                     row={i}
                     label="Condition of {name}"
-                    placeholder="–"
                     list="design-conditions"
                     value={file.condition}
                     onChange={(v) => form.setField(file.id, 'condition', v as string | undefined)} />
@@ -224,22 +239,7 @@
       </p>
     {/if}
 
-    {#if multi}
-      {#each design.notices as notice, k (k)}
-        <Notice>
-          {notice.message}
-          {#if notice.kind === 'techReplicate'}
-            <button type="button" class="ml-1 underline underline-offset-2 hover:no-underline" onclick={() => change(notice)}>Change</button>
-          {/if}
-        </Notice>
-      {/each}
-    {/if}
-    {#each form.notices as message, k (k)}
-      <Notice onDismiss={() => form.notices.splice(k, 1)}>{message}</Notice>
-    {/each}
-    {#if saveError}
-      <Notice onDismiss={() => (saveError = null)}>{saveError}</Notice>
-    {/if}
+    <NoticeList items={notices} />
   </Card.Content>
 </Card.Root>
 

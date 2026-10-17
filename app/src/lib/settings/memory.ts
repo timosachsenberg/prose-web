@@ -4,9 +4,9 @@
 // fragment index (0.08 GB per 1,000 proteins, tryptic), the spectra being read, and PeptDeep's models.
 
 import { SEARCH_RESERVE } from '../engine/core'
+import { GB } from '../format/bytes'
 
-/** A gigabyte as the module counts it: its limit is 4 × 2³⁰ bytes. */
-export const GB = 2 ** 30
+export { GB }
 
 /** What the module can address. */
 export const LIMIT_BYTES = 4 * GB
@@ -67,6 +67,12 @@ export type MemoryEstimate = {
   cause: 'database' | 'inputs'
   /** The input files exceed what the engine accepts (memory mode): it refuses the search before writing. */
   inputsOverBudget: boolean
+  /**
+   * A chunked semi- or non-specific search: the formula does not know how much more than one chunk's
+   * index it needs (README: human semi-tryptic in chunks of 2000 measured 3.8 GB, the formula gives
+   * 1.4 GB), so the level is at least `warn` until there are measurements.
+   */
+  uncertain: boolean
 }
 
 /**
@@ -77,7 +83,8 @@ export type MemoryEstimate = {
  *
  * where inputs = 2 × the largest mzML in `opfs` mode (copied in, then read), and in `memory` mode all
  * inputs (they stay in the module during the search) plus 1 × the largest mzML being read. `warn` above
- * 3 GB, `over` above 4 GB or when the engine would refuse the inputs.
+ * 3 GB or for a chunked semi- or non-specific search (`uncertain`), `over` above 4 GB or when the engine
+ * would refuse the inputs.
  */
 export function estimateMemory(i: MemoryInput): MemoryEstimate {
   const storage = i.storage ?? 'memory'
@@ -89,9 +96,11 @@ export function estimateMemory(i: MemoryInput): MemoryEstimate {
   const inputs = storage === 'memory' ? inputBytes + i.largestMzmlBytes : 2 * i.largestMzmlBytes
   const bytes = MODULE_BYTES + database + inputs + (i.peptdeep ? PEPTDEEP_BYTES : 0)
   const inputsOverBudget = storage === 'memory' && inputBytes > INPUT_BUDGET
-  const level: MemoryLevel = bytes > LIMIT_BYTES || inputsOverBudget ? 'over' : bytes > WARN_BYTES ? 'warn' : 'ok'
-  const cause = inputsOverBudget || inputs > database ? 'inputs' : 'database'
-  return { bytes, level, database, inputs, cause, inputsOverBudget }
+  const uncertain = chunk < i.proteins && i.specificity !== 'full'
+  const level: MemoryLevel =
+    bytes > LIMIT_BYTES || inputsOverBudget ? 'over' : bytes > WARN_BYTES || uncertain ? 'warn' : 'ok'
+  const cause = inputsOverBudget || (inputs > database && !uncertain) ? 'inputs' : 'database'
+  return { bytes, level, database, inputs, cause, inputsOverBudget, uncertain }
 }
 
 /** Memory for people, in the module's gigabytes: "2.6 GB", "0.8 GB". */

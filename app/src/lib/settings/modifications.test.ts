@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { expandModification, groupModifications, parseModification } from './modifications'
+import type { ParamEntry } from '../engine/protocol'
+import { expandModification, groupModifications, parseModification, unknownModifications } from './modifications'
 
 describe('modifications', () => {
   it('reads the name and the site', () => {
@@ -49,5 +50,27 @@ describe('modifications', () => {
       'Gln->pyro-Glu (N-term Q)',
       'Glu->pyro-Glu (N-term E)',
     ])
+  })
+})
+
+describe('unknownModifications', () => {
+  it('lists the fixed and variable modifications that are not among ProSE\'s names', () => {
+    const valid = ['Carbamidomethyl (C)', 'Oxidation (M)', 'Phospho (S)']
+    const entries: ParamEntry[] = ['modifications:fixed', 'modifications:variable'].map((name) => ({
+      name,
+      value: [],
+      type: 'string[]',
+      description: '',
+      tags: [],
+      validStrings: valid,
+    }))
+    const values = {
+      'modifications:fixed': ['Carbamidomethyl (C)'],
+      'modifications:variable': ['Oxidation (M)', 'Phosho (S)', 'Foo (X)'],
+    }
+    expect(unknownModifications(values, entries)).toEqual(['Phosho (S)', 'Foo (X)'])
+    expect(unknownModifications({ 'modifications:fixed': ['Carbamidomethyl (C)'] }, entries)).toEqual([])
+    // without the definitions nothing can be checked
+    expect(unknownModifications(values, [])).toEqual([])
   })
 })

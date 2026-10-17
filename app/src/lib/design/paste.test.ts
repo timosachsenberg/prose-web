@@ -53,6 +53,14 @@ describe('parsePastedDesign', () => {
     ])
   })
 
+  it('reads the MaxQuant layout: Name, Fraction, Experiment, PTM', () => {
+    const text = 'Name\tFraction\tExperiment\tPTM\nctrl_a_F1\t1\tcontrol\tFalse\nctrl_a_F2\t2\tcontrol\tFalse\n'
+    expect(parsePastedDesign(text, files).rows).toEqual([
+      { index: 0, fields: { fraction: 1, condition: 'control' } },
+      { index: 1, fields: { fraction: 2, condition: 'control' } },
+    ])
+  })
+
   it('reads a technical replicate column', () => {
     const { rows } = parsePastedDesign('File\tTech. replicate\nctrl_a_F1.mzML\t2', files)
     expect(rows).toEqual([{ index: 0, fields: { techReplicate: 2 } }])

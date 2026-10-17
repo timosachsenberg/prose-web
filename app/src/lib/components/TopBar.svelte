@@ -2,7 +2,9 @@
   import { Badge } from '$lib/components/ui/badge'
   import { engineState } from '$lib/engine/app-engine.svelte'
   import { formatHash, type Route, type View } from '$lib/route'
+  import { searchProgress } from '$lib/search/session.svelte'
   import { cn } from '$lib/utils'
+  import SearchProgress from './search/SearchProgress.svelte'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
 
@@ -49,6 +51,17 @@
     {/each}
   </nav>
   <div class="flex-1"></div>
+  {#if searchProgress.running && route.view !== 'search'}
+    <!-- a search runs on while the user is elsewhere: its progress, and the way back to it -->
+    <a
+      href={formatHash({ view: 'search' })}
+      class="rounded-md px-2 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      title="{searchProgress.label} – back to New search"
+      aria-label="Search running{searchProgress.indeterminate ? '' : `, ${searchProgress.percent} %`}: back to New search"
+      data-testid="topbar-search-progress">
+      <SearchProgress compact />
+    </a>
+  {/if}
   <Badge
     variant="outline"
     class="h-6 gap-1.5 bg-background px-2.5 font-normal text-muted-foreground"

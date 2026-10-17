@@ -75,9 +75,22 @@ describe('estimateMemory', () => {
     const semi = { ...human, specificity: 'semi' } as const
     const chunked = estimateMemory({ ...semi, chunkSize: 2000 })
     expect(chunked.database / estimateMemory(semi).database).toBeCloseTo(2000 / 20652)
-    expect(chunked.level).toBe('ok')
     // a chunk larger than the database changes nothing
     expect(estimateMemory({ ...semi, chunkSize: 50000 }).bytes).toBe(estimateMemory(semi).bytes)
+    expect(estimateMemory({ ...semi, chunkSize: 50000 }).uncertain).toBe(false)
+  })
+
+  it('warns at least for chunked semi- and non-specific searches, which it cannot estimate yet', () => {
+    // README: human semi-tryptic in chunks of 2000 measured 3.8 GB, the formula gives about 1.4 GB
+    for (const specificity of ['semi', 'none'] as const) {
+      const chunked = estimateMemory({ ...human, specificity, chunkSize: 2000 })
+      expect(chunked.uncertain).toBe(true)
+      expect(chunked.level).not.toBe('ok')
+      expect(chunked.cause).toBe('database')
+    }
+    // a chunked tryptic search stays as estimated
+    const tryptic = estimateMemory({ ...human, chunkSize: 2000 })
+    expect(tryptic).toMatchObject({ level: 'ok', uncertain: false })
   })
 
   it('treats a non-specific search as 30 times a tryptic one', () => {
