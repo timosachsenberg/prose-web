@@ -274,6 +274,26 @@ describe('EngineClient', () => {
     await expect(next.search).resolves.toBe(outcome)
   })
 
+  test('hasSearchResult: only while the worker of a finished search runs', async () => {
+    expect(client.hasSearchResult).toBe(false)
+    await client.init(4)
+    expect(client.hasSearchResult).toBe(false)
+    await searched()
+    expect(client.hasSearchResult).toBe(true)
+    // a new search replaces the worker: the old result is gone, also when the new search fails
+    const next = await startSearch()
+    expect(client.hasSearchResult).toBe(false)
+    next.worker.reply({ id: next.id, type: 'error', error: 'Parse Error', trap: false, stage: 'searching' })
+    await rejection(next.search)
+    expect(client.hasSearchResult).toBe(false)
+    // a search that went through, then a trap of its worker (e.g. while writing idXML)
+    const worker = await searched()
+    expect(client.hasSearchResult).toBe(true)
+    worker.crash('RuntimeError: unreachable')
+    await settle()
+    expect(client.hasSearchResult).toBe(false)
+  })
+
   test('an idXML queued behind a search that traps rejects as a trap', async () => {
     await client.init(4)
     const { search, worker, id } = await startSearch()

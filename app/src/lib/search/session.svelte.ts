@@ -17,8 +17,13 @@ export type OpenResult = {
   /** The search's cutoffs (q-values). */
   psmFdr: number
   proteinFdr: number
+  /** The search ran in this session's engine, whose worker may still hold it (for idXML). */
+  engineResult: boolean
   settings: {
+    /** The parameters that differ from ProSE's defaults. */
     parameters: Record<string, unknown>
+    /** The fixed modifications of the search (OpenMS names), which the tables do not mark. */
+    fixedMods: string[]
     rescore: boolean
     peptdeep: boolean
     contaminants: boolean
@@ -93,6 +98,13 @@ export const openResult = {
   },
 }
 
+/** Opens a result that did not come from this session's engine (the debug results; History later). Returns its id. */
+export function openStoredResult(result: Omit<OpenResult, 'id' | 'createdAt' | 'engineResult'>): string {
+  const id = newId()
+  open = { ...result, id, createdAt: new Date().toISOString(), engineResult: false }
+  return id
+}
+
 /** The run in flight: a cancelled or replaced run ignores what its promises bring later. */
 let runId = 0
 /** The request of the run has gone to the engine (cancelling then goes through the engine). */
@@ -121,7 +133,7 @@ function newId(): string {
  */
 export async function runSearch(
   request: SearchRequest,
-  meta: Omit<OpenResult, 'id' | 'createdAt' | 'outcome'>,
+  meta: Omit<OpenResult, 'id' | 'createdAt' | 'outcome' | 'engineResult'>,
   check?: (info: EngineInfo) => string | null,
 ): Promise<string | null> {
   if (searchRun.status === 'running') return null
@@ -165,7 +177,7 @@ export async function runSearch(
     const outcome = await engineClient().search(request, onProgress)
     if (id !== runId) return null
     const resultId = newId()
-    open = { ...meta, id: resultId, createdAt: new Date().toISOString(), outcome }
+    open = { ...meta, id: resultId, createdAt: new Date().toISOString(), outcome, engineResult: true }
     searchRun.status = 'done'
     return resultId
   } catch (e) {

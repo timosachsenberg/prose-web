@@ -89,6 +89,8 @@ interface Session {
   searchStage: EngineStage
   /** Searches in flight, also those still waiting for the module. */
   searches: number
+  /** A search of this worker went through: it holds the result (for idXML) while it runs. */
+  holdsResult: boolean
 }
 
 function cancelled(type: EngineCall): string {
@@ -133,10 +135,21 @@ export class EngineClient {
     session.searchStage = 'reading'
     session.searches++
     try {
-      return await this.#call(session, 'search', { request: req }, onProgress)
+      const outcome = await this.#call(session, 'search', { request: req }, onProgress)
+      session.holdsResult = true
+      return outcome
     } finally {
       session.searches--
     }
+  }
+
+  /**
+   * The search worker holds the result of its search, so `idXML()` can write it: false before the
+   * first search, from the start of a new search (whether it succeeds or not) and after a trap.
+   */
+  get hasSearchResult(): boolean {
+    const s = this.#search
+    return s !== null && s.holdsResult && s.state !== 'failed'
   }
 
   /** The results of the last search as idXML, while its worker runs (until the next search). */
@@ -210,6 +223,7 @@ export class EngineClient {
       pending,
       searchStage: 'reading',
       searches: 0,
+      holdsResult: false,
     }
     if (role === 'search') this.#search = session
     else this.#viewer = session

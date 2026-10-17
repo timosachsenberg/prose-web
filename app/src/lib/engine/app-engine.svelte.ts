@@ -2,6 +2,7 @@
 // parameters of the search form). OpenMS is loaded once at startup; with ?debug=engine the client is
 // window.__engine (the end-to-end test of the engine uses it; no second client is made).
 
+import { debugFlag } from '../debug'
 import { EngineClient, EngineError, type EngineInfo } from './client'
 
 /** The first download of the module (about 45 MB) can be slow; 30 s (the client's default) is too short. */
@@ -43,7 +44,7 @@ export function searchThreads(): number {
 export function engineClient(): EngineClient {
   if (!client) {
     client = new EngineClient({ startTimeoutMs: START_TIMEOUT_MS })
-    if (new URLSearchParams(location.search).get('debug') === 'engine') {
+    if (debugFlag(location.search) === 'engine') {
       ;(window as unknown as { __engine: EngineClient }).__engine = client
     }
   }

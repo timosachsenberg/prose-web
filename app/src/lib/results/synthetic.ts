@@ -1,9 +1,9 @@
-// Synthetic result tables for tests and for the debug hook (`?debug=large`): `makeTables` lays out a
+// Synthetic result tables for tests and for the debug hook (`?debug=large|small`): `makeTables` lays out a
 // small hand-written result as the engine does, `makeLargeTables` generates a big, consistent one.
-// Nothing here is used by the app itself.
+// Only the tests and the debug results (`?debug=large|small`, debug-result.ts) use them.
 
 import { resolveDesign, type DesignInput, type DesignResolution } from '../design/model'
-import type { ResultTables } from '../engine/openms-types'
+import type { ProSEMultiSummary, ResultTables } from '../engine/openms-types'
 
 export type ProteinSpec = {
   accession: string
@@ -356,13 +356,61 @@ export function syntheticDesign(files: string[]): DesignResolution {
   return resolveDesign(inputs)
 }
 
+/** The cutoffs of the debug results: every PSM counts (PSM FDR 100 %), proteins at 1 %. */
+export const debugCutoffs = { psmFdr: 1, proteinFdr: 0.01 } as const
+
 /**
- * The result that the debug hook shows: `?debug=large` is 150,000 PSMs, `?debug=small` 3,000.
- * `search` is a URL query string (`location.search`); other values give `null`.
+ * A summary of the search that could have made `t`: per file its PSMs and about 2.2 MS2 spectra
+ * per PSM, all rescored by Percolator, a closed search with protein FDR.
  */
-export function loadDebugResult(search: string): { tables: ResultTables; design: DesignResolution } | null {
-  const which = new URLSearchParams(search).get('debug')
-  const tables =
-    which === 'large' ? makeLargeTables(150000, 20000, 4000) : which === 'small' ? makeLargeTables(3000, 600, 120) : null
-  return tables && { tables, design: syntheticDesign(tables.files) }
+export function syntheticSummary(t: ResultTables, cutoffs: { psmFdr: number; proteinFdr: number }): ProSEMultiSummary {
+  const targets = new Uint32Array(t.files.length)
+  const decoys = new Uint32Array(t.files.length)
+  for (let i = 0; i < t.psms.count; i++) (t.psms.decoy[i] ? decoys : targets)[t.psms.file[i]]++
+  return {
+    files: t.files.map((path, f) => ({
+      path,
+      status: 'EXECUTION_OK',
+      ms2Spectra: Math.round((targets[f] + decoys[f]) * 2.2) + 1,
+      targetPSMs: targets[f],
+      decoyPSMs: decoys[f],
+      percolator: { applied: true, skipped: null, warning: null },
+      peptdeepNce: null,
+      secondsSearch: 10,
+    })),
+    proteinFdrApplied: true,
+    psmFdr: cutoffs.psmFdr,
+    proteinFdr: cutoffs.proteinFdr,
+    decoyString: 'DECOY_',
+    openSearch: false,
+    modificationAnalysis: null,
+  }
+}
+
+export type DebugResult = {
+  tables: ResultTables
+  design: DesignResolution
+  summary: ProSEMultiSummary
+  psmFdr: number
+  proteinFdr: number
+}
+
+/**
+ * The result that the debug hook shows (see `debug.ts`): `large` is 150,000 PSMs of a closed search
+ * rescored by Percolator; `small` 3,000 PSMs of an open search without Percolator and without
+ * protein FDR (the protein q-values are NaN), in which every fifth PSM has a mass shift of
+ * +15.9949 Da and every seventh one of -17.0265 Da.
+ */
+export function loadDebugResult(which: 'large' | 'small'): DebugResult {
+  const tables = which === 'large' ? makeLargeTables(150000, 20000, 4000) : makeLargeTables(3000, 600, 120)
+  const summary = syntheticSummary(tables, debugCutoffs)
+  if (which === 'small') {
+    tables.proteins.qValue.fill(NaN)
+    const delta = tables.psms.deltaMass
+    for (let i = 0; i < delta.length; i++) delta[i] = i % 5 === 0 ? 15.994915 : i % 7 === 0 ? -17.026549 : 0.002 * ((i % 11) - 5)
+    summary.proteinFdrApplied = false
+    summary.openSearch = true
+    for (const f of summary.files) f.percolator = null
+  }
+  return { tables, design: syntheticDesign(tables.files), summary, ...debugCutoffs }
 }

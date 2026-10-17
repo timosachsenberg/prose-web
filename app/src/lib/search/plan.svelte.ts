@@ -132,7 +132,14 @@ export async function startSearch(): Promise<void> {
       design: $state.snapshot(form.design),
       psmFdr: Number(values['FDR:PSM']),
       proteinFdr: Number(values['FDR:protein']),
-      settings: { parameters, rescore: form.rescore, peptdeep, contaminants: form.contaminants, presetId: form.presetId },
+      settings: {
+        parameters,
+        fixedMods: (values['modifications:fixed'] as string[] | undefined) ?? [],
+        rescore: form.rescore,
+        peptdeep,
+        contaminants: form.contaminants,
+        presetId: form.presetId,
+      },
     },
     check,
   )

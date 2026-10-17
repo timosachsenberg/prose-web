@@ -53,11 +53,27 @@ describe('makeTables', () => {
 })
 
 describe('loadDebugResult', () => {
-  it('loads the large and small synthetic results by the debug query', () => {
-    expect(loadDebugResult('?debug=small')?.tables.psms.count).toBe(3000)
-    const small = loadDebugResult('?x=1&debug=small')!
+  it('loads the large and small synthetic results, with a summary of the search', () => {
+    const small = loadDebugResult('small')
+    expect(small.tables.psms.count).toBe(3000)
     expect(small.design.samples).toHaveLength(6)
-    expect(loadDebugResult('')).toBeNull()
-    expect(loadDebugResult('?debug=other')).toBeNull()
+    expect(small.psmFdr).toBe(1)
+    expect(small.proteinFdr).toBe(0.01)
+    const s = small.summary
+    expect(s.files.map((f) => f.path)).toEqual(small.tables.files)
+    expect(s.files.reduce((n, f) => n + f.targetPSMs + f.decoyPSMs, 0)).toBe(3000)
+    expect(s.files.every((f) => f.ms2Spectra > f.targetPSMs + f.decoyPSMs)).toBe(true)
+    // small: an open search without protein FDR and without Percolator
+    expect(s).toMatchObject({ proteinFdrApplied: false, psmFdr: 1, proteinFdr: 0.01, openSearch: true, modificationAnalysis: null })
+    expect(s.files.every((f) => f.percolator === null)).toBe(true)
+    expect(small.tables.proteins.qValue.every((q) => Number.isNaN(q))).toBe(true)
+    expect(small.tables.psms.deltaMass[5]).toBeCloseTo(15.994915)
+    expect(small.tables.psms.deltaMass[7]).toBeCloseTo(-17.026549)
+    expect(Math.abs(small.tables.psms.deltaMass[1])).toBeLessThanOrEqual(0.05)
+
+    const large = loadDebugResult('large')
+    expect(large.tables.psms.count).toBe(150000)
+    expect(large.summary).toMatchObject({ proteinFdrApplied: true, openSearch: false })
+    expect(large.summary.files.every((f) => f.percolator?.applied)).toBe(true)
   })
 })
