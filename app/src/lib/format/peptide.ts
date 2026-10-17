@@ -45,17 +45,18 @@ export function modTitle(mod: ModInfo): string {
 
 // A fixed modification as OpenMS names it: "Carbamidomethyl (C)", "TMT6plex (N-term)",
 // "Acetyl (Protein N-term)", "Label:13C(6)15N(2) (K)"; without a site it applies anywhere.
+// `residue` of a residue site may be several letters: "Phospho (STY)", "Deamidated (NQ)".
 type Fixed = { name: string; site: 'any' | 'nTerm' | 'cTerm' | 'residue'; residue?: string }
 
-// the name, then the site: a residue letter, or [Protein ]N-term / C-term with an optional residue
-const fixedSpec = /^(.*?)\s*\((?:(?:Protein\s+)?([NC])-term(?:\s+([A-Z]))?|([A-Z]))\)$/
+// the name, then the site: residue letters, or [Protein ]N-term / C-term with an optional residue
+const fixedSpec = /^(.*?)\s*\((?:(?:Protein\s+)?([NC])-term(?:\s+([A-Z]))?|([A-Z]+))\)$/
 
 function parseFixed(spec: string): Fixed {
   const match = fixedSpec.exec(spec.trim())
   if (!match) return { name: spec.trim().toLowerCase(), site: 'any' }
   const name = match[1].toLowerCase()
   const [, , term, termResidue, residue] = match
-  if (term === undefined) return residue === 'X' ? { name, site: 'any' } : { name, site: 'residue', residue }
+  if (term === undefined) return residue.includes('X') ? { name, site: 'any' } : { name, site: 'residue', residue }
   return { name, site: term === 'N' ? 'nTerm' : 'cTerm', residue: termResidue === 'X' ? undefined : termResidue }
 }
 
@@ -73,7 +74,7 @@ function isFixed(fixed: Fixed[], name: string, position: number, sequence: strin
       case 'cTerm':
         return atC && (f.residue === undefined || sequence[sequence.length - 1] === f.residue)
       case 'residue':
-        return !atN && !atC && sequence[position] === f.residue
+        return !atN && !atC && f.residue!.includes(sequence[position])
     }
   })
 }

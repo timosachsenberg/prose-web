@@ -167,6 +167,30 @@ describe('peptideView', () => {
   it('matches a fixed modification without a site on any residue', () => {
     expect(peptideView(table(cys), 0, ['Carbamidomethyl']).residues[1].mod).toBeUndefined()
   })
+
+  it('reads fixed modifications on several residues', () => {
+    const deamidated = (position: number): Mod => ({ position, name: 'Deamidated', unimod: 7, mass: 0.984 })
+    const nq = {
+      openms: 'PN(Deamidated)Q(Deamidated)R',
+      proforma: 'PN[Deamidated]Q[Deamidated]R',
+      sequence: 'PNQR',
+      mods: [deamidated(1), deamidated(2)],
+    }
+    const view = peptideView(table(nq), 0, ['Deamidated (NQ)'])
+    expect(view.residues[1].mod).toBeUndefined()
+    expect(view.residues[2].mod).toBeUndefined()
+    // only N is fixed: the deamidated Q stays marked
+    expect(peptideView(table(nq), 0, ['Deamidated (N)']).residues[2].mod?.label).toBe('de')
+    const phospho = {
+      openms: 'S(Phospho)T(Phospho)Y(Phospho)K',
+      proforma: 'S[Phospho]T[Phospho]Y[Phospho]K',
+      sequence: 'STYK',
+      mods: [0, 1, 2].map((position) => ({ position, name: 'Phospho', unimod: 21, mass: 79.9663 })),
+    }
+    const sty = peptideView(table(phospho), 0, ['Phospho (STY)'])
+    expect(sty.residues.slice(0, 3).map((r) => r.mod)).toEqual([undefined, undefined, undefined])
+    expect(peptideView(table(phospho), 0, ['Phospho (ST)']).residues[2].mod?.label).toBe('ph')
+  })
 })
 
 describe('modTitle', () => {
