@@ -6,7 +6,8 @@
 // The peptide counts ("psms", "foundIn", "sample:<n>") depend on the cutoff of the Peptides table
 // (see `peptideCounts`): the getters get the counts to read as their third argument.
 
-import type { Level, PeptideCounts, ResultModel } from './model'
+import { psmProforma } from '../format/peptide'
+import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
 
 type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
 
@@ -34,6 +35,7 @@ const accessions = (m: ResultModel, peptide: number) =>
 const proteins: Record<string, ColumnDef> = {
   accession: str('Accession', (m, p) => m.tables.proteins.accession[p]),
   description: str('Description', (m, p) => m.tables.proteins.description[p]),
+  // the best PSM score; the header names it (see `columnDef`)
   score: num('Score', (m, p) => m.tables.proteins.score[p]),
   qValue: num('q-value', (m, p) => m.tables.proteins.qValue[p]),
   length: num('Length', (m, p) => m.tables.proteins.sequence[p].length),
@@ -60,20 +62,22 @@ const peptides: Record<string, ColumnDef> = {
 }
 
 const psms: Record<string, ColumnDef> = {
-  // sorts by the file's position in the search, prints its name
-  file: label('File', (m, i) => m.tables.psms.file[i], (m, i) => m.tables.files[m.tables.psms.file[i]]),
+  // sorts by the file's position in the search, prints its name (without directories)
+  file: label('File', (m, i) => m.tables.psms.file[i], (m, i) => baseName(m.tables.files[m.tables.psms.file[i]])),
   sample: label('Sample', (m, i) => m.psmSample[i], (m, i) => m.samples[m.psmSample[i]].label),
   nativeId: str('Spectrum', (m, i) => m.tables.psms.nativeId[i]),
   rt: num('RT (s)', (m, i) => m.tables.psms.rt[i]),
   mz: num('m/z', (m, i) => m.tables.psms.mz[i]),
   charge: num('Charge', (m, i) => m.tables.psms.charge[i]),
-  peptide: str('Peptide', (m, i) => m.tables.peptides.proforma[m.tables.psms.peptide[i]]),
+  // ProForma, with an open search's unlocalized mass shift above 0.05 Da ("[+15.9949]?PEPTIDE")
+  peptide: str('Peptide', (m, i) => psmProforma(m.tables.peptides.proforma[m.tables.psms.peptide[i]], m.tables.psms.deltaMass[i])),
   sequence: str('Sequence', (m, i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]]),
   proteins: str(
     'Proteins',
     (m, i) => accessions(m, m.tables.psms.peptide[i])[0] ?? '',
     (m, i) => accessions(m, m.tables.psms.peptide[i]).join(';'),
   ),
+  // Percolator's score when rescored, else ln(hyperscore); the header names it (see `columnDef`)
   score: num('Score', (m, i) => m.tables.psms.score[i]),
   qValue: num('q-value', (m, i) => m.tables.psms.qValue[i]),
   pep: num('PEP', (m, i) => m.tables.psms.pep[i]),
@@ -91,6 +95,10 @@ const tables: Record<Level, Record<string, ColumnDef>> = { proteins, peptides, p
  * argument of the getter).
  */
 export function columnDef(m: ResultModel, level: Level, id: string): ColumnDef | undefined {
+  if (id === 'score' && level !== 'peptides') {
+    const name = m.rescored ? 'Percolator score' : 'ln(hyperscore)'
+    return { ...tables[level].score, header: level === 'psms' ? name : `Best ${name}` }
+  }
   if (Object.hasOwn(tables[level], id)) return tables[level][id]
   const match = level !== 'psms' ? /^sample:(\d+)$/.exec(id) : null
   const sample = match ? Number(match[1]) : -1

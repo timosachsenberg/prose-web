@@ -99,3 +99,21 @@ export function peptideView(t: ResultTables['peptides'], k: number, fixedMods: s
   }
   return view
 }
+
+/** ProSE counts an open-search PSM as unmodified when its mass shift is at most this (Da). */
+export const UNMODIFIED_SHIFT_DA = 0.05
+
+/**
+ * The unassigned mass shift of an open-search PSM (`psms.deltaMass`), signed with four decimals
+ * ("+15.9949", "-57.0215"); null when there is none to show: NaN (a closed search) or |Δ| ≤ 0.05 Da.
+ */
+export function massShift(delta: number): string | null {
+  if (!(Math.abs(delta) > UNMODIFIED_SHIFT_DA)) return null // NaN too
+  return `${delta < 0 ? '-' : '+'}${Math.abs(delta).toFixed(4)}`
+}
+
+/** A PSM's ProForma: the peptide's, after its unlocalized mass shift if any ("[+15.9949]?PEPTIDE"). */
+export function psmProforma(proforma: string, delta: number): string {
+  const shift = massShift(delta)
+  return shift === null ? proforma : `[${shift}]?${proforma}`
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResultTables } from '../engine/openms-types'
-import { modTitle, peptideView, shortModLabel } from './peptide'
+import { massShift, modTitle, peptideView, psmProforma, shortModLabel } from './peptide'
 
 type Mod = { position: number; name: string; unimod: number; mass: number }
 type PeptideSpec = { openms: string; proforma: string; sequence: string; mods: Mod[] }
@@ -201,5 +201,18 @@ describe('modTitle', () => {
 
   it('leaves the accession out when the modification has none', () => {
     expect(modTitle({ label: 'xyz', name: 'Xyz', unimod: 0, mass: 1 })).toBe('Xyz +1.0000')
+  })
+})
+
+describe('massShift', () => {
+  it('shows a signed shift with four decimals only above 0.05 Da', () => {
+    expect(massShift(15.994915)).toBe('+15.9949')
+    expect(massShift(-57.021464)).toBe('-57.0215')
+    expect(massShift(0.0501)).toBe('+0.0501')
+    expect(massShift(0.05)).toBeNull()
+    expect(massShift(-0.03)).toBeNull()
+    expect(massShift(NaN)).toBeNull()
+    expect(psmProforma('PEPM[Oxidation]K', 79.96633)).toBe('[+79.9663]?PEPM[Oxidation]K')
+    expect(psmProforma('PEPK', NaN)).toBe('PEPK')
   })
 })

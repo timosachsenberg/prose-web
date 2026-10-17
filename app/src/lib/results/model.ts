@@ -52,6 +52,8 @@ export type ResultModel = {
    */
   samples: ResultSample[]
   showTechReplicates: boolean
+  /** The search rescored its PSMs with Percolator: `psms.score` is Percolator's, else ln(hyperscore). */
+  rescored: boolean
   /**
    * The search's cutoffs. PSMs above `psmFdr` are no evidence: they are not counted anywhere, and
    * the filters can only tighten both values.
@@ -163,9 +165,10 @@ export function peptideCounts(m: ResultModel, maxQ: number): PeptideCounts {
   return counts
 }
 
-const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
 
 /**
+ * `rescored`: the search rescored the PSMs with Percolator (it names the score columns; default false).
  * `psmFdr` and `proteinFdr` are the cutoffs of the search that made `t` (0 < q ≤ 1); they are required
  * because the counts depend on them. The design must be that of the searched files: the same number
  * of rows, in the same order, each file named as the row says (`tables.files[i]` may carry
@@ -174,9 +177,10 @@ const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), pa
 export function buildModel(
   t: ResultTables,
   d: DesignResolution,
-  opts: { showTechReplicates: boolean; psmFdr: number; proteinFdr: number },
+  opts: { showTechReplicates: boolean; psmFdr: number; proteinFdr: number; rescored?: boolean },
 ): ResultModel {
   const { showTechReplicates, psmFdr, proteinFdr } = opts
+  const rescored = opts.rescored ?? false
   for (const [name, value] of [['psmFdr', psmFdr], ['proteinFdr', proteinFdr]] as const) {
     if (!(value > 0 && value <= 1)) throw new Error(`${name} must be a q-value above 0 and at most 1, not ${value}`)
   }
@@ -338,6 +342,7 @@ export function buildModel(
     design: d,
     samples,
     showTechReplicates,
+    rescored,
     psmFdr,
     proteinFdr,
     conditionColumns,

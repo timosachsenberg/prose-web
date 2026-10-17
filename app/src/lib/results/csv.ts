@@ -1,6 +1,7 @@
 // CSV export of a table view: the rows given (the filtered, sorted view), the columns given.
 
 import { columnDef, expandColumns } from './columns'
+import type { FilterState } from './filters'
 import { peptideCounts, type Level, type ResultModel } from './model'
 
 /**
@@ -24,12 +25,12 @@ function field(text: string, isText: boolean): string {
  * tab or a carriage return get a leading apostrophe, as do such headers (sample labels come from
  * file names and conditions).
  *
- * `maxQ` is the q-value limit of the filter state that made `rows`: the peptide counts are those at
- * that cutoff (see `peptideCounts`).
+ * `filters` is the level's filter state that made `rows`: the peptide counts are those at its
+ * cutoff (see `peptideCounts`), as in the table and its sort order.
  */
-export function toCsv(m: ResultModel, level: Level, rows: Uint32Array, columns: string[], maxQ: number = NaN): string {
+export function toCsv(m: ResultModel, level: Level, rows: Uint32Array, columns: string[], filters: FilterState): string {
   const defs = expandColumns(m, level, columns).map((id) => columnDef(m, level, id)!)
-  const counts = peptideCounts(m, level === 'peptides' ? maxQ : NaN)
+  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN)
   const lines: string[] = new Array(rows.length + 1)
   lines[0] = defs.map((d) => field(d.header, true)).join(',')
   for (let i = 0; i < rows.length; i++) {
@@ -45,5 +46,5 @@ export function toCsv(m: ResultModel, level: Level, rows: Uint32Array, columns: 
       })
       .join(',')
   }
-  return '﻿' + lines.join('\n') + '\n'
+  return '\uFEFF' + lines.join('\n') + '\n'
 }

@@ -3,7 +3,7 @@ import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import type { DesignInput } from '../design/model'
 import { cutoffs, sampleDesign, sampleTables } from './fixtures'
-import { applyFilters, defaultFilters, sortRows, type FilterState } from './filters'
+import { applyFilters, defaultFilters, initialFilters, sortRows, type FilterState } from './filters'
 import { buildModel, peptideCounts } from './model'
 import { makeLargeTables, makeTables, syntheticDesign } from './synthetic'
 
@@ -139,12 +139,12 @@ describe('applyFilters', () => {
     expect(shown).toEqual(rows(0, 6, 7))
     expect(Array.from(peptideCounts(m, tight.maxQ).psms)).toEqual([1, 2, 0])
     // sorted by PSMs: peptide 1 (2 PSMs) before peptide 0 (1); at the search's cutoff 0 (6) is first
-    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc', tight.maxQ)).toEqual(rows(1, 0))
-    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc')).toEqual(rows(0, 1))
-    expect(sortRows(m, 'peptides', peptides, 'foundIn', 'desc', tight.maxQ)).toEqual(rows(1, 0))
-    expect(sortRows(m, 'peptides', peptides, 'sample:1', 'desc', tight.maxQ)).toEqual(rows(1, 0))
+    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc', tight)).toEqual(rows(1, 0))
+    expect(sortRows(m, 'peptides', peptides, 'psms', 'desc', all)).toEqual(rows(0, 1))
+    expect(sortRows(m, 'peptides', peptides, 'foundIn', 'desc', tight)).toEqual(rows(1, 0))
+    expect(sortRows(m, 'peptides', peptides, 'sample:1', 'desc', tight)).toEqual(rows(1, 0))
     // the PSM and protein levels are not affected by it
-    expect(sortRows(m, 'proteins', applyFilters(m, 'proteins', all), 'psms', 'desc', tight.maxQ)).toEqual(rows(0, 1))
+    expect(sortRows(m, 'proteins', applyFilters(m, 'proteins', all), 'psms', 'desc', tight)).toEqual(rows(0, 1))
     expect(Array.from(m.protein.psms)).toEqual([8, 1])
   })
 
@@ -263,36 +263,75 @@ describe('applyFilters', () => {
   })
 })
 
+describe('initialFilters', () => {
+  it("starts each level at the search's cutoff, contaminants and decoys hidden", () => {
+    const tables = sampleTables()
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.05 })
+    expect(initialFilters(m, 'proteins')).toEqual({ ...defaultFilters(), maxQ: 0.05, hideContaminants: true })
+    expect(initialFilters(m, 'peptides')).toEqual({ ...defaultFilters(), maxQ: 0.01, hideContaminants: true })
+    expect(initialFilters(m, 'psms')).toEqual({ ...defaultFilters(), maxQ: 0.01, hideContaminants: true })
+    // separate objects: one filter state per level
+    expect(initialFilters(m, 'psms')).not.toBe(initialFilters(m, 'psms'))
+  })
+})
+
+describe('peptides without a protein (all of them below the protein FDR)', () => {
+  const tables = makeTables({
+    files: ['a.mzML'],
+    proteins: [{ accession: 'P1', sequence: 'AAAAAKCCCCCK' }],
+    peptides: [
+      { sequence: 'AAAAAK', proteins: [0] },
+      { sequence: 'DDDDDK', proteins: [] },
+    ],
+    psms: [{ peptide: 0 }, { peptide: 1 }, { peptide: 1 }],
+  })
+  const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
+
+  it('are not counted for any protein', () => {
+    expect(Array.from(m.protein.psms)).toEqual([1])
+    expect(Array.from(m.protein.peptides)).toEqual([1])
+    expect(m.peptide.contaminant[1]).toBe(0)
+  })
+
+  it('are found by their sequence, and kept when contaminants are hidden', () => {
+    const f = { ...defaultFilters(), hideContaminants: true }
+    expect(applyFilters(m, 'peptides', { ...f, text: 'dddd' })).toEqual(rows(1))
+    expect(applyFilters(m, 'psms', { ...f, text: 'dddd' })).toEqual(rows(1, 2))
+    expect(applyFilters(m, 'peptides', f)).toEqual(rows(0, 1))
+    expect(applyFilters(m, 'psms', { ...f, proteinFilter: 0 })).toEqual(rows(0))
+  })
+})
+
 describe('sortRows', () => {
   it('sorts numbers ascending and descending, ties in input order', () => {
     const m = model()
     const every = applyFilters(m, 'psms', all)
-    expect(sortRows(m, 'psms', every, 'qValue', 'asc')).toEqual(rows(1, 7, 3, 0, 4, 5, 6, 2, 8))
-    expect(sortRows(m, 'psms', every, 'qValue', 'desc')).toEqual(rows(8, 2, 6, 5, 4, 0, 3, 7, 1))
+    expect(sortRows(m, 'psms', every, 'qValue', 'asc', all)).toEqual(rows(1, 7, 3, 0, 4, 5, 6, 2, 8))
+    expect(sortRows(m, 'psms', every, 'qValue', 'desc', all)).toEqual(rows(8, 2, 6, 5, 4, 0, 3, 7, 1))
     const proteins = applyFilters(m, 'proteins', all)
-    expect(sortRows(m, 'proteins', proteins, 'psms', 'desc')).toEqual(rows(0, 1, 2, 3))
-    expect(sortRows(m, 'proteins', proteins, 'psms', 'asc')).toEqual(rows(2, 3, 1, 0))
-    expect(sortRows(m, 'proteins', proteins, 'coverage', 'desc')).toEqual(rows(0, 2, 3, 1))
-    expect(sortRows(m, 'proteins', proteins, 'peptides', 'asc')).toEqual(rows(1, 2, 3, 0))
+    expect(sortRows(m, 'proteins', proteins, 'psms', 'desc', all)).toEqual(rows(0, 1, 2, 3))
+    expect(sortRows(m, 'proteins', proteins, 'psms', 'asc', all)).toEqual(rows(2, 3, 1, 0))
+    expect(sortRows(m, 'proteins', proteins, 'coverage', 'desc', all)).toEqual(rows(0, 2, 3, 1))
+    expect(sortRows(m, 'proteins', proteins, 'peptides', 'asc', all)).toEqual(rows(1, 2, 3, 0))
   })
 
   it('sorts by a sample column', () => {
     const m = model()
     const proteins = applyFilters(m, 'proteins', all)
-    expect(sortRows(m, 'proteins', proteins, 'sample:1', 'desc')).toEqual(rows(1, 0, 2, 3))
-    expect(sortRows(m, 'proteins', proteins, 'sample:0', 'desc')).toEqual(rows(0, 3, 1, 2))
+    expect(sortRows(m, 'proteins', proteins, 'sample:1', 'desc', all)).toEqual(rows(1, 0, 2, 3))
+    expect(sortRows(m, 'proteins', proteins, 'sample:0', 'desc', all)).toEqual(rows(0, 3, 1, 2))
     const peptides = applyFilters(m, 'peptides', all)
-    expect(sortRows(m, 'peptides', peptides, 'sample:1', 'desc')).toEqual(rows(2, 0, 3, 1, 4))
-    expect(() => sortRows(m, 'proteins', proteins, 'sample:2', 'asc')).toThrow(/sample:2/)
+    expect(sortRows(m, 'peptides', peptides, 'sample:1', 'desc', all)).toEqual(rows(2, 0, 3, 1, 4))
+    expect(() => sortRows(m, 'proteins', proteins, 'sample:2', 'asc', all)).toThrow(/sample:2/)
   })
 
   it('sorts text case-insensitively', () => {
     const m = model()
     const proteins = applyFilters(m, 'proteins', all)
-    expect(sortRows(m, 'proteins', proteins, 'accession', 'asc')).toEqual(rows(2, 3, 1, 0))
-    expect(sortRows(m, 'proteins', proteins, 'accession', 'desc')).toEqual(rows(0, 1, 3, 2))
+    expect(sortRows(m, 'proteins', proteins, 'accession', 'asc', all)).toEqual(rows(2, 3, 1, 0))
+    expect(sortRows(m, 'proteins', proteins, 'accession', 'desc', all)).toEqual(rows(0, 1, 3, 2))
     const peptides = applyFilters(m, 'peptides', all)
-    expect(sortRows(m, 'peptides', peptides, 'sequence', 'asc')).toEqual(rows(2, 3, 0, 4, 1))
+    expect(sortRows(m, 'peptides', peptides, 'sequence', 'asc', all)).toEqual(rows(2, 3, 0, 4, 1))
   })
 
   it('puts missing values last in either direction', () => {
@@ -304,17 +343,17 @@ describe('sortRows', () => {
     })
     const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
     const every = applyFilters(m, 'psms', all)
-    expect(sortRows(m, 'psms', every, 'qValue', 'asc')).toEqual(rows(2, 3, 0, 1))
-    expect(sortRows(m, 'psms', every, 'qValue', 'desc')).toEqual(rows(0, 3, 2, 1))
+    expect(sortRows(m, 'psms', every, 'qValue', 'asc', all)).toEqual(rows(2, 3, 0, 1))
+    expect(sortRows(m, 'psms', every, 'qValue', 'desc', all)).toEqual(rows(0, 3, 2, 1))
   })
 
   it('sorts a subset without changing it, and rejects unknown keys', () => {
     const m = model()
     const subset = rows(8, 1, 2)
-    expect(sortRows(m, 'psms', subset, 'qValue', 'asc')).toEqual(rows(1, 2, 8))
+    expect(sortRows(m, 'psms', subset, 'qValue', 'asc', all)).toEqual(rows(1, 2, 8))
     expect(subset).toEqual(rows(8, 1, 2))
-    expect(() => sortRows(m, 'psms', subset, 'coverage', 'asc')).toThrow(/coverage/)
-    expect(sortRows(m, 'psms', rows(), 'qValue', 'asc')).toEqual(rows())
+    expect(() => sortRows(m, 'psms', subset, 'coverage', 'asc', all)).toThrow(/coverage/)
+    expect(sortRows(m, 'psms', rows(), 'qValue', 'asc', all)).toEqual(rows())
   })
 })
 
@@ -326,7 +365,7 @@ describe('performance', () => {
 
     const t0 = performance.now()
     const kept = applyFilters(m, 'psms', { ...defaultFilters(), maxQ: 0.05, hideContaminants: true, text: 'a' })
-    const sorted = sortRows(m, 'psms', kept, 'qValue', 'asc')
+    const sorted = sortRows(m, 'psms', kept, 'qValue', 'asc', all)
     const ms = performance.now() - t0
     console.info(`filter + sort of ${tables.psms.count} PSMs (${kept.length} kept): ${ms.toFixed(1)} ms`)
 
@@ -339,7 +378,7 @@ describe('performance', () => {
 
     // the unfiltered case is the most expensive one
     const t1 = performance.now()
-    const everything = sortRows(m, 'psms', applyFilters(m, 'psms', { ...defaultFilters(), showDecoys: true }), 'qValue', 'desc')
+    const everything = sortRows(m, 'psms', applyFilters(m, 'psms', { ...defaultFilters(), showDecoys: true }), 'qValue', 'desc', all)
     const ms1 = performance.now() - t1
     console.info(`filter + sort of all ${everything.length} PSMs: ${ms1.toFixed(1)} ms`)
     expect(everything.length).toBe(150000)
@@ -348,7 +387,7 @@ describe('performance', () => {
     // the Peptides table at a cutoff below the search's counts the PSMs once more
     const t2 = performance.now()
     const q = { ...defaultFilters(), maxQ: 0.003 }
-    const peptides = sortRows(m, 'peptides', applyFilters(m, 'peptides', q), 'psms', 'desc', q.maxQ)
+    const peptides = sortRows(m, 'peptides', applyFilters(m, 'peptides', q), 'psms', 'desc', q)
     const ms2 = performance.now() - t2
     console.info(`filter + sort of ${peptides.length} peptides with recounted PSMs: ${ms2.toFixed(1)} ms`)
     expect(peptides.length).toBeGreaterThan(1000)

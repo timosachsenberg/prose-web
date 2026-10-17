@@ -12,7 +12,8 @@ export type FilterState = {
    * The q-value limit of the level (a protein's own, a peptide's best PSM, a PSM's). It can only
    * tighten the search: a value above the search's FDR (`ResultModel.psmFdr` / `proteinFdr`) works
    * like the search's FDR, and so does NaN. The Peptides table shows its PSM counts at this cutoff:
-   * pass it on to `sortRows` and `toCsv` (or use `peptideCounts(m, maxQ)` for the cells).
+   * `sortRows` and `toCsv` take the level's filter state for that (and the cells read
+   * `peptideCounts(m, maxQ)`).
    */
   maxQ: number
   /** Proteins only: at least this many peptides with PSMs. 0 = any. */
@@ -25,6 +26,14 @@ export type FilterState = {
   proteinFilter?: number
   /** PSMs: only those of this peptide. */
   peptideFilter?: number
+}
+
+/**
+ * The filters a level starts with: its search cutoff (`proteinFdr` for proteins, `psmFdr` for
+ * peptides and PSMs), contaminants and decoys hidden. A new object per call: one state per level.
+ */
+export function initialFilters(m: ResultModel, level: Level): FilterState {
+  return { ...defaultFilters(), maxQ: level === 'proteins' ? m.proteinFdr : m.psmFdr, hideContaminants: true }
 }
 
 /** No filter, at the search's own FDR, decoys hidden. */
@@ -138,9 +147,9 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
  * "sample:1", ...). Numbers sort numerically with missing values (NaN) last in both directions, text
  * case-insensitively by UTF-16 code unit. Rows with equal keys stay in the order they have in `rows`.
  *
- * `maxQ` is the q-value limit of the filter state that made `rows`: the peptide counts ("psms",
- * "foundIn", "sample:<n>" of the peptides) are those at that cutoff (see `peptideCounts`). The other
- * columns do not depend on it.
+ * `filters` is the level's filter state that made `rows`: the peptide counts ("psms", "foundIn",
+ * "sample:<n>" of the peptides) are those at its cutoff (see `peptideCounts`), as in the table cells
+ * and the CSV. The other columns do not depend on it.
  */
 export function sortRows(
   m: ResultModel,
@@ -148,11 +157,11 @@ export function sortRows(
   rows: Uint32Array,
   key: string,
   dir: 'asc' | 'desc',
-  maxQ: number = NaN,
+  filters: FilterState,
 ): Uint32Array {
   const def = columnDef(m, level, key)
   if (!def) throw new Error(`Cannot sort the ${level} table by "${key}"`)
-  const counts = peptideCounts(m, level === 'peptides' ? maxQ : NaN)
+  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN)
   const n = rows.length
   const order = new Uint32Array(n)
   for (let i = 0; i < n; i++) order[i] = i
