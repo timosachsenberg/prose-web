@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
+  import { engineState } from '$lib/engine/app-engine.svelte'
   import { formatHash, type Route, type View } from '$lib/route'
   import { cn } from '$lib/utils'
 
@@ -15,6 +16,19 @@
   function hrefOf(view: View): string {
     return formatHash(view === 'results' ? { view, id: resultId } : { view })
   }
+
+  // "OpenMS 3.7 · 16 threads"; the full version in the title
+  const status = $derived.by(() => {
+    const info = engineState.info
+    if (engineState.status === 'failed') {
+      return { text: 'OpenMS could not be loaded', dot: 'bg-destructive', title: engineState.error ?? '' }
+    }
+    if (engineState.status === 'loading' || !info) return { text: 'Loading OpenMS…', dot: 'bg-zinc-300', title: '' }
+    const version = /^\d+\.\d+/.exec(info.version)?.[0] ?? info.version
+    const threads = `${info.threads} ${info.threads === 1 ? 'thread' : 'threads'}`
+    const isolation = info.isolated ? '' : ' · not cross-origin isolated'
+    return { text: `OpenMS ${version} · ${threads}${isolation}`, dot: 'bg-green-700', title: `OpenMS ${info.version}` }
+  })
 </script>
 
 <header class="flex h-[52px] items-center gap-6 border-b bg-background px-5">
@@ -35,8 +49,12 @@
     {/each}
   </nav>
   <div class="flex-1"></div>
-  <!-- placeholder: the engine arrives with the worker -->
-  <Badge variant="outline" class="h-6 gap-1.5 px-2.5 font-normal text-muted-foreground" data-testid="engine-status">
-    <span class="size-[7px] rounded-full bg-zinc-300"></span>OpenMS · not loaded
+  <Badge
+    variant="outline"
+    class="h-6 gap-1.5 bg-background px-2.5 font-normal text-muted-foreground"
+    data-testid="engine-status"
+    title={status.title}
+    role="status">
+    <span class={cn('size-[7px] rounded-full', status.dot)}></span>{status.text}
   </Badge>
 </header>

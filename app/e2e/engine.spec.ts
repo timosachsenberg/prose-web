@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 // The real engine worker in the browser (the production build): the module loads with threads on the
 // cross-origin isolated page, searches the example, annotates a PSM in the viewer worker and exports
-// idXML. The page exposes an EngineClient as window.proseEngine with ?debug=engine.
+// idXML. With ?debug=engine the page exposes its own EngineClient as window.__engine (no second client).
 
 /** What the test uses of EngineClient (the app's types are not visible to the e2e project). */
 interface Engine {
@@ -26,10 +26,10 @@ interface Engine {
 test('the engine worker searches the example', async ({ page }) => {
   test.setTimeout(120_000)
   await page.goto('./?debug=engine')
-  await page.waitForFunction(() => 'proseEngine' in window)
+  await page.waitForFunction(() => '__engine' in window)
 
   const result = await page.evaluate(async () => {
-    const engine = (window as unknown as { proseEngine: Engine }).proseEngine
+    const engine = (window as unknown as { __engine: Engine }).__engine
     const info = await engine.init(2)
     const file = async (path: string, name: string) => new File([await (await fetch(path)).blob()], name)
     const progress: { label: string; file: number; fraction: number }[] = []
