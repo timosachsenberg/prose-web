@@ -99,6 +99,9 @@ class SearchPlan {
     return null
   })
 
+  /** The problem is shown in the footer (with files; without, the plan line says "No spectra yet"). */
+  problemShown = $derived(this.problem !== null && form.files.length > 0)
+
   canStart = $derived(this.problem === null && searchRun.status !== 'running')
 }
 

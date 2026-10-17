@@ -42,7 +42,7 @@
       <Button variant="outline" onclick={() => (presetOpen = true)}>Save as preset</Button>
       <Button
         disabled={!plan.canStart}
-        aria-describedby={plan.problem ? 'start-problem' : undefined}
+        aria-describedby={plan.problemShown ? 'start-problem' : undefined}
         aria-keyshortcuts={mac ? 'Meta+Enter' : 'Control+Enter'}
         onclick={start}>
         Start search

@@ -2,7 +2,6 @@
   // The footer's text: the one-line plan, and beneath it why the search cannot start, the memory advice,
   // or how the last search ended.
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert'
-  import { searchForm as form } from '$lib/search/form.svelte'
   import { searchPlan as plan } from '$lib/search/plan.svelte'
   import { searchRun } from '$lib/search/session.svelte'
   import { cn } from '$lib/utils'
@@ -10,7 +9,7 @@
 
 <div class="min-w-0 flex-1">
   <p class="truncate text-xs text-muted-foreground" data-testid="search-plan">{plan.line}</p>
-  {#if plan.problem && form.files.length > 0}
+  {#if plan.problemShown}
     <p class="truncate text-xs text-foreground" id="start-problem" title={plan.problem}>{plan.problem}</p>
   {:else if plan.advice}
     <p class={cn('flex items-center gap-1 text-xs', plan.advice.over ? 'text-destructive' : 'text-amber-700')} title={plan.advice.text}>

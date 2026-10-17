@@ -12,9 +12,18 @@
       ? ''
       : `${items.length} ${items.length === 1 ? 'notice' : 'notices'}: ${items.map((i) => i.message).join(' ')}`,
   )
+
+  // A live region announces changes, not what it holds when it appears: it mounts empty and takes the
+  // summary a moment later, so that notices present from the start are announced too.
+  let announced = $state('')
+  $effect(() => {
+    const text = summary
+    const timer = setTimeout(() => (announced = text), 150)
+    return () => clearTimeout(timer)
+  })
 </script>
 
-<div class="sr-only" aria-live="polite" aria-atomic="true">{summary}</div>
+<div class="sr-only" aria-live="polite" aria-atomic="true" data-testid="notice-announcer">{announced}</div>
 {#each items as item, k (k)}
   <Notice onDismiss={item.onDismiss}>
     {item.message}

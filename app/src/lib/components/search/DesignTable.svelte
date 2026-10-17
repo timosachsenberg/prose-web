@@ -85,12 +85,13 @@
   ])
 
   const headerButton = 'h-7 px-2.5 text-xs'
-  // the header stays visible over long tables (it sticks below the top of the window)
-  const th = 'sticky top-0 z-10 bg-card px-2.5 py-2 font-medium shadow-[inset_0_-1px_0_var(--border)]'
+  // the header stays visible over long tables: it sticks to the top of the table's own scroll box
+  const th = 'sticky top-0 z-10 bg-card px-2.5 py-2 align-bottom font-medium shadow-[inset_0_-1px_0_var(--border)]'
+  // fixed column widths (the File column takes the rest); below this width the box scrolls sideways
+  const minWidth = $derived(!multi ? '' : form.advanced ? 'min-w-[1000px]' : 'min-w-[720px]')
 </script>
 
-<!-- overflow visible: the sticky table header needs the window as its scroll container -->
-<Card.Root size="sm" class="gap-3 overflow-visible rounded-lg shadow-none">
+<Card.Root size="sm" class="gap-3 rounded-lg shadow-none">
   <Card.Header class="flex flex-wrap items-center gap-x-2.5 gap-y-2">
     <Card.Title class="text-[14px] font-semibold">Spectra</Card.Title>
     <span class="text-muted-foreground">{form.filesLine}</span>
@@ -144,25 +145,26 @@
       </div>
     {/if}
 
-    <div class="relative w-full">
-      <table class="w-full border-collapse tabular-nums">
+    <!-- a bounded scroll box: long or wide tables scroll inside it, and it is the sticky header's context -->
+    <div class="relative max-h-[70vh] w-full overflow-auto" data-testid="design-scroll">
+      <table class={cn('w-full table-fixed border-collapse tabular-nums', minWidth)}>
         <thead>
           <tr class="text-left text-xs text-muted-foreground">
             <th scope="col" class={th}>File</th>
             {#if multi}
-              <th scope="col" class="{th} w-[150px]">Condition</th>
-              <th scope="col" class="{th} w-[110px]">Replicate</th>
-              <th scope="col" class="{th} w-[110px]">Fraction</th>
+              <th scope="col" class="{th} w-[140px]">Condition</th>
+              <th scope="col" class="{th} w-[96px]">Replicate</th>
+              <th scope="col" class="{th} w-[96px]">Fraction</th>
               {#if form.advanced}
-                <th scope="col" class="{th} w-[110px]">Tech. replicate</th>
-                <th scope="col" class="{th} text-right" title="OpenMS Fraction_Group: the files of one measurement of one sample"
+                <th scope="col" class="{th} w-[96px]">Tech. replicate</th>
+                <th scope="col" class="{th} w-[80px] text-right" title="OpenMS Fraction_Group: the files of one measurement of one sample"
                   >Fraction group</th>
-                <th scope="col" class={th} title="Condition + Replicate">Sample</th>
+                <th scope="col" class="{th} w-[150px]" title="Condition + Replicate">Sample</th>
               {/if}
             {/if}
-            <th scope="col" class="{th} text-right">Spectra</th>
-            <th scope="col" class="{th} text-right">Size</th>
-            <th scope="col" class={cn(th, 'w-8 px-1')}><span class="sr-only">Remove</span></th>
+            <th scope="col" class="{th} w-[80px] text-right">Spectra</th>
+            <th scope="col" class="{th} w-[76px] text-right">Size</th>
+            <th scope="col" class={cn(th, 'w-9 px-1')}><span class="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody>
@@ -170,8 +172,7 @@
             {@const resolved = design.rows[i]}
             {@const name = file.file.name}
             <tr class="border-b last:border-b-0">
-              <th scope="row" class="max-w-[360px] truncate px-2.5 py-1.5 text-left font-mono text-[12.5px] font-normal" title={name}
-                >{name}</th>
+              <th scope="row" class="truncate px-2.5 py-1.5 text-left font-mono text-[12.5px] font-normal" title={name}>{name}</th>
               {#if multi && resolved}
                 <td class="px-2.5 py-1.5">
                   <DesignCell
@@ -215,7 +216,8 @@
                       onChange={(v) => form.setField(file.id, 'techReplicate', v as number | undefined)} />
                   </td>
                   <td class="px-2.5 py-1.5 text-right">{resolved.fractionGroup}</td>
-                  <td class="px-2.5 py-1.5 whitespace-nowrap">{design.samples[resolved.sample]?.label}</td>
+                  {@const sample = design.samples[resolved.sample]?.label ?? ''}
+                  <td class="truncate px-2.5 py-1.5" title={sample}>{sample}</td>
                 {/if}
               {/if}
               <td class="px-2.5 py-1.5 text-right">{file.spectra?.toLocaleString('en-US') ?? '–'}</td>

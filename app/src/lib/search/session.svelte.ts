@@ -140,8 +140,11 @@ export async function runSearch(
     reload: false,
   })
   startClock()
+  // when the engine last reported (a step without reports, like Percolator, leaves a long silence)
+  let reportedAt = now
   const onProgress = (p: SearchProgress) => {
     if (id !== runId || searchRun.status !== 'running') return
+    reportedAt = performance.now()
     searchRun.label = p.label
     searchRun.file = p.file
     if (p.fraction > searchRun.fraction) {
@@ -172,7 +175,15 @@ export async function runSearch(
       return null
     }
     const message = String((e as Error)?.message ?? e)
-    const failure = describeFailure({ label: searchRun.label, file: searchRun.file, files: searchRun.files }, message)
+    const failure = describeFailure(
+      {
+        label: searchRun.label,
+        file: searchRun.file,
+        files: searchRun.files,
+        silentMs: performance.now() - reportedAt,
+      },
+      message,
+    )
     Object.assign(searchRun, { status: 'failed', failure, reload: message.includes(RELOAD) })
     return null
   } finally {

@@ -2,6 +2,7 @@
   // An editable cell of the design table: always drawn as an input. Empty, it shows the assumed value
   // grey and italic (the placeholder); an entry that is not valid stays, marked, until it is corrected.
   // Enter and the arrow keys move up and down the column, as in a spreadsheet.
+  import { untrack } from 'svelte'
   import { positiveInt } from '$lib/design/model'
   import { cn } from '$lib/utils'
 
@@ -28,10 +29,16 @@
   } = $props()
 
   // What the user typed, while it differs from what the model holds: during typing, and after it for an
-  // entry that is not valid (the model then holds "not entered"). A change from elsewhere (paste, load)
-  // replaces it.
+  // entry that is not valid (the model then holds "not entered"). It belongs to the value it was typed
+  // for: a change from elsewhere (paste, load) drops it.
   let draft = $state<{ text: string; value: string | number | undefined } | null>(null)
-  const shown = $derived(draft !== null && draft.value === value ? draft.text : value === undefined ? '' : String(value))
+  $effect.pre(() => {
+    const current = value
+    untrack(() => {
+      if (draft !== null && draft.value !== current) draft = null
+    })
+  })
+  const shown = $derived(draft !== null ? draft.text : value === undefined ? '' : String(value))
   const invalid = $derived(kind === 'int' && shown.trim() !== '' && positiveInt(Number(shown.trim())) === undefined)
 
   function edit(event: Event & { currentTarget: HTMLInputElement }) {

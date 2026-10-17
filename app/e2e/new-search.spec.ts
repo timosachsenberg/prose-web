@@ -122,6 +122,66 @@ test('PeptDeep needs Percolator; the dialog has no second control for them', asy
   await expect(page.getByText('modified', { exact: true })).toBeVisible()
 })
 
+test('the table fits the card with long names and Advanced on; a stale invalid entry does not come back', async ({ page }) => {
+  const names = ['20240115_QExactiveHF_sample_ctrl_rep1_F01.mzML', '20240115_QExactiveHF_sample_ctrl_rep2_F02.mzML']
+  for (const width of [1024, 1280]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.goto('./')
+    await addFiles(page, names)
+    await page.getByLabel('Advanced').click()
+    const m = await page.evaluate(() => {
+      const box = document.querySelector('[data-testid="design-scroll"]') as HTMLElement
+      const card = box.closest('[data-slot="card"]') as HTMLElement
+      const sample = document.querySelector('tbody tr td:nth-of-type(6)') as HTMLElement
+      return {
+        over: box.getBoundingClientRect().right - card.getBoundingClientRect().right,
+        pageScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        sampleTitle: sample.title,
+        sampleTruncated: sample.scrollWidth > sample.clientWidth,
+      }
+    })
+    expect(m.over, `table box overflows the card at ${width} px`).toBeLessThanOrEqual(0)
+    expect(m.pageScroll, `page scrolls sideways at ${width} px`).toBe(0)
+    expect(m.sampleTitle).toBe('20240115_QExactiveHF_sample_ctrl_rep1_F01')
+    expect(m.sampleTruncated).toBe(true)
+  }
+
+  // "abc" typed and left, then a pasted 2, then a pasted empty cell: the cell is empty, not "abc"
+  const replicate = page.getByLabel(`Replicate of ${names[1]}`, { exact: true })
+  await replicate.fill('abc')
+  await replicate.press('Tab')
+  await expect(replicate).toHaveValue('abc')
+  const paste = async (cell: string) => {
+    await page.getByRole('button', { name: 'Paste from spreadsheet' }).click()
+    await page.getByLabel('Pasted rows').fill(`File\tReplicate\n${names[1]}\t${cell}`)
+    await page.getByRole('button', { name: 'Apply to the table' }).click()
+  }
+  await paste('2')
+  await expect(replicate).toHaveValue('2')
+  await paste('')
+  await expect(replicate).toHaveValue('')
+  await expect(replicate).toHaveAttribute('aria-invalid', 'false')
+})
+
+test('notices present when the design appears are announced; describedby only names what exists', async ({ page }) => {
+  await page.goto('./')
+  const start = page.getByRole('button', { name: /^Start search/ })
+  await expect(start).not.toHaveAttribute('aria-describedby')
+  // what the live region holds when it is inserted (it must start empty to announce the first notices)
+  await page.evaluate(() => {
+    const w = window as unknown as { firstAnnouncement?: string | null }
+    new MutationObserver(() => {
+      const el = document.querySelector('[data-testid="notice-announcer"]')
+      if (el && w.firstAnnouncement === undefined) w.firstAnnouncement = el.textContent
+    }).observe(document.body, { childList: true, subtree: true })
+  })
+  await addFiles(page, ['same.mzML', 'same.mzML'])
+  await expect(page.getByTestId('notice-announcer')).toHaveText(/^1 notice: same\.mzML is listed 2 times/)
+  expect(await page.evaluate(() => (window as unknown as { firstAnnouncement?: string }).firstAnnouncement)).toBe('')
+  await expect(start).toHaveAttribute('aria-describedby', 'start-problem')
+  await expect(page.locator('#start-problem')).toHaveText('Choose a FASTA database to start.')
+})
+
 test('Start search waits for a database and a PSM FDR above 0', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('prose.presets', JSON.stringify([{ id: 'u1', name: 'No filter', parameters: { 'FDR:PSM': 0 } }]))
@@ -219,4 +279,34 @@ test('an engine error names the stage and the file, with OpenMS\' text as detail
   await expect(detail.locator('summary')).toHaveText('OpenMS message')
   await expect(detail).toContainText('XMLHandler')
   await expect(page.getByText('The search stopped: see the message above.')).toBeVisible()
+})
+
+/** The example's first `count` spectra as a small mzML (Percolator needs at least 100 PSMs per file). */
+function exampleSubset(count: number): Buffer {
+  const text = readFileSync('public/example/DatabaseSuitability_in_spec.mzML', 'latin1')
+  const start = text.indexOf('<mzML ')
+  let end = start
+  for (let k = 0; k < count; k++) end = text.indexOf('</spectrum>', end) + '</spectrum>'.length
+  const body = text.slice(start, end).replace(/<spectrumList count="\d+"/, `<spectrumList count="${count}"`)
+  return Buffer.from(`<?xml version="1.0" encoding="ISO-8859-1"?>\n${body}\n</spectrumList></run></mzML>\n`, 'latin1')
+}
+
+test('a Percolator failure is attributed to Percolator, not to the last file searched', async ({ page }) => {
+  test.setTimeout(150_000)
+  await page.goto('./')
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 60_000 })
+  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles([
+    { name: 'small.mzML', mimeType: 'application/xml', buffer: exampleSubset(12) },
+    { name: 'good.mzML', mimeType: 'application/xml', buffer: readFileSync('public/example/DatabaseSuitability_in_spec.mzML') },
+  ])
+  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles('public/example/DatabaseSuitability_database.fasta')
+  await expect(page.getByTestId('fasta-proteins')).toContainText('proteins')
+  await page.getByRole('button', { name: /^Start search/ }).click()
+
+  const error = page.getByTestId('search-error')
+  await expect(error).toContainText('While rescoring with Percolator: Percolator could rescore only some of the files', {
+    timeout: 120_000,
+  })
+  await expect(error).toContainText('not rescored: small.mzML')
+  await expect(error).not.toContainText('While searching')
 })
