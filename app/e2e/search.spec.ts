@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 
 // The New search page with the real engine: the example (two replicates of one file) goes from
@@ -38,4 +39,14 @@ test('example search end to end', async ({ page }) => {
   await expect(count).toBeVisible()
   const psms = Number((await count.textContent())!.replace(/[^\d]/g, ''))
   expect(psms).toBeGreaterThan(1000)
+
+  // the engine still holds the search: the merged idXML can be exported
+  await page.getByRole('button', { name: 'Export', exact: true }).click()
+  const download = page.waitForEvent('download')
+  await page.getByRole('menuitem', { name: 'idXML (merged)' }).click()
+  const file = await download
+  expect(file.suggestedFilename()).toBe('DatabaseSuitability.idXML')
+  const xml = readFileSync((await file.path())!, 'utf8')
+  expect(xml.startsWith('<?xml')).toBe(true)
+  expect(xml.trimEnd().endsWith('</IdXML>')).toBe(true)
 })

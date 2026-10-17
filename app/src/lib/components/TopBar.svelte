@@ -2,7 +2,10 @@
   import { Badge } from '$lib/components/ui/badge'
   import { engineState } from '$lib/engine/app-engine.svelte'
   import { formatHash, type Route, type View } from '$lib/route'
-  import { searchProgress } from '$lib/search/session.svelte'
+  import { exportName } from '$lib/results/exports'
+  import { resultsViewFor } from '$lib/results/view.svelte'
+  import { openResult, searchProgress } from '$lib/search/session.svelte'
+  import ExportMenu from './results/ExportMenu.svelte'
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
 
@@ -18,6 +21,20 @@
   function hrefOf(view: View): string {
     return formatHash(view === 'results' ? { view, id: resultId } : { view })
   }
+
+  // on Results: the open result, and its Export menu
+  const result = $derived(
+    route.view === 'results' && openResult.current !== null && openResult.current.id === route.id ? openResult.current : null,
+  )
+  const resultView = $derived(result ? resultsViewFor(result) : null)
+  const resultChip = $derived.by(() => {
+    if (!result) return ''
+    const files = result.design.rows.length
+    const finished = new Date(result.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    const s = Math.round(result.outcome.seconds)
+    const took = s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`
+    return `${exportName(result)} · ${files} ${files === 1 ? 'file' : 'files'} · finished ${finished} · ${took}`
+  })
 
   // "OpenMS 3.7 · 16 threads"; the full version in the title
   const status = $derived.by(() => {
@@ -50,6 +67,10 @@
       >
     {/each}
   </nav>
+  {#if result}
+    <Badge variant="outline" class="h-6 max-w-[28rem] truncate bg-background px-2.5 font-normal text-muted-foreground" data-testid="result-chip"
+      >{resultChip}</Badge>
+  {/if}
   <div class="flex-1"></div>
   {#if searchProgress.running && route.view !== 'search'}
     <!-- a search runs on while the user is elsewhere: its progress, and the way back to it -->
@@ -61,6 +82,9 @@
       data-testid="topbar-search-progress">
       <SearchProgress compact />
     </a>
+  {/if}
+  {#if resultView}
+    <ExportMenu view={resultView} />
   {/if}
   <Badge
     variant="outline"
