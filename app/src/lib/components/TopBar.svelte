@@ -9,6 +9,7 @@
   import ExportMenu from './results/ExportMenu.svelte'
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
+  import { watchServiceWorker } from '$lib/sw-client'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
 
@@ -46,7 +47,11 @@
     return { state: save.state, text: 'Not saved to History', title: save.message }
   })
 
-  // "OpenMS 3.7 · 16 threads"; the full version in the title
+  // a service worker serves the page: the app works offline (lib/sw-client.ts)
+  let offline = $state(false)
+  $effect(() => watchServiceWorker((controlled) => (offline = controlled)))
+
+  // "OpenMS 3.7 · 16 threads · works offline"; the full version in the title
   const status = $derived.by(() => {
     const info = engineState.info
     if (engineState.status === 'failed') {
@@ -55,14 +60,25 @@
     if (engineState.status === 'loading' || !info) return { text: 'Loading OpenMS…', dot: 'bg-zinc-300', title: '' }
     const version = /^\d+\.\d+/.exec(info.version)?.[0] ?? info.version
     const threads = `${info.threads} ${info.threads === 1 ? 'thread' : 'threads'}`
-    const isolation = info.isolated ? '' : ' · not cross-origin isolated'
-    return { text: `OpenMS ${version} · ${threads}${isolation}`, dot: 'bg-green-700', title: `OpenMS ${info.version}` }
+    if (!info.isolated) {
+      return {
+        text: `OpenMS ${version} · ${threads} · not cross-origin isolated`,
+        dot: 'bg-amber-500',
+        title:
+          `OpenMS ${info.version}. The page is not cross-origin isolated, so OpenMS runs on one thread and searches take ` +
+          'longer. Reload the page; if this stays, the browser blocks the service worker that isolates the page ' +
+          '(e.g. in a private window) – or use the desktop app.',
+      }
+    }
+    const works = offline ? ' · works offline' : ''
+    return { text: `OpenMS ${version} · ${threads}${works}`, dot: 'bg-green-700', title: `OpenMS ${info.version}` }
   })
 </script>
 
-<header class="flex h-[52px] items-center gap-6 border-b bg-background px-5">
-  <div class="text-[15px] font-semibold tracking-tight">
-    ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground">OpenMS search engine</small>
+<!-- one row of 52 px; on windows of 900 px or less (max-[901px]: width < 901px) the result's chip and save state take a second row -->
+<header class="flex min-h-[52px] flex-wrap items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 max-[901px]:gap-x-4">
+  <div class="text-[15px] font-semibold tracking-tight whitespace-nowrap">
+    ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[901px]:hidden">OpenMS search engine</small>
   </div>
   <nav aria-label="Main" class="flex gap-1">
     {#each items as item (item.view)}
@@ -78,16 +94,18 @@
     {/each}
   </nav>
   {#if result}
-    <Badge variant="outline" class="h-6 max-w-[28rem] truncate bg-background px-2.5 font-normal text-muted-foreground" data-testid="result-chip"
-      >{resultChip}</Badge>
-    {#if saved}
-      <a
-        href={formatHash({ view: 'history' })}
-        class="text-xs text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-        data-testid="history-state"
-        data-state={saved.state}
-        title={saved.title}>{saved.text}</a>
-    {/if}
+    <div class="flex min-w-0 items-center gap-6 max-[901px]:order-last max-[901px]:basis-full max-[901px]:gap-4">
+      <Badge variant="outline" class="h-6 max-w-[28rem] min-w-0 truncate bg-background px-2.5 font-normal text-muted-foreground" data-testid="result-chip"
+        >{resultChip}</Badge>
+      {#if saved}
+        <a
+          href={formatHash({ view: 'history' })}
+          class="text-xs text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          data-testid="history-state"
+          data-state={saved.state}
+          title={saved.title}>{saved.text}</a>
+      {/if}
+    </div>
   {/if}
   <div class="flex-1"></div>
   {#if searchProgress.running && route.view !== 'search'}

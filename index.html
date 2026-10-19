@@ -6,76 +6,19 @@
   <title>ProSE in the browser</title>
   <style>
     body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
-    h1 { margin-bottom: 0.2rem; }
-    .subtitle { color: #555; margin-top: 0; }
-    a.button { display: inline-block; background: #1f5fa8; color: #fff; padding: 0.6rem 1.2rem; border-radius: 6px;
-               text-decoration: none; font-weight: 600; margin: 0.5rem 0; }
-    a.button:hover { background: #174a84; }
     code { background: #f2f2f2; padding: 0 0.25rem; border-radius: 3px; }
-    li { margin: 0.3rem 0; }
-    .note { color: #555; font-size: 0.92rem; }
   </style>
 </head>
 <body>
+  <!-- Not part of the site any more: the Pages workflow (.github/workflows/pages.yml) publishes the
+       app of app/ at the site's root, see .github/assemble-site.sh. This page is what serving the
+       repository itself shows (python3 serve.py). -->
   <h1>ProSE in the browser</h1>
-  <p class="subtitle">The OpenMS search engine ProSE, compiled to WebAssembly, with Percolator rescoring and,
-    optionally, PeptDeep predictions of fragment intensities and retention times (ONNX Runtime).
-    The search runs entirely in your browser: your spectra and database stay on your machine.</p>
-
-  <p><a class="button" href="examples/prose/">Open the application</a></p>
-
-  <h2>Try it with example data</h2>
-  <ol>
-    <li><a href="data/DatabaseSuitability_in_spec.mzML" download>DatabaseSuitability_in_spec.mzML</a> (6.5 MB) with
-        <a href="data/DatabaseSuitability_database.fasta" download>DatabaseSuitability_database.fasta</a>:
-        set <em>fragment mass tolerance</em> to 10, then <strong>Search</strong>. About 900 PSMs at 1&nbsp;% FDR;
-        most of the time goes to Percolator.</li>
-    <li>Smaller: <a href="data/SimpleSearchEngine_1.mzML" download>SimpleSearchEngine_1.mzML</a> with
-        <a href="data/SimpleSearchEngine_1.fasta" download>SimpleSearchEngine_1.fasta</a> (3 PSMs; Percolator is
-        skipped, it needs at least 100).</li>
-    <li>Your own mzML and FASTA files.</li>
-  </ol>
-  <p>Click a PSM for the annotated spectrum, the fragment coverage, the mass errors and all PSM features.</p>
-  <p>Tick <strong>with PeptDeep features</strong> next to <em>Rescore with Percolator</em> to add PeptDeep
-    (AlphaPeptDeep) predictions: the agreement of the predicted fragment intensities and retention time with each
-    PSM becomes five more Percolator features (<code>ms2_cosine</code>, <code>ms2_spectral_angle</code>,
-    <code>ms2_pearson</code>, <code>ms2_frac_pred_found</code>, <code>rt_abs_error</code>). The models (17&nbsp;MB)
-    load on first use. The example data is too small and synthetic to gain from it; real label-free HCD data
-    does (+5.7&nbsp;% PSMs at 1&nbsp;% FDR in the OpenMS benchmark).</p>
-
-  <h2>Desktop application</h2>
-  <p>The same application as a small program that works offline, with all threads, in a window of your
-    Chrome, Chromium or Edge, PeptDeep option and models included (packaged with
-    <a href="https://neutralino.js.org">Neutralinojs</a>, about 30 MB):</p>
-  <ul>
-    <li><a href="https://github.com/timosachsenberg/prose-web/releases/latest/download/prose-desktop-win_x64.zip">Windows (x64)</a></li>
-    <li><a href="https://github.com/timosachsenberg/prose-web/releases/latest/download/prose-desktop-mac_universal.zip">macOS (Intel and Apple silicon)</a></li>
-    <li><a href="https://github.com/timosachsenberg/prose-web/releases/latest/download/prose-desktop-linux_x64.zip">Linux (x64)</a> ·
-        <a href="https://github.com/timosachsenberg/prose-web/releases/latest/download/prose-desktop-linux_arm64.zip">Linux (arm64)</a></li>
-  </ul>
-  <p class="note">Unzip, keep the program and <code>resources.neu</code> together and start the program; closing the
-    window ends it. The programs are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn at first:
-    <code>README.txt</code> in the zip says how to start them anyway. Tested on Linux; the Windows and macOS packages
-    are untested.</p>
-
-  <h2>Notes</h2>
-  <ul>
-    <li>Tested in Chrome and Edge; Firefox and Safari are untested.</li>
-    <li>On the first visit the page reloads once: a service worker makes it cross-origin isolated, which threads
-        need, and caches the 30 MB module. Later visits start faster and search faster, because the browser keeps
-        the compiled module. A hard reload (Shift+Reload) bypasses the service worker.</li>
-    <li>The module can use 4 GB of memory. For large searches (e.g. semi-specific against a large database), set
-        <code>database:chunk_size</code> under <em>All parameters</em>. PeptDeep needs about 0.6 GB more.</li>
-    <li>Without a server: <a href="prose-single-file.html" download>prose-single-file.html</a> (9.6 MB) is the
-        same application in one file that opens from disk, on one thread (a page opened from a file cannot be
-        cross-origin isolated), without PeptDeep.</li>
-    <li>The <a href="examples/browser/">general OpenMS demo</a>: peptide masses, digestion, an mzML viewer.</li>
-  </ul>
-
-  <p class="note">A preview built from <a href="https://github.com/OpenMS/OpenMS/pull/10575">OpenMS pull request
-    #10575</a> (commit 80a3b501c4, threaded build with ONNX Runtime), not an OpenMS release.
-    <a href="https://github.com/timosachsenberg/prose-web">Source of this page</a> ·
-    <a href="https://github.com/timosachsenberg/prose-web/blob/main/README-openms-wasm.md">JavaScript API</a> ·
-    <a href="https://github.com/timosachsenberg/prose-web/blob/main/LICENSE">License</a>.</p>
+  <p>The ProSE app is at <a href="https://timosachsenberg.github.io/prose-web/">timosachsenberg.github.io/prose-web</a>.
+    The site is built from <code>app/</code> by the Pages workflow (<code>.github/workflows/pages.yml</code>);
+    locally: <code>cd app &amp;&amp; npm ci &amp;&amp; npm run dev</code>.</p>
+  <p>The earlier demos of this repository: <a href="examples/prose/">examples/prose/</a> (the first ProSE page) and
+    <a href="examples/browser/">examples/browser/</a> (the general OpenMS demo, on the site at
+    <code>openms-demo/</code>).</p>
 </body>
 </html>

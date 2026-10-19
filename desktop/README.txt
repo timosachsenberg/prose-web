@@ -1,15 +1,19 @@
 ProSE desktop: the OpenMS search engine ProSE as a desktop application
 =====================================================================
 
-The web application of https://timosachsenberg.github.io/prose-web/ packaged with Neutralinojs:
-a 3 MB program serves the application (resources.neu) on http://127.0.0.1:47815 with the headers
-that threads need and opens it in a window of your Chrome, Chromium or Edge. Everything stays on
-your machine and works offline. Closing the window ends the program (after about 10 s).
+The ProSE app of https://timosachsenberg.github.io/prose-web/ packaged with Neutralinojs: a 3 MB
+program serves the app (resources.neu) on http://127.0.0.1:47815 with the headers that threads need
+and opens it in a window of your Chrome, Chromium or Edge. Everything stays on your machine and works
+offline. Closing the window ends the program (after about 10 s).
 
-With "with PeptDeep features" ticked (next to "Rescore with Percolator"), PeptDeep predicts the
+Searches of one or many mzML files with an experimental design (conditions, replicates, fractions),
+results at protein, peptide and PSM level with CSV export, the spectrum of every PSM, History (kept in
+the browser profile, see below) and project files (.prose) that open in the web app as well.
+
+With "PeptDeep predictions" switched on (under Rescoring, next to Percolator), PeptDeep predicts the
 fragment intensities and retention time of every PSM, and their agreement with the spectrum becomes
-five more Percolator features. The models are included (resources.neu); a search with them needs
-about 0.6 GB more memory.
+more Percolator features. The models are included (resources.neu); a search with them needs about
+0.6 GB more memory.
 
 Requirements: Google Chrome, Chromium or Microsoft Edge (Edge is part of Windows).
 
@@ -37,9 +41,10 @@ Options
                   Chromium; macOS and Linux: WebKit, untested with this application)
 --mode=browser    the default browser
 
-The browser profile and its caches are in the user's application data directory
-(org.openms.prose in ~/.local/share, ~/Library/Application Support or %APPDATA%).
+The browser profile, its caches and the History of searches are in the user's application data
+directory (org.openms.prose in ~/.local/share, ~/Library/Application Support or %APPDATA%). History
+belongs to the port: on another --port the app starts with an empty History.
 
-Version 0.2.0, built from OpenMS pull request #10575 (commit 80a3b501c4, the threaded module with
-ONNX Runtime), a preview, not an OpenMS release.
+Version 0.3.0: the ProSE app with the OpenMS module 3.7.0-pre.7abcb280e2 of OpenMS pull request
+#10604 (the threaded module with ONNX Runtime), a preview, not an OpenMS release.
 OpenMS: BSD 3-Clause license. Neutralinojs: MIT license.

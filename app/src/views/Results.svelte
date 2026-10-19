@@ -158,7 +158,7 @@
 
 {#if view && figures}
   {@const level = view.level}
-  <section data-testid="view-results" class="flex h-[calc(100vh-52px)] min-h-[480px]">
+  <section data-testid="view-results" class="flex h-full min-h-[480px]">
     <div
       class="flex min-w-0 flex-col gap-3 py-4 {psmOpen ? 'flex-none border-r pr-3 pl-4' : 'flex-1 px-5'}"
       style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>

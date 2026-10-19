@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Packages the ProSE web application of this repository as a desktop application with
-# Neutralinojs (https://neutralino.js.org): one zip per platform in desktop/dist/, each with the
-# Neutralino program (prose-<platform>), resources.neu (the application) and README.txt.
+# Packages the ProSE app of this repository (app/) as a desktop application with Neutralinojs
+# (https://neutralino.js.org): one zip per platform in desktop/dist/, each with the Neutralino program
+# (prose-<platform>), resources.neu (the application) and README.txt.
 #
-#   desktop/build.sh            needs node (npx), curl, unzip and zip
+#   desktop/build.sh            needs node (npm, npx), curl, unzip and zip
 #
-# The program serves the application with the cross-origin isolation headers (serverHeaders in
-# neutralino.config.json) and opens it in Chrome, Chromium or Edge ("chrome" mode). The page loads
-# Neutralino's client library only to hold the connection whose end (the window closed) stops the
-# program.
+# The app is built with relative paths (VITE_BASE=./), as app/dist is for the site but into a
+# directory of its own, so the site's build in app/dist (base /prose-web/) stays as it is. The
+# program serves it with the cross-origin isolation headers (serverHeaders in
+# neutralino.config.json) at / and opens it in Chrome, Chromium or Edge ("chrome" mode). The page
+# loads Neutralino's client library only to hold the connection whose end (the window closed) stops
+# the program.
 set -euo pipefail
 
 NEUTRALINO_VERSION=6.10.0
@@ -20,20 +22,19 @@ REPO="$(dirname "$DESKTOP")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# the application: the module and the demo applications of the repository
-mkdir -p "$WORK/resources" "$WORK/bin"
+# the application: the app (with the module package and the PeptDeep models in openms/)
+mkdir -p "$WORK/bin"
 cp "$DESKTOP/neutralino.config.json" "$WORK/"
-cp "$REPO/openms.mjs" "$REPO/openms.wasm" "$REPO/package.json" "$WORK/resources/"
-cp -r "$REPO/examples" "$WORK/resources/"
-cp -r "$REPO/models" "$WORK/resources/"   # PeptDeep, loaded by the application on first use
-rm -rf "$WORK/resources/examples/node"
+[ -d "$REPO/app/node_modules" ] || (cd "$REPO/app" && npm ci --no-audit --no-fund)
+(cd "$REPO/app" && VITE_BASE=./ npx vite build --outDir "$WORK/resources" --emptyOutDir --logLevel warn)
+grep -q 'src="./assets/' "$WORK/resources/index.html"
 
 # Neutralino's client library (the server prepends the connection token to any *neutralino.js)
 curl -fsSL -o "$WORK/resources/neutralino.js" \
   "https://github.com/neutralinojs/neutralino.js/releases/download/v$NEUTRALINO_VERSION/neutralino.js"
-sed -i 's|  <script type="module" src="app.mjs"></script>|  <script src="/neutralino.js"></script>\n  <script>Neutralino.init();</script>\n&|' \
-  "$WORK/resources/examples/prose/index.html"
-grep -q 'Neutralino.init' "$WORK/resources/examples/prose/index.html"
+sed -i 's|</head>|  <script src="/neutralino.js"></script>\n    <script>Neutralino.init();</script>\n  </head>|' \
+  "$WORK/resources/index.html"
+grep -q 'Neutralino.init' "$WORK/resources/index.html"
 
 # the Neutralino programs
 curl -fsSL -o "$WORK/neutralino.zip" \

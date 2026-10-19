@@ -5,12 +5,17 @@
   import DatabaseCard from '$lib/components/search/DatabaseCard.svelte'
   import DesignTable from '$lib/components/search/DesignTable.svelte'
   import EmptyState from '$lib/components/search/EmptyState.svelte'
+  import Notice from '$lib/components/search/Notice.svelte'
   import RescoringCard from '$lib/components/search/RescoringCard.svelte'
   import SearchFooter from '$lib/components/search/SearchFooter.svelte'
   import SettingsCard from '$lib/components/search/SettingsCard.svelte'
+  import { engineState } from '$lib/engine/app-engine.svelte'
   import { searchForm as form } from '$lib/search/form.svelte'
 
   let dragging = $state(false)
+  // OpenMS on one thread: the page is not cross-origin isolated (lib/sw-client.ts); dismissed for the session
+  let isolationDismissed = $state(false)
+  const notIsolated = $derived(engineState.info !== null && !engineState.info.isolated && !isolationDismissed)
   let depth = 0
 
   const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes('Files') ?? false
@@ -49,6 +54,16 @@
     <h1 class="mb-1 text-xl font-semibold tracking-tight">New search</h1>
     <p class="text-muted-foreground">Spectra and database stay on this computer.</p>
   </div>
+
+  {#if notIsolated}
+    <div role="status" data-testid="isolation-notice">
+      <Notice onDismiss={() => (isolationDismissed = true)}>
+        OpenMS runs on one thread, so searches take longer: this page is not cross-origin isolated. Reload the page; if
+        this stays, the browser blocks the service worker that isolates it (e.g. in a private window). The desktop app
+        always uses all threads.
+      </Notice>
+    </div>
+  {/if}
 
   {#if form.files.length === 0}
     <EmptyState {dragging} />

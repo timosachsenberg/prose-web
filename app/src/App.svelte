@@ -28,11 +28,12 @@
 <svelte:window onhashchange={readHash} />
 
 <Tooltip.Provider delayDuration={300}>
-  <div class="min-h-screen bg-muted/40">
+  <!-- the results use the whole width and height of the window (below the top bar, which wraps on
+       narrow windows) -->
+  <div class={router.route.view === 'results' ? 'flex h-screen min-h-[540px] flex-col bg-muted/40' : 'min-h-screen bg-muted/40'}>
     <TopBar route={router.route} resultId={router.resultId} />
     {#if router.route.view === 'results'}
-      <!-- the results use the whole width and height of the window -->
-      <main>
+      <main class="min-h-0 flex-1">
         <Results id={router.route.id} />
       </main>
     {:else}

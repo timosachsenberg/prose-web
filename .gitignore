@@ -2,3 +2,4 @@ desktop/dist/
 app/node_modules
 app/dist
 app/test-results
+_site/

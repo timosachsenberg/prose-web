@@ -67,7 +67,9 @@ const handlers: Handlers = {
     stage = 'loading'
     if (!OpenMS) {
       baseUrl = url
-      const moduleUrl = new URL('openms/openms.mjs', baseUrl).href
+      // ?v=: the module's threads import it again, from the HTTP cache (the service worker does not see
+      // them): a new module must never meet an old one there
+      const moduleUrl = new URL(`openms/openms.mjs?v=${__OPENMS_ID__}`, baseUrl).href
       const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleUrl)) as { default: OpenMSFactory }
       OpenMS = await createOpenMS({ numThreads: threads, print: () => {}, printErr: (line: string) => console.debug(line) })
       OpenMS.setLogEnabled('info', false)
