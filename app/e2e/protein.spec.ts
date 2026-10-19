@@ -389,11 +389,12 @@ test('a protein with a thousand peptides lists the first hundred, the rest on de
   // a hundred rows, not a thousand: the panel has a few thousand nodes (rendering all of them was about 48,000)
   expect(await panel.evaluate((el) => el.querySelectorAll('*').length)).toBeLessThan(8000)
 
-  // and it opens quickly: no long task over 200 ms (rendering all the rows was one of 1.5 s). Timing is
-  // noisy on a busy machine, which stalls any run; a regression is slow in every run, so the bound is
-  // for the best of three openings.
+  // and it opens quickly: no long task over 400 ms (rendering all the rows was one of 1.5 s, about 170 ms
+  // is typical for 100 rows). The node count above is the exact guard; this is the timing one. A busy
+  // machine stalls any run (376, 221 and 217 ms were seen in a parallel full run), a regression is slow in
+  // every run, so the bound is for the best of three openings.
   let best = Infinity
-  for (let attempt = 0; attempt < 3 && best >= 200; attempt++) {
+  for (let attempt = 0; attempt < 3 && best >= 400; attempt++) {
     if (attempt > 0) {
       await page.keyboard.press('Escape')
       await expect(panel).toHaveCount(0)
@@ -405,7 +406,7 @@ test('a protein with a thousand peptides lists the first hundred, the rest on de
     best = Math.min(best, Math.max(0, ...(await longTasks(page))))
     console.log(`long tasks while opening a protein with ${first.peptides} peptides, opening ${attempt + 1}: ${JSON.stringify(await longTasks(page))} ms`)
   }
-  expect(best).toBeLessThan(200)
+  expect(best).toBeLessThan(400)
 
   // 100 more, by keyboard; the focus goes to the first row that appeared, which is where the user reads on
   const more = panel.getByRole('button', { name: `Show 100 more (${total - 100} left)` })
