@@ -21,8 +21,9 @@
   // placed most intense first and left out where they would collide. Hovering tells a peak's m/z,
   // intensity and ions; the ion table is the chart's table view. What only the page shows (a prediction
   // on its way, "annotating…") is marked `data-no-export`.
-  import { ionLabel, signedText, COLORS, type PeakGroup } from '$lib/psm/psm'
-  import { clipMarks, mzDomain, nearest, niceTicks, placeLabels, px, scale, stickGroups, stickPath, textWidth } from '$lib/psm/plot'
+  import { signedNumber } from '$lib/format/number'
+  import { ionLabel, COLORS, type PeakGroup } from '$lib/psm/psm'
+  import { clipMarks, mzDomain, nearest, niceTicks, placeLabels, px, scale, stickGroups, stickPath, stripFits, textWidth } from '$lib/psm/plot'
 
   let {
     mz,
@@ -54,17 +55,21 @@
   } = $props()
 
   const uid = $props.id()
-  const H = 320
+  /** The plot's own height; the strip below it has the bottom label and, if it does not fit beside it, a line for the similarity. */
+  const plotHeight = 320
   const M = { left: 46, right: 14 }
   /** The strip above the plot (what the upper half is, the legend) and the one below the axis labels. */
   const plotTop = 24
-  const plotBottom = H - 42
+  const plotBottom = plotHeight - 42
   const mid = (plotTop + plotBottom) / 2
   const font = "'Inter Variable', ui-sans-serif, system-ui, sans-serif"
   const ink = '#3f3f46'
   const muted = '#71717a'
 
   let width = $state(800)
+  /** The similarity moves to a line of its own when the label and it would meet (a narrow view). */
+  const stacked = $derived(!stripFits(bottom.label, similarity, width - M.left - M.right))
+  const H = $derived(plotHeight + (stacked ? 15 : 0))
   let svg = $state<SVGSVGElement | null>(null)
 
   /** The SVG (for "Export spectrum (SVG)"). */
@@ -170,7 +175,7 @@
       const g = groupOf.get(i)
       const share = (intensity[i] / ref) * 100
       const lines = [`m/z ${mz[i].toFixed(4)} · ${share.toFixed(1)} %${share > 100 ? ' (clipped)' : ''}`]
-      if (g) for (const m of g.matches) lines.push(`${ionLabel(m.ion)} · ${signedText(m.errorPpm, 2)} ppm`)
+      if (g) for (const m of g.matches) lines.push(`${ionLabel(m.ion)} · ${signedNumber(m.errorPpm, 2)} ppm`)
       else lines.push('unmatched')
       tip = { x: x(mz[i]), y: py, lines }
     } else if (bottom.kind === 'ions' && bottomIons.length > 0) {
@@ -296,13 +301,20 @@
     {/each}
     <text
       x={M.left}
-      y={H - 6}
+      y={plotHeight - 6}
       font-size="11"
       fill={muted}
       data-testid="bottom-label"
       data-no-export={bottom.kind === 'status' ? '' : undefined}>{bottom.label}</text>
     {#if similarity}
-      <text x={width - M.right} y={H - 6} text-anchor="end" font-size="11" fill={muted} data-testid="similarity">{similarity}</text>
+      <text
+        x={stacked ? M.left : width - M.right}
+        y={H - 6}
+        text-anchor={stacked ? 'start' : 'end'}
+        font-size="11"
+        fill={muted}
+        data-testid="similarity"
+        data-stacked={stacked ? '' : undefined}>{similarity}</text>
     {/if}
   </svg>
 

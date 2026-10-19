@@ -2,8 +2,9 @@
   // The fragment mass errors (mockup 3): one dot per matched ion, m/z against the error in ppm, in
   // the colour of its series, its area by the intensity of its peak; the band is the search's fragment
   // tolerance (for a tolerance in Da it narrows with m/z). The mean and the spread are written below.
+  import { signedNumber } from '$lib/format/number'
   import type { PeakMatch } from '$lib/engine/openms-types'
-  import { COLORS, errorStats, ionColor, ionLabel, signedText, type Tolerance } from '$lib/psm/psm'
+  import { COLORS, errorStats, ionColor, ionLabel, type Tolerance } from '$lib/psm/psm'
   import { bandPath, niceTicks, px, scale } from '$lib/psm/plot'
 
   let {
@@ -62,7 +63,7 @@
   const statsText = $derived(
     matches.length === 0
       ? 'no matched ions'
-      : `mean ${signedText(stats.mean, 1)} ppm${Number.isFinite(stats.sd) ? ` · SD ${stats.sd.toFixed(1)} ppm` : ''} · dot size = intensity`,
+      : `mean ${signedNumber(stats.mean, 1)} ppm${Number.isFinite(stats.sd) ? ` · SD ${stats.sd.toFixed(1)} ppm` : ''} · dot size = intensity`,
   )
   const fmt = (v: number) => String(Number(v.toFixed(2)))
 </script>
@@ -107,7 +108,7 @@
         data-type={d.m.type}
         data-error-ppm={d.m.errorPpm}
         data-mz={mz[d.m.peak]}
-        ><title>{ionLabel(d.m.ion)} · m/z {mz[d.m.peak].toFixed(4)} · {signedText(d.m.errorPpm, 2)} ppm</title></circle>
+        ><title>{ionLabel(d.m.ion)} · m/z {mz[d.m.peak].toFixed(4)} · {signedNumber(d.m.errorPpm, 2)} ppm</title></circle>
     {/each}
   </svg>
   <p class="mt-1 text-xs text-foreground tabular-nums" data-testid="error-stats">{statsText}</p>

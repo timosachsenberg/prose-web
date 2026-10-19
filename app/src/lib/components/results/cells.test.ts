@@ -6,7 +6,7 @@ describe('cell helpers', () => {
     expect(fixed(1134.41513, 4)).toBe('1134.4151')
     expect(fixed(NaN, 2)).toBe('–')
     expect(signed(2.049, 2)).toBe('+2.05')
-    expect(signed(-5.912, 2)).toBe('-5.91')
+    expect(signed(-5.912, 2)).toBe('−5.91') // a real minus (U+2212)
     expect(signed(-0.001, 2)).toBe('0.00') // no "-0.00"
     expect(signed(0, 4)).toBe('0.0000')
     expect(signed(NaN, 2)).toBe('–')

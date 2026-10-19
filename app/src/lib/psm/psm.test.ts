@@ -20,7 +20,6 @@ import {
   nceFor,
   precursorOptions,
   resolveOptions,
-  signedText,
   similarityText,
   spectrumPeaks,
   svgFileName,
@@ -315,14 +314,6 @@ describe('numbers', () => {
     expect(featureValue(names, features, 0, 'ms2_spectral_angle')).toBeNaN()
   })
 
-  it('writes signed numbers rounded first, with a real minus and no negative zero', () => {
-    expect(signedText(-0.04, 1)).toBe('0.0')
-    expect(signedText(-0.0, 2)).toBe('0.00')
-    expect(signedText(-1.26, 1)).toBe('−1.3')
-    expect(signedText(2, 1)).toBe('+2.0')
-    expect(signedText(NaN, 1)).toBe('–')
-  })
-
   it("says the search's similarity to PeptDeep's prediction, when the search has it", () => {
     const names = ['ln(hyperscore)', 'ms2_cosine', 'ms2_spectral_angle']
     expect(similarityText(names, Float64Array.of(1, 0.9312, 0.7624), 0)).toBe('cosine 0.931 · spectral angle 0.762 (search)')
@@ -340,6 +331,20 @@ describe('numbers', () => {
     ]
     expect(matchedByReference(groups, o)).toBe(60)
     expect(matchedByReference(groups, { ...o, ions: ['b'] })).toBe(40)
+    expect(matchedByReference(groups.slice(0, 1), o)).toBeNull()
+  })
+
+  it("takes a b or y ion without a loss as the reference, as PeptDeep's prediction has none", () => {
+    const o = { ions: ['b', 'y'] as ('a' | 'b' | 'y')[], charges: [1], losses: ['H2O'], precursor: false, bottom: 'peptdeep' as const }
+    const groups = [
+      { intensity: 90, matches: [match(0, 'y5-H2O')] }, // only a loss ion: not PeptDeep's kind of peak
+      { intensity: 40, matches: [match(1, 'b3')] },
+      { intensity: 70, matches: [match(2, 'b4-NH3'), match(2, 'a4')] },
+    ]
+    expect(matchedByReference(groups, o)).toBe(40)
+    // a peak that has an ion without a loss among its matches still counts
+    expect(matchedByReference([{ intensity: 80, matches: [match(3, 'y2-H2O'), match(3, 'y2')] }, ...groups], o)).toBe(80)
+    // only loss ions matched: no reference (the base peak is used instead)
     expect(matchedByReference(groups.slice(0, 1), o)).toBeNull()
   })
 

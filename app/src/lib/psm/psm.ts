@@ -420,17 +420,6 @@ export function modificationList(t: ResultTables['peptides'], k: number, fixedMo
 }
 
 /**
- * A signed number for the page: rounded first, so that what rounds to zero has no sign ("0.0", not
- * "−0.0"); the minus is U+2212, as in typeset numbers.
- */
-export function signedText(v: number, digits: number): string {
-  if (!Number.isFinite(v)) return '–'
-  const text = Math.abs(v).toFixed(digits)
-  if (Number(text) === 0) return text
-  return `${v < 0 ? '−' : '+'}${text}`
-}
-
-/**
  * The similarity of the PSM's spectrum to PeptDeep's prediction that the search computed (its
  * features `ms2_cosine` and `ms2_spectral_angle`, over all ions), or null without them.
  */
@@ -446,13 +435,13 @@ export function similarityText(names: string[], features: Float64Array, row: num
 
 /**
  * The 100 % of the observed half when it is compared with PeptDeep's prediction: the most intense
- * peak with a matched b or y ion of the types shown (PeptDeep scales its b and y ions to the strongest
- * one), or null when no b or y ion is matched.
+ * peak with a matched b or y ion of the types shown and without a neutral loss (PeptDeep predicts b
+ * and y ions without losses and scales them to the strongest one), or null when there is none.
  */
 export function matchedByReference(groups: { intensity: number; matches: PeakMatch[] }[], o: PsmOptions): number | null {
   let best = 0
   for (const g of groups) {
-    const by = g.matches.some((m) => (m.type === 'b' || m.type === 'y') && (o.ions as string[]).includes(m.type))
+    const by = g.matches.some((m) => (m.type === 'b' || m.type === 'y') && m.loss === '' && (o.ions as string[]).includes(m.type))
     if (by && g.intensity > best) best = g.intensity
   }
   return best > 0 ? best : null

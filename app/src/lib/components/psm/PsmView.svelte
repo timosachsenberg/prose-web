@@ -19,6 +19,7 @@
   // ion table, the fragment mass errors and the PSM's features. A PSM whose peaks the search did not
   // keep shows its ladder, theoretical ions and features. An open search's unlocalized mass shift is
   // shown, and the annotation is of the peptide without it.
+  import { signedNumber } from '$lib/format/number'
   import { Button, buttonVariants } from '$lib/components/ui/button'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import Marker from '$lib/components/results/Marker.svelte'
@@ -40,7 +41,6 @@
     nceFor,
     precursorOptions,
     resolveOptions,
-    signedText,
     similarityText,
     spectrumPeaks,
     svgFileName,
@@ -90,6 +90,8 @@
   const fixedMods = $derived(view.result.settings.fixedMods)
   const peptide: PeptideView = $derived(peptideView(pt, k, fixedMods))
   const shift = $derived(massShift(ps.deltaMass[row]))
+  /** The shift as a number on the page (a real minus); `shift` is the ProForma text. */
+  const shiftText = $derived(shift === null ? null : signedNumber(ps.deltaMass[row], 4))
   const scan = $derived(scanNumber(ps.nativeId[row]))
   const spectrumName = $derived(scan === null ? `spectrum ${ps.nativeId[row]}` : `scan ${scan}`)
 
@@ -150,27 +152,33 @@
   // the precursor peaks, asked for apart: the engine makes them at `maxCharge` only, which is the
   // precursor's charge here (and not the fragments' 1 or 2)
   const precursorKey = $derived(options.precursor ? `${psmKey}|precursor|${tolerance.value}${tolerance.unit}` : null)
-  let precursorAnnotation = $state.raw<{ key: string; result: PeakAnnotationResult | null } | null>(null)
+  let precursorAnnotation = $state.raw<{ key: string; result: PeakAnnotationResult | null; error: string | null } | null>(null)
   $effect(() => {
     const key = precursorKey
     if (key === null) return
     const cached = annotations.get(key)
     if (cached) {
-      precursorAnnotation = { key, result: cached }
+      precursorAnnotation = { key, result: cached, error: null }
       return
     }
-    precursorAnnotation = { key, result: null }
+    precursorAnnotation = { key, result: null, error: null }
     engineClient()
       .annotate(peaks?.mz ?? new Float32Array(0), peaks?.intensity ?? new Float32Array(0), pt.openms[k], charge, precursorOptions(tolerance, charge))
       .then(
         (result) => {
           remember(annotations, key, result, 400)
-          if (precursorAnnotation?.key === key) precursorAnnotation = { key, result }
+          if (precursorAnnotation?.key === key) precursorAnnotation = { key, result, error: null }
         },
-        () => {}, // the fragments' annotation reports problems
+        // the fragments are annotated without the precursor peaks, and the view says so (the call is
+        // asked for again when the toggle is switched off and on)
+        (e: unknown) => {
+          if (precursorAnnotation?.key === key) precursorAnnotation = { key, result: null, error: String((e as Error)?.message ?? e) }
+        },
       )
   })
   const precursorResult = $derived(precursorKey !== null && precursorAnnotation?.key === precursorKey ? precursorAnnotation.result : null)
+  /** Why the precursor peaks are missing although they were asked for. */
+  const precursorError = $derived(precursorKey !== null && precursorAnnotation?.key === precursorKey ? precursorAnnotation.error : null)
 
   const fragments = $derived(
     annotation?.key === annotationKey && annotation.result
@@ -182,7 +190,7 @@
   const result = $derived(fragments ? withPrecursor(fragments, precursorResult) : null)
   const annotating = $derived(
     (annotation?.key === annotationKey && annotation.result === null && annotation.error === null) ||
-      (precursorKey !== null && precursorResult === null),
+      (precursorKey !== null && precursorResult === null && precursorError === null),
   )
   const annotationError = $derived(annotation?.key === annotationKey ? annotation.error : null)
 
@@ -305,7 +313,7 @@
       rt >= 0 ? `RT ${(rt / 60).toFixed(1)} min` : null,
       `q ${formatQValue(ps.qValue[row])}`,
       // an open search's shift is the whole mass difference: no error is left to show
-      Number.isFinite(err) && shift === null ? `${signedText(err, 1)} ppm` : null,
+      Number.isFinite(err) && shift === null ? `${signedNumber(err, 1)} ppm` : null,
     ]
       .filter((p) => p)
       .join(' · ')
@@ -494,7 +502,7 @@
   </div>
   {#if shift}
     <p class="-mt-1 mb-2 text-xs text-muted-foreground" data-testid="open-search-note">
-      Open search: an unlocalized mass shift of {shift} Da. The annotation is of the peptide without it, so fragments that carry
+      Open search: an unlocalized mass shift of {shiftText} Da. The annotation is of the peptide without it, so fragments that carry
       the shift stay unannotated.
     </p>
   {/if}
@@ -597,6 +605,11 @@
         onTheoretical={() => (view.psmOptions.bottom = 'theoretical')} />
       {#if annotationError}
         <p class="pb-1 text-xs text-destructive" role="alert">The spectrum could not be annotated: {annotationError}</p>
+      {:else if precursorError}
+        <p class="pb-1 text-xs text-muted-foreground" role="status" data-testid="precursor-note">
+          The precursor peaks could not be annotated ({precursorError.length > 90 ? `${precursorError.slice(0, 89)}…` : precursorError}), so the
+          fragments are shown without them. Switching the precursor peaks off and on tries again.
+        </p>
       {/if}
     {:else}
       <div class="my-2 rounded-md border border-dashed px-4 py-8 text-center" data-testid="spectrum-missing">

@@ -196,7 +196,7 @@ describe('peptideView', () => {
 describe('modTitle', () => {
   it('reads name, Unimod accession and delta mass', () => {
     expect(modTitle({ label: 'ox', name: 'Oxidation', unimod: 35, mass: 15.9949 })).toBe('Oxidation (Unimod:35) +15.9949')
-    expect(modTitle({ label: 'ami', name: 'Amidated', unimod: 2, mass: -0.984016 })).toBe('Amidated (Unimod:2) -0.9840')
+    expect(modTitle({ label: 'ami', name: 'Amidated', unimod: 2, mass: -0.984016 })).toBe('Amidated (Unimod:2) −0.9840')
   })
 
   it('leaves the accession out when the modification has none', () => {

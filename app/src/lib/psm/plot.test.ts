@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bandPath, clipMarks, mzDomain, niceTicks, placeLabels, scale, stickGroups, stickPath, textWidth } from './plot'
+import { bandPath, clipMarks, mzDomain, niceTicks, placeLabels, scale, stickGroups, stickPath, stripFits, textWidth } from './plot'
 
 describe('axes', () => {
   it('puts ticks on round numbers inside the range', () => {
@@ -81,5 +81,26 @@ describe('labels', () => {
     expect(at).toEqual([80, 68, 80, 56, null])
     // never above the top
     expect(placeLabels([{ x: 0, y: 30, width: 10 }], { lineHeight: 12, tries: 3, top: 40 })).toEqual([40])
+  })
+})
+
+describe('the strip under the mirror spectrum', () => {
+  const label = 'PeptDeep · NCE 36 (calibrated) · QE · 100 % = strongest predicted b/y'
+  const similarity = 'cosine 0.437 · spectral angle 0.288 (search)'
+
+  it('keeps the label and the similarity on one line when both fit', () => {
+    expect(stripFits(label, similarity, 820)).toBe(true)
+    expect(stripFits('Theoretical', similarity, 400)).toBe(true)
+  })
+
+  it('puts the similarity on a line of its own when they would meet', () => {
+    // about 660 px of plot at a window of 1050 px: the label alone is some 400 px wide
+    expect(stripFits(label, similarity, 660)).toBe(false)
+    expect(stripFits(label, similarity, textWidth(label, 11) + 16 + textWidth(similarity, 11) - 1)).toBe(false)
+    expect(stripFits(label, similarity, textWidth(label, 11) + 16 + textWidth(similarity, 11))).toBe(true)
+  })
+
+  it('needs no room for a similarity that is not there', () => {
+    expect(stripFits(label, null, 100)).toBe(true)
   })
 })

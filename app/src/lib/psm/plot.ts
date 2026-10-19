@@ -11,7 +11,7 @@ export function scale([d0, d1]: [number, number], [r0, r1]: [number, number]): (
 }
 
 /** A step of 1, 2 or 5 × 10^n near `span / count` (the d3 rule). */
-function tickStep(span: number, count: number): number {
+export function tickStep(span: number, count: number): number {
   const raw = span / Math.max(1, count)
   const power = 10 ** Math.floor(Math.log10(raw))
   const e = raw / power
@@ -115,6 +115,15 @@ export function bandPath(
   const upper = at.map((mz, i) => `${i === 0 ? 'M' : 'L'}${px(x(mz))} ${px(y(limit(ppm(mz))))}`)
   const lower = at.reverse().map((mz) => `L${px(x(mz))} ${px(y(limit(-ppm(mz))))}`)
   return `${upper.join('')}${lower.join('')}Z`
+}
+
+/**
+ * Whether the label under the mirror spectrum and the similarity text fit side by side on one line of
+ * `available` px (with `gap` px between them); if not, the similarity goes on a line of its own.
+ */
+export function stripFits(label: string, similarity: string | null, available: number, fontSize = 11, gap = 16): boolean {
+  if (similarity === null) return true
+  return textWidth(label, fontSize) + gap + textWidth(similarity, fontSize) <= available
 }
 
 /** The width of a label in pixels, estimated (the SVG is laid out before the text is measured). */

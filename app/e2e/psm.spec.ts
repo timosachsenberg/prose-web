@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { openDebug } from './helpers.js'
-import { psmTestSpectra, scanOf, syntheticMzML } from './synthetic-mzml.js'
+import { openDebug, searchExample, searchSynthetic } from './helpers.js'
+import { psmTestSpectra, scanOf } from './synthetic-mzml.js'
 
 // The PSM view: a PSM of the table opens beside it (the table narrows to a list), with the fragment
 // ladder, the annotated spectrum mirrored against PeptDeep's prediction or the theoretical spectrum,
@@ -29,43 +29,6 @@ async function setMore(page: Page, psm: Locator, items: Record<string, boolean>)
 function signedText(v: number, digits: number): string {
   const text = Math.abs(v).toFixed(digits)
   return Number(text) === 0 ? text : `${v < 0 ? '−' : '+'}${text}`
-}
-
-/** The example (two copies of one file) searched with Percolator and PeptDeep. */
-async function searchExample(page: Page) {
-  await page.goto('./')
-  await page.getByRole('button', { name: 'Try the example' }).click()
-  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
-  const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
-  if ((await peptdeep.getAttribute('aria-checked')) !== 'true') await peptdeep.click()
-  await page.getByRole('button', { name: /^Start search/ }).click()
-  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 150_000 })
-}
-
-/** The synthetic file searched against the example database, without Percolator (about 40 PSMs). */
-async function searchSynthetic(page: Page, preset?: string, fragmentDa?: number) {
-  await page.goto('./')
-  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
-  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles({
-    name: 'synthetic.mzML',
-    mimeType: 'application/xml',
-    buffer: syntheticMzML(psmTestSpectra().spectra),
-  })
-  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles('public/example/DatabaseSuitability_database.fasta')
-  if (preset) {
-    await page.getByLabel('Preset').click()
-    await page.getByRole('option', { name: preset }).click()
-  }
-  if (fragmentDa !== undefined) {
-    await page.locator('#fragment-tolerance').fill(String(fragmentDa))
-    await page.locator('#fragment-tolerance').press('Tab')
-    await page.getByRole('button', { name: /^Fragment tolerance unit: ppm/ }).click()
-    await expect(page.getByRole('button', { name: /^Fragment tolerance unit: Da/ })).toBeVisible()
-  }
-  await page.getByRole('switch', { name: 'Percolator' }).click()
-  await page.getByRole('button', { name: /^Start search/ }).click()
-  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 120_000 })
-  await page.getByRole('tab', { name: /^PSMs/ }).click()
 }
 
 /** Opens the PSM of the synthetic file with scan `scan` (the text filter finds it by its sequence). */
@@ -140,6 +103,20 @@ test('PSM view shows the annotated spectrum, ion table and mass errors', async (
   await expect(spectrum.getByTestId('bottom-label')).toContainText(/^PeptDeep · NCE \d+ \(calibrated\)/, { timeout: 60_000 })
   await expect(spectrum.getByTestId('bottom-peaks').first()).toBeAttached()
   await expect(spectrum.getByTestId('similarity')).toHaveText(/^cosine \d\.\d{3} · spectral angle \d\.\d{3} \(search\)$/)
+  // the label under the spectrum and the similarity never meet: side by side while they fit, else the similarity on a line of its own
+  const apart = async () => {
+    const label = (await spectrum.getByTestId('bottom-label').boundingBox())!
+    const similarity = (await spectrum.getByTestId('similarity').boundingBox())!
+    const meet = label.x < similarity.x + similarity.width && similarity.x < label.x + label.width && label.y < similarity.y + similarity.height && similarity.y < label.y + label.height
+    expect(meet, `label ${JSON.stringify(label)} and similarity ${JSON.stringify(similarity)}`).toBe(false)
+    return { stacked: similarity.y > label.y + label.height - 2, within: similarity.x + similarity.width <= (await spectrum.boundingBox())!.x + (await spectrum.boundingBox())!.width + 0.5 }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect.poll(async () => (await apart()).stacked).toBe(false)
+  await page.setViewportSize({ width: 1050, height: 900 })
+  await expect(spectrum.getByTestId('similarity')).toHaveAttribute('data-stacked', '')
+  expect(await apart()).toEqual({ stacked: true, within: true })
+  await page.setViewportSize({ width: 1280, height: 720 })
   // each half says what its 100 % is
   await expect(spectrum.getByTestId('top-label')).toHaveText('Observed · 100 % = strongest matched b/y')
   await expect(spectrum.getByTestId('bottom-label')).toContainText('100 % = strongest predicted b/y')
@@ -180,7 +157,7 @@ test.describe('a synthetic file with a ions', () => {
     page = await browser.newPage({ baseURL: info.project.use.baseURL })
     // the model cannot be read: the prediction fails (first test)
     await page.route('**/peptdeep_ms2_dynamic.onnx', (route) => route.abort())
-    await searchSynthetic(page)
+    await searchSynthetic(page, undefined, undefined, '?debug=engine') // window.__engine: one test makes a call fail
   })
   test.afterAll(async () => page?.close())
 
@@ -194,6 +171,41 @@ test.describe('a synthetic file with a ions', () => {
     await page.keyboard.press('Escape')
     await expect(psm).toHaveCount(0)
     await page.unroute('**/peptdeep_ms2_dynamic.onnx')
+  })
+
+  // (before any test asks for this PSM's precursor peaks: the answers are kept, and a kept answer makes no call)
+  test('a failed precursor annotation shows the fragments without it, with a note, and the export stays usable', async () => {
+    const psm = await openScan(page, oxidised.sequence, oxidisedScan)
+    await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
+    // the call for the precursor peaks (no ion types asked) fails; the fragment calls go through
+    await page.evaluate(() => {
+      const w = window as unknown as { __engine: { annotate: (...args: unknown[]) => Promise<unknown> }; __annotate?: (...args: unknown[]) => Promise<unknown> }
+      const original = (w.__annotate = w.__engine.annotate.bind(w.__engine))
+      w.__engine.annotate = (mz, intensity, peptide, charge, options) => {
+        const o = options as { precursor?: boolean; ions?: string[] } | null
+        return o?.precursor && o.ions?.length === 0 ? Promise.reject(new Error('the precursor call failed')) : original(mz, intensity, peptide, charge, options)
+      }
+    })
+    await setMore(page, psm, { 'Precursor peaks': true })
+    await expect(psm.getByTestId('precursor-note')).toContainText('precursor peaks could not be annotated')
+    await expect(psm.getByTestId('precursor-note')).toContainText('the precursor call failed')
+    // no "annotating…" left, the export works, the fragments are there and the precursor is not
+    await expect(spectrumOf(psm)).not.toContainText('annotating…')
+    await expect(psm.getByRole('button', { name: 'Export spectrum (SVG)' })).toBeEnabled()
+    await expect(labels(psm, 'y').first()).toBeVisible()
+    await expect(labels(psm, 'precursor')).toHaveCount(0)
+    // off and on again asks again: with the call working, the precursor peak shows and the note goes
+    await page.evaluate(() => {
+      const w = window as unknown as { __engine: { annotate: unknown }; __annotate: unknown }
+      w.__engine.annotate = w.__annotate
+    })
+    await setMore(page, psm, { 'Precursor peaks': false })
+    await expect(psm.getByTestId('precursor-note')).toHaveCount(0)
+    await setMore(page, psm, { 'Precursor peaks': true })
+    await expect(labels(psm, 'precursor')).toHaveText(['[M+2H]++'])
+    await expect(psm.getByTestId('precursor-note')).toHaveCount(0)
+    await setMore(page, psm, { 'Precursor peaks': false })
+    await page.keyboard.press('Escape')
   })
 
   test('ion toggles change the annotation', async () => {
@@ -396,7 +408,8 @@ test('a PSM without a stored spectrum shows its ladder and features; an open sea
   const psm = page.getByTestId('psm-view')
   await expect(psm.getByTestId('psm-breadcrumb')).toContainText(`[${shift}]?`)
   await expect(psm.getByTestId('psm-header')).toContainText(`[${shift}]?`)
-  await expect(psm.getByTestId('open-search-note')).toContainText(`${shift} Da`)
+  // ProForma has a hyphen; the note, outside ProForma, a real minus
+  await expect(psm.getByTestId('open-search-note')).toContainText(`${shift.replace('-', '\u2212')} Da`)
   await expect(psm.getByTestId('spectrum-missing')).toContainText('Spectrum not stored')
   await expect(psm.getByTestId('spectrum')).toHaveCount(0)
   await expect(psm.getByTestId('ladder-residue').first()).toBeVisible()

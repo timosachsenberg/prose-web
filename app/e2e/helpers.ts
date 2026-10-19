@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, type Page } from '@playwright/test'
+import { psmTestSpectra, syntheticMzML } from './synthetic-mzml.js'
 
 // Shared by the Results e2e specs: opening a stored synthetic result (see debug.ts), reading the
 // export button and the CSV files, and the grid's active row.
@@ -57,4 +58,52 @@ export async function activeRow(page: Page): Promise<{ index: number; inView: bo
     const b = box.getBoundingClientRect()
     return { index: Number(row.dataset.index), inView: r.top >= header.bottom - 1 && r.bottom <= b.bottom + 1 }
   })
+}
+
+/**
+ * The bundled example (two copies of one file) searched with Percolator, PeptDeep as asked (default
+ * on) and a built-in preset if given by name ("Open search · ±500 Da"). Ends on the results.
+ */
+export async function searchExample(page: Page, opts: { preset?: string; peptdeep?: boolean } = {}) {
+  await page.goto('./')
+  await page.getByRole('button', { name: 'Try the example' }).click()
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
+  if (opts.preset) {
+    await page.getByLabel('Preset').click()
+    await page.getByRole('option', { name: opts.preset }).click()
+  }
+  const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
+  if ((await peptdeep.getAttribute('aria-checked')) !== String(opts.peptdeep ?? true)) await peptdeep.click()
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 150_000 })
+}
+
+/**
+ * The synthetic file (psmTestSpectra) searched against the example database, without Percolator
+ * (about 40 PSMs), with a preset by name and a fragment tolerance in Da if given. `query` is added to
+ * the first URL ("?debug=engine" exposes the engine as window.__engine). Ends on the PSMs tab.
+ */
+export async function searchSynthetic(page: Page, preset?: string, fragmentDa?: number, query = '') {
+  await page.goto(`./${query}`)
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
+  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles({
+    name: 'synthetic.mzML',
+    mimeType: 'application/xml',
+    buffer: syntheticMzML(psmTestSpectra().spectra),
+  })
+  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles('public/example/DatabaseSuitability_database.fasta')
+  if (preset) {
+    await page.getByLabel('Preset').click()
+    await page.getByRole('option', { name: preset }).click()
+  }
+  if (fragmentDa !== undefined) {
+    await page.locator('#fragment-tolerance').fill(String(fragmentDa))
+    await page.locator('#fragment-tolerance').press('Tab')
+    await page.getByRole('button', { name: /^Fragment tolerance unit: ppm/ }).click()
+    await expect(page.getByRole('button', { name: /^Fragment tolerance unit: Da/ })).toBeVisible()
+  }
+  await page.getByRole('switch', { name: 'Percolator' }).click()
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 120_000 })
+  await page.getByRole('tab', { name: /^PSMs/ }).click()
 }

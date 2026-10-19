@@ -2,16 +2,20 @@
   // The results of the open search: key figures, the tabs of the three levels, one filter row and a
   // virtualized table per level, the column settings and "Export CSV · n rows". A protein opens its
   // panel beside the Proteins table; a PSM opens the PSM view beside the PSM table, which then narrows
-  // to the list that "Previous" and "Next" go through.
+  // to the list that "Previous" and "Next" go through. The Overview (files, and the mass shifts of an
+  // open search), Samples and QC tabs show the search as a whole; Proteins stays the first view.
   import ColumnsMenu from '$lib/components/results/ColumnsMenu.svelte'
   import FilterBar from '$lib/components/results/FilterBar.svelte'
   import KeyFigures from '$lib/components/results/KeyFigures.svelte'
+  import OverviewTab from '$lib/components/results/OverviewTab.svelte'
   import ProteinPanel from '$lib/components/protein/ProteinPanel.svelte'
   import PsmView from '$lib/components/psm/PsmView.svelte'
   import PeptidesTable from '$lib/components/results/PeptidesTable.svelte'
   import ProteinsEmpty from '$lib/components/results/ProteinsEmpty.svelte'
   import ProteinsTable from '$lib/components/results/ProteinsTable.svelte'
   import PsmsTable from '$lib/components/results/PsmsTable.svelte'
+  import QcTab from '$lib/components/results/QcTab.svelte'
+  import SamplesTab from '$lib/components/results/SamplesTab.svelte'
   import { Button } from '$lib/components/ui/button'
   import * as Tabs from '$lib/components/ui/tabs'
   import { displaySettings } from '$lib/format/settings.svelte'
@@ -32,14 +36,13 @@
   const peptideTotal = $derived(view ? levelTotal(view.model, 'peptides', false) : 0)
   const proteinTotal = $derived(view ? levelTotal(view.model, 'proteins', false) : 0)
 
-  const tabs = $derived<{ value: Tab; label: string; count?: number; later?: string }[]>([
-    // TODO(C10): Overview, Samples and QC
-    { value: 'overview', label: 'Overview', later: 'The overview comes in a later version.' },
+  const tabs = $derived<{ value: Tab; label: string; count?: number }[]>([
+    { value: 'overview', label: 'Overview' },
     { value: 'proteins', label: 'Proteins', count: proteinTotal },
     { value: 'peptides', label: 'Peptides', count: peptideTotal },
     { value: 'psms', label: 'PSMs', count: figures?.psms ?? 0 },
-    { value: 'samples', label: 'Samples', later: 'The samples view comes in a later version.' },
-    { value: 'qc', label: 'QC', later: 'Quality control comes in a later version.' },
+    { value: 'samples', label: 'Samples' },
+    { value: 'qc', label: 'QC' },
   ])
 
   // no protein passed the search's protein FDR, but there are identifications: say why
@@ -149,7 +152,7 @@
         <div class="flex flex-wrap items-center justify-between gap-2" class:hidden={psmOpen}>
           <Tabs.List>
             {#each tabs as t (t.value)}
-              <Tabs.Trigger value={t.value} disabled={t.later !== undefined} title={t.later} class="px-3 text-[13px]">
+              <Tabs.Trigger value={t.value} class="px-3 text-[13px]">
                 {t.label}{#if t.count !== undefined}<span class="ml-1 text-xs font-normal text-muted-foreground tabular-nums"
                     >{formatCount(t.count)}</span
                   >{/if}
@@ -195,6 +198,17 @@
                 {/if}
                 · CSV and copy write ProForma
               </p>
+            {/if}
+          </Tabs.Content>
+        {:else}
+          <!-- Overview, Samples and QC: the search as a whole; they scroll in their own box -->
+          <Tabs.Content value={view.tab} tabindex={-1} class="min-h-0 flex-1 overflow-y-auto" data-testid="{view.tab}-tab">
+            {#if view.tab === 'overview'}
+              <OverviewTab {view} />
+            {:else if view.tab === 'samples'}
+              <SamplesTab {view} />
+            {:else}
+              <QcTab {view} />
             {/if}
           </Tabs.Content>
         {/if}

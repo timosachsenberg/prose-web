@@ -2,6 +2,7 @@
 // modification-encoding mockup) or, by user setting, ProForma text.
 
 import type { ResultTables } from '../engine/openms-types'
+import { signedNumber } from './number'
 
 export type ModInfo = { label: string; name: string; unimod: number; mass: number }
 export type Segment = { residue: string; mod?: ModInfo }
@@ -39,8 +40,7 @@ export function shortModLabel(name: string): string {
 /** A modification's hover title: "Oxidation (Unimod:35) +15.9949". */
 export function modTitle(mod: ModInfo): string {
   const unimod = mod.unimod > 0 ? ` (Unimod:${mod.unimod})` : ''
-  const mass = `${mod.mass < 0 ? '-' : '+'}${Math.abs(mod.mass).toFixed(4)}`
-  return `${mod.name}${unimod} ${mass}`
+  return `${mod.name}${unimod} ${signedNumber(mod.mass, 4)}`
 }
 
 // A fixed modification as OpenMS names it: "Carbamidomethyl (C)", "TMT6plex (N-term)",

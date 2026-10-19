@@ -64,12 +64,29 @@ describe('loadDebugResult', () => {
     expect(s.files.reduce((n, f) => n + f.targetPSMs + f.decoyPSMs, 0)).toBe(3000)
     expect(s.files.every((f) => f.ms2Spectra > f.targetPSMs + f.decoyPSMs)).toBe(true)
     // small: an open search without protein FDR and without Percolator
-    expect(s).toMatchObject({ proteinFdrApplied: false, psmFdr: 1, proteinFdr: 0.01, openSearch: true, modificationAnalysis: null })
+    expect(s).toMatchObject({ proteinFdrApplied: false, psmFdr: 1, proteinFdr: 0.01, openSearch: true })
     expect(s.files.every((f) => f.percolator === null)).toBe(true)
     expect(small.tables.proteins.qValue.every((q) => Number.isNaN(q))).toBe(true)
     expect(small.tables.psms.deltaMass[5]).toBeCloseTo(15.994915)
     expect(small.tables.psms.deltaMass[7]).toBeCloseTo(-17.026549)
     expect(Math.abs(small.tables.psms.deltaMass[1])).toBeLessThanOrEqual(0.05)
+
+    // its modification analysis counts the shifted PSMs, as the engine's does (shifts above 0.05 Da)
+    const a = s.modificationAnalysis!
+    const delta = small.tables.psms.deltaMass
+    const shifted = Array.from(delta).filter((d) => Math.abs(d) > 0.05).length
+    expect(a.deltaMasses).toMatchObject({ totalPSMs: 3000, modifiedPSMs: shifted, unmodifiedPSMs: 3000 - shifted })
+    expect(a.deltaMasses.entries.reduce((n, e) => n + e.count, 0)).toBe(shifted)
+    expect(a.deltaMasses.entries.length).toBeGreaterThan(4)
+    expect(a.deltaMasses.entries.reduce((n, e) => n + e.percentage, 0)).toBeCloseTo(100)
+    const oxidation = a.deltaMasses.entries.find((e) => e.modification === 'Oxidation')!
+    expect(oxidation).toMatchObject({ known: true })
+    expect(oxidation.deltaMass).toBeCloseTo(15.9949, 3)
+    expect(a.deltaMasses.entries.some((e) => !e.known && e.modification === '')).toBe(true)
+    // the known shifts are the mapped modifications
+    expect(a.ptms.entries.map((e) => e.name)).toEqual(expect.arrayContaining(['Oxidation', 'Ammonia-loss']))
+    expect(a.ptms.totalModifiedPSMs + a.ptms.unknownModificationPSMs).toBe(shifted)
+    expect(a.ptms.uniqueModifications).toBe(a.ptms.entries.length)
 
     // large1: the same tables at a PSM FDR of 1 %
     const large1 = loadDebugResult('large1')

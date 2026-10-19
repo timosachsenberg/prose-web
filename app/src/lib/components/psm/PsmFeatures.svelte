@@ -3,9 +3,10 @@
   // ln(hyperscore)), q-value and PEP, the matched ions of the annotation shown, PeptDeep's similarity
   // when the search computed it, errors, missed cleavages, the modifications; where else its peptide was
   // found; and every feature the search has, under "All features".
+  import { signedNumber } from '$lib/format/number'
   import { formatCount, formatQValue, formatScore } from '$lib/results/display'
   import type { ResultModel } from '$lib/results/model'
-  import { featureValue, modificationList, signedText } from '$lib/psm/psm'
+  import { featureValue, modificationList } from '$lib/psm/psm'
   import { massShift } from '$lib/format/peptide'
 
   let {
@@ -77,17 +78,19 @@
       list.push({ name: 'rt_abs_error', value: `${number(rtError, 3)} s`, title: 'PeptDeep feature of the search: |RT − predicted RT| after calibration' })
     }
     if (shift === null) {
-      list.push({ name: 'Precursor error', value: `${signedText(ps.precursorErrorPpm[row], 2)} ppm` })
+      list.push({ name: 'Precursor error', value: `${signedNumber(ps.precursorErrorPpm[row], 2)} ppm` })
     } else {
+      // the shift as a number on the page (a real minus), not as ProForma text
+      const shiftText = signedNumber(ps.deltaMass[row], 4)
       list.push({
         name: 'Precursor error',
         value: '—',
         note: 'not shown: the open search puts the whole mass difference into the shift',
         title:
-          `The open search puts the whole mass difference into the shift (${shift} Da), so no error is left to show. ` +
-          `The PSM table's ${signedText(ps.precursorErrorPpm[row], 1)} ppm is relative to the unmodified peptide.`,
+          `The open search puts the whole mass difference into the shift (${shiftText} Da), so no error is left to show. ` +
+          `The PSM table's ${signedNumber(ps.precursorErrorPpm[row], 1)} ppm is relative to the unmodified peptide.`,
       })
-      list.push({ name: 'Mass shift', value: `${shift} Da`, title: 'Unassigned mass shift of the open search, not localized' })
+      list.push({ name: 'Mass shift', value: `${shiftText} Da`, title: 'Unassigned mass shift of the open search, not localized' })
     }
     list.push({ name: 'Isotope error', value: String(ps.isotopeError[row]) })
     const missed = feature('enzInt')

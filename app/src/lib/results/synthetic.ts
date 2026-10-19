@@ -3,7 +3,7 @@
 // Only the tests and the debug results (`?debug=large|small`, debug-result.ts) use them.
 
 import { resolveDesign, type DesignInput, type DesignResolution } from '../design/model'
-import type { ProSEMultiSummary, ResultTables } from '../engine/openms-types'
+import type { ModificationAnalysis, ProSEMultiSummary, ResultTables } from '../engine/openms-types'
 
 export type ProteinSpec = {
   accession: string
@@ -387,6 +387,92 @@ export function syntheticSummary(t: ResultTables, cutoffs: { psmFdr: number; pro
   }
 }
 
+/** The modifications a synthetic open search maps its mass shifts to (Unimod name, mass, residues). */
+const syntheticMods = [
+  { name: 'Oxidation', mass: 15.994915, residues: 'M' },
+  { name: 'Ammonia-loss', mass: -17.026549, residues: 'CQNE' },
+  { name: 'Phospho', mass: 79.966331, residues: 'STY' },
+  { name: 'Acetyl', mass: 42.010565, residues: 'K' },
+]
+
+/**
+ * The modification analysis that an open search of `t` could report: the PSMs with a mass shift above
+ * 0.05 Da, binned to 0.0005 Da as the engine does, shifts within 0.01 Da of a modification of
+ * `syntheticMods` mapped to it, and the mapped modifications with their PSMs (most frequent shifts first).
+ */
+export function syntheticModificationAnalysis(t: ResultTables): NonNullable<ModificationAnalysis> {
+  const delta = t.psms.deltaMass
+  const bins = new Map<number, { count: number; peptides: Set<number>; charges: Set<number> }>()
+  let unmodified = 0
+  for (let i = 0; i < t.psms.count; i++) {
+    if (!(Math.abs(delta[i]) > 0.05)) {
+      unmodified++
+      continue
+    }
+    const key = Math.round(delta[i] / 0.0005) * 0.0005
+    let bin = bins.get(key)
+    if (!bin) bins.set(key, (bin = { count: 0, peptides: new Set(), charges: new Set() }))
+    bin.count++
+    bin.peptides.add(t.psms.peptide[i])
+    bin.charges.add(t.psms.charge[i])
+  }
+  const shifted = t.psms.count - unmodified
+  const mapped = (mass: number) => syntheticMods.find((m) => Math.abs(m.mass - mass) <= 0.01)
+  const entries = [...bins]
+    .map(([deltaMass, bin]) => {
+      const mod = mapped(deltaMass)
+      return {
+        deltaMass: Number(deltaMass.toFixed(4)),
+        count: bin.count,
+        uniquePeptides: bin.peptides.size,
+        chargeStates: bin.charges.size,
+        percentage: (bin.count / shifted) * 100,
+        modification: mod?.name ?? '',
+        known: mod !== undefined,
+      }
+    })
+    .sort((a, b) => b.count - a.count)
+
+  const ptms = syntheticMods.flatMap((mod) => {
+    const own = entries.filter((e) => e.modification === mod.name)
+    if (own.length === 0) return []
+    const count = own.reduce((n, e) => n + e.count, 0)
+    const observed = own.reduce((n, e) => n + e.deltaMass * e.count, 0) / count
+    return [
+      {
+        name: mod.name,
+        theoreticalMass: mod.mass,
+        observedMass: observed,
+        massDeviation: observed - mod.mass,
+        count,
+        uniquePeptides: own.reduce((n, e) => n + e.uniquePeptides, 0),
+        chargeStates: Math.max(...own.map((e) => e.chargeStates)),
+        percentage: 0,
+        targetResidues: mod.residues,
+        residueCounts: {} as Record<string, number>,
+      },
+    ]
+  })
+  const totalMapped = ptms.reduce((n, p) => n + p.count, 0)
+  for (const p of ptms) p.percentage = (p.count / totalMapped) * 100
+  return {
+    deltaMasses: {
+      totalPSMs: t.psms.count,
+      modifiedPSMs: shifted,
+      unmodifiedPSMs: unmodified,
+      meanDeltaMass: entries.reduce((n, e) => n + e.deltaMass * e.count, 0) / shifted,
+      medianDeltaMass: entries[0]?.deltaMass ?? 0,
+      entries,
+    },
+    ptms: {
+      totalModifiedPSMs: totalMapped,
+      unknownModificationPSMs: shifted - totalMapped,
+      uniqueModifications: ptms.length,
+      entries: ptms.sort((a, b) => b.count - a.count),
+    },
+  }
+}
+
 export type DebugResult = {
   tables: ResultTables
   design: DesignResolution
@@ -401,7 +487,8 @@ export type DebugResult = {
  * 150,000 PSMs and 20,000 peptides on 20 proteins (about a thousand peptides each) in 24 files, for the protein
  * panel; `small` 3,000 PSMs of an open search without Percolator and without
  * protein FDR (the protein q-values are NaN), in which every fifth PSM has a mass shift of
- * +15.9949 Da and every seventh one of -17.0265 Da.
+ * +15.9949 Da and every seventh one of -17.0265 Da (a few others have other shifts), with the
+ * modification analysis of those shifts.
  */
 export function loadDebugResult(which: 'large' | 'large1' | 'dense' | 'small'): DebugResult {
   const tables =
@@ -415,9 +502,16 @@ export function loadDebugResult(which: 'large' | 'large1' | 'dense' | 'small'): 
   if (which === 'small') {
     tables.proteins.qValue.fill(NaN)
     const delta = tables.psms.deltaMass
-    for (let i = 0; i < delta.length; i++) delta[i] = i % 5 === 0 ? 15.994915 : i % 7 === 0 ? -17.026549 : 0.002 * ((i % 11) - 5)
+    // every fifth PSM +15.9949 Da and every seventh one -17.0265 Da; among the others, a few of
+    // +79.9663 (phospho), +42.0106 (acetyl), -57.0215 and +229.1629 (no known modification here)
+    const others = [[13, 79.966331], [17, 42.010565], [23, -57.021464], [29, 229.162932]]
+    for (let i = 0; i < delta.length; i++) {
+      const other = others.find(([every]) => i % every === 0)
+      delta[i] = i % 5 === 0 ? 15.994915 : i % 7 === 0 ? -17.026549 : other ? other[1] : 0.002 * ((i % 11) - 5)
+    }
     summary.proteinFdrApplied = false
     summary.openSearch = true
+    summary.modificationAnalysis = syntheticModificationAnalysis(tables)
     for (const f of summary.files) f.percolator = null
   }
   return { tables, design: syntheticDesign(tables.files), summary, ...cutoffs }

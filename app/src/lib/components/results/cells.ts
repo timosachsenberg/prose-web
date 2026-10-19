@@ -1,5 +1,6 @@
 // Helpers of the results tables' columns.
 
+import { signedNumber } from '$lib/format/number'
 import type { ColumnSpec } from '$lib/results/table-columns'
 import type { Column } from './DataTable.svelte'
 
@@ -31,9 +32,7 @@ export function fixed(x: number, digits: number): string {
   return x === x ? x.toFixed(digits) : '–'
 }
 
-/** A signed number with fixed decimals ("+1.25", "-0.40"; what rounds to zero is "0.00"); NaN as "–". */
+/** A signed number with fixed decimals ("+1.25", "−0.40" with a real minus; what rounds to zero is "0.00"); NaN as "–". */
 export function signed(x: number, digits: number): string {
-  if (x !== x) return '–'
-  const text = Math.abs(x).toFixed(digits)
-  return Number(text) === 0 ? text : `${x < 0 ? '-' : '+'}${text}`
+  return signedNumber(x, digits)
 }

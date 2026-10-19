@@ -73,7 +73,8 @@ describe('cell formats', () => {
 
   it('shows the scores Percolator could not give (-100 at q = 1) as a dash', () => {
     expect(formatScore(3.14159, 0.001)).toBe('3.142')
-    expect(formatScore(-1.5, 0.2)).toBe('-1.500')
+    expect(formatScore(-1.5, 0.2)).toBe('−1.500') // a real minus (U+2212)
+    expect(formatScore(-0.0004, 0.01)).toBe('0.000') // rounded first: no "-0.000"
     expect(formatScore(-100, 1)).toBe('–')
     expect(formatScore(NaN, 0.01)).toBe('–')
   })

@@ -1,6 +1,7 @@
 // How the results tables show proteins, samples and numbers.
 
 import { fileStem } from '../design/model'
+import { signedNumber } from '../format/number'
 import { contaminantPrefix, type ResultSample } from './model'
 
 export type AccessionView = {
@@ -78,12 +79,13 @@ export function formatQValue(q: number): string {
 }
 
 /**
- * A PSM's (or protein's best) score with three decimals. A hit Percolator could not score carries
- * -100 with q-value 1: it shows as "–", as does a missing score.
+ * A PSM's (or protein's best) score with three decimals, a negative one with a real minus (rounded
+ * first: no "−0.000"). A hit Percolator could not score carries -100 with q-value 1: it shows as "–",
+ * as does a missing score.
  */
 export function formatScore(score: number, q: number): string {
   if (score !== score || (score === -100 && !(q < 1))) return '–'
-  return score.toFixed(3)
+  return signedNumber(score, 3, { plus: false })
 }
 
 const fallbackName = 'prose-results'
