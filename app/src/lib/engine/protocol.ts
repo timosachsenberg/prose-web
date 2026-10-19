@@ -226,6 +226,12 @@ export const UNRESPONSIVE = 'OpenMS stopped responding (likely out of memory); s
 export const RELOAD = 'Reload the page to start OpenMS again.'
 
 /**
+ * A file of this version of the module is no longer on the server (the service worker answered 409:
+ * the server has another version's bytes under its URL).
+ */
+export const NEWER_VERSION = 'A newer version of ProSE was deployed: reload the page.'
+
+/**
  * The message of the calls that a trap ended, by what the worker was doing; `restarted`: a new worker
  * is ready (else the page has to be reloaded).
  */

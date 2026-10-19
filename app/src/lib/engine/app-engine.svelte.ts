@@ -4,6 +4,8 @@
 
 import { debugFlag } from '../debug'
 import { EngineClient, EngineError, type EngineInfo } from './client'
+import { MODELS } from './core'
+import { NEWER_VERSION } from './protocol'
 
 /** The first download of the module (about 45 MB) can be slow; 30 s (the client's default) is too short. */
 export const START_TIMEOUT_MS = 180_000
@@ -81,4 +83,21 @@ export function startEngine(): Promise<EngineInfo> {
   starting = promise
   promise.catch(() => {}) // the state above reports it; callers that await get the error too
   return promise
+}
+
+/**
+ * Before a search with PeptDeep: whether this version's models can still be had (stored, or this
+ * version's on the server), so that a newer deployment fails the search at once, not after its first
+ * steps. The service worker answers 409 for another version's bytes; it stores this version's, so the
+ * search worker then reads them from the store. Throws the reason; network errors are left to the search.
+ */
+export async function checkModels(): Promise<void> {
+  const base = new URL(import.meta.env.BASE_URL, document.baseURI)
+  for (const { file } of MODELS) {
+    const status = await fetch(new URL(`openms/models/${file}?v=${__OPENMS_ID__}`, base)).then(
+      (r) => (void r.body?.cancel(), r.status),
+      () => 0,
+    )
+    if (status === 409) throw new Error(`The PeptDeep model ${file} of this version is no longer on the server. ${NEWER_VERSION}`)
+  }
 }

@@ -138,6 +138,8 @@ export interface StoreStatus {
   data: boolean
   /** the previous generation the worker keeps (for pages of that build still open), or null */
   kept: string | null
+  /** not stored for lack of room in the browser's storage for the site: the app works online only */
+  storageFull: boolean
 }
 
 /**
@@ -198,13 +200,12 @@ export function watchUpdate(onReady: () => void): () => void {
     const check = () => {
       if (!stopped && registration.waiting && c.controller) onReady()
     }
+    // an installation may be under way already (an update downloads the module, about 45 MB: its
+    // updatefound fired before this page listened); every state change may have made it the waiting one
+    const follow = (worker: ServiceWorker | null) => worker?.addEventListener('statechange', check)
+    follow(registration.installing)
+    registration.addEventListener('updatefound', () => follow(registration.installing))
     check()
-    registration.addEventListener('updatefound', () => {
-      const installing = registration.installing
-      installing?.addEventListener('statechange', () => {
-        if (installing.state === 'installed') check()
-      })
-    })
   }
   void c.getRegistration().then((registration) => registration && watch(registration))
   return () => {

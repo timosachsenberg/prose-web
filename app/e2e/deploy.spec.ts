@@ -269,7 +269,8 @@ test('a PeptDeep model fetched after a deployment is never stored under the old 
     const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
     if ((await peptdeep.getAttribute('aria-checked')) !== 'true') await peptdeep.click()
     await page.getByRole('button', { name: /^Start search/ }).click()
-    await expect(page.getByText(/a newer version was deployed\. Reload the page/).first()).toBeVisible({ timeout: 120_000 })
+    await expect(page.getByText(/A newer version of ProSE was deployed: reload the page\./).first()).toBeVisible({ timeout: 120_000 })
+    await expect(page.getByRole('button', { name: 'Reload the page' })).toBeVisible()
     expect(page.url()).not.toMatch(/#\/results\//)
     expect((await storeKeys(page, `openms-module-${a.module}`)).filter((k) => k.includes('/models/'))).toEqual([])
   } finally {
@@ -303,7 +304,7 @@ test("an old tab still starts engine workers after a deployment, before and afte
     await expect(other.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
     // A's worker still in charge: A's worker script is gone from the server, but stored
     expect(await startEngineWorker(old)).toBe('ready')
-    expect(await predict()).toMatch(/^error: .*a newer version was deployed/)
+    expect(await predict()).toMatch(/^error: .*A newer version of ProSE was deployed/)
 
     // the other tab takes the update: B's worker serves the old tab too, and keeps A's generation for it
     const reloaded = other.waitForEvent('load')
@@ -314,7 +315,7 @@ test("an old tab still starts engine workers after a deployment, before and afte
     expect(await startEngineWorker(old)).toBe('ready')
     expect(await old.evaluate(() => caches.keys())).toEqual(expect.arrayContaining([`prose-app-${a.build}`, `openms-module-${a.module}`]))
     // B's worker knows A's manifest (A's generation): B's bytes under A's URL are refused, not passed on
-    expect(await predict()).toMatch(/^error: .*a newer version was deployed/)
+    expect(await predict()).toMatch(/^error: .*A newer version of ProSE was deployed/)
     // the old tab is told
     await expect(old.getByTestId('update-notice')).toBeVisible({ timeout: 30_000 })
 
@@ -325,6 +326,127 @@ test("an old tab still starts engine workers after a deployment, before and afte
     await expect
       .poll(async () => (await other.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build)), { timeout: 30_000 })
       .toEqual([])
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('the update notice appears also when the page comes while the update is still installing', async ({ page }) => {
+  test.setTimeout(240_000)
+  const distB = fakeUpdate('dist', B_IDS)
+  // B's wasm comes slowly: B's installation (which stores it) is still running when the next page starts
+  const server = await pagesServer({ A: 'dist', B: distB }, 'A', {}, { 'B openms/openms.wasm': 8_000 })
+  try {
+    await firstVisit(page, server.url)
+    server.phase('B')
+    await page.reload()
+    await expect
+      .poll(() => page.evaluate(async () => Boolean((await navigator.serviceWorker.getRegistration())?.installing)), { timeout: 30_000 })
+      .toBe(true)
+    // a page that starts during the installation (its updatefound has fired before)
+    await page.reload()
+    expect(await page.evaluate(async () => Boolean((await navigator.serviceWorker.getRegistration())?.installing))).toBe(true)
+    await expect(page.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('with a full storage OpenMS still loads, online, and says why it does not work offline', async ({ page, context }) => {
+  test.setTimeout(240_000)
+  const server = await pagesServer({ A: 'dist' })
+  try {
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(server.url).origin, quotaSize: 30e6 })
+    await firstVisit(page, server.url)
+    const status = page.getByTestId('engine-status')
+    await expect(status).toContainText(/\d+ threads/)
+    await expect(status).not.toContainText('works offline')
+    await expect(status).toHaveAttribute('title', /storage for this site is full/, { timeout: 30_000 })
+    // and again on the next visit (the module from the network)
+    await page.reload()
+    await engineReady(page)
+    await expect(status).not.toContainText('could not be loaded')
+  } finally {
+    await server.close()
+  }
+})
+
+test('an update that has no room for its module still arrives, and makes room once it takes over', async ({ page, context }) => {
+  test.setTimeout(300_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    // room for one module (≈ 45 MB) and A's example, not for a second module
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(server.url).origin, quotaSize: 80e6 })
+    await firstVisit(page, server.url)
+    await expect(page.getByTestId('engine-status')).toContainText('works offline')
+    await expect.poll(() => stored(page, `prose-app-${a.build}`, '__data-stored__'), { timeout: 30_000 }).toBe(true)
+
+    server.phase('B')
+    await page.reload()
+    await engineReady(page)
+    // B installs without its module (no room while A is in use) and waits: the notice, and B's wasm
+    // downloaded once (by the page), not again and again by failing installations
+    await expect(page.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+    await page.waitForTimeout(3000)
+    expect(server.log.filter((l) => l === `B /prose-web/openms/openms.wasm?v=${B_IDS.module}`).length).toBe(1)
+
+    // Reload: B takes over; no page of A is open, so A goes and B stores its module
+    const reloaded = page.waitForEvent('load')
+    await page.getByTestId('update-notice').getByRole('button', { name: 'Reload' }).click()
+    await reloaded
+    await engineReady(page)
+    expect(await loadedModule(page)).toEqual({ mjs: B_IDS.module, wasm: B_IDS.module })
+    await expect(page.getByTestId('engine-status')).toContainText('works offline', { timeout: 60_000 })
+    expect((await page.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build))).toEqual([])
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test("other pages of the site do not keep a previous version's files", async ({ page, context }) => {
+  test.setTimeout(240_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    await firstVisit(page, server.url)
+    // a page of the site that is not the app (under the worker's scope; it never answers BUILD?)
+    const other = await context.newPage()
+    await other.goto(`${server.url}data/`)
+    server.phase('B')
+    await page.reload()
+    await engineReady(page)
+    const reloaded = page.waitForEvent('load')
+    await page.getByTestId('update-notice').getByRole('button', { name: 'Reload' }).click({ timeout: 60_000 })
+    await reloaded
+    await engineReady(page)
+    await expect
+      .poll(async () => (await page.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build)), { timeout: 30_000 })
+      .toEqual([])
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('a module of this version that is no longer on the server: a clear message', async ({ page }) => {
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    await firstVisit(page, server.url)
+    // the open A page's module not stored (e.g. dropped), B deployed: a new engine worker of A
+    await page.evaluate(async () => {
+      for (const name of await caches.keys()) if (name.startsWith('openms-module-')) await caches.delete(name)
+    })
+    server.phase('B')
+    expect(await startEngineWorker(page)).toMatch(/^error: .*A newer version of ProSE was deployed: reload the page/)
   } finally {
     await server.close()
     rmSync(distB, { recursive: true, force: true })

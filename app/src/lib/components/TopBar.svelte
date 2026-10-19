@@ -50,6 +50,20 @@
   // what the service worker has stored: "works offline" once this build's shell and module are (lib/sw-client.ts)
   let stored = $state<StoreStatus | null>(null)
   $effect(() => watchStatus((s) => (stored = s)))
+  // the browser's storage for the site (for the note when it is full)
+  let estimate = $state<{ usage: number; quota: number } | null>(null)
+  $effect(() => {
+    if (!stored?.storageFull) return
+    void navigator.storage
+      ?.estimate()
+      .then((e) => (estimate = e.usage !== undefined && e.quota !== undefined ? { usage: e.usage, quota: e.quota } : null))
+  })
+  const fullNote = $derived.by(() => {
+    if (!stored?.storageFull) return ''
+    const mb = (bytes: number) => `${Math.round(bytes / 1e6)} MB`
+    const numbers = estimate ? ` (${mb(estimate.usage)} of ${mb(estimate.quota)} used)` : ''
+    return `Not stored for offline use: the browser's storage for this site is full${numbers}. ProSE works online; free space (e.g. delete searches in History) to use it offline.`
+  })
   const offlineNote = $derived.by(() => {
     if (!stored?.offline) return ''
     const models = Object.values(stored.models)
@@ -89,7 +103,7 @@
       }
     }
     const works = offlineNote ? ' · works offline' : ''
-    return { text: `OpenMS ${version} · ${threads}${works}`, dot: 'bg-green-700', title: `OpenMS ${info.version}. ${offlineNote}`.trim() }
+    return { text: `OpenMS ${version} · ${threads}${works}`, dot: 'bg-green-700', title: `OpenMS ${info.version}. ${offlineNote}${fullNote}`.trim() }
   })
 </script>
 

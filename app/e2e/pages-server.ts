@@ -31,7 +31,16 @@ export interface PagesServer {
 /** Files served in every phase besides the build's (path below /prose-web/ → content type and body). */
 export type Extra = Record<string, { type: string; body: string }>
 
-export async function pagesServer(phases: Record<string, string>, first = Object.keys(phases)[0], extra: Extra = {}): Promise<PagesServer> {
+/**
+ * `delays`: "<phase> <path below /prose-web/>" → milliseconds before the answer starts (e.g. a slow
+ * download of B's wasm, to keep B's installation running).
+ */
+export async function pagesServer(
+  phases: Record<string, string>,
+  first = Object.keys(phases)[0],
+  extra: Extra = {},
+  delays: Record<string, number> = {},
+): Promise<PagesServer> {
   let phase = first
   const log: string[] = []
   const server = createServer((req, res) => {
@@ -59,10 +68,15 @@ export async function pagesServer(phases: Record<string, string>, first = Object
     res.setHeader('content-type', TYPES[extname(file)] ?? 'application/octet-stream')
     res.setHeader('cache-control', 'max-age=600')
     // (a client may abort a response: never let that end the server)
-    const stream = createReadStream(file)
-    stream.on('error', () => res.destroy())
-    res.on('close', () => stream.destroy())
-    stream.pipe(res)
+    const send = () => {
+      const stream = createReadStream(file)
+      stream.on('error', () => res.destroy())
+      res.on('close', () => stream.destroy())
+      stream.pipe(res)
+    }
+    const delay = delays[`${phase} ${rel}`]
+    if (delay) setTimeout(send, delay)
+    else send()
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -90,8 +104,8 @@ export function stampedIds(dist: string): { module: string; build: string } {
 
 /**
  * A copy of the build `dist` as a later deployment B, as a real rebuild with another module makes it:
- * - the wasm carries one more custom section and the PeptDeep MS2 model one more (unknown) protobuf
- *   field: other bytes, still valid;
+ * - the wasm carries one more custom section, the PeptDeep MS2 model one more (unknown) protobuf
+ *   field and openms.mjs one more comment: other bytes, still valid;
  * - the page's and the engine worker's chunks get new hashed names (unless `rename` is false), and
  *   every reference to them follows;
  * - the ids are `ids` wherever the build has them (index.html, the worker chunk), and sw.js is stamped
@@ -112,6 +126,7 @@ export function fakeUpdate(
   const body = Buffer.concat([Buffer.from([name.length]), name, payload])
   appendFileSync(join(out, 'openms/openms.wasm'), Buffer.concat([Buffer.from([0, body.length]), body]))
   appendFileSync(join(out, 'openms/models/peptdeep_ms2_dynamic.onnx'), Buffer.from([0xc0, 0x3e, 0x01])) // field 1000 = 1
+  appendFileSync(join(out, 'openms/openms.mjs'), `\n// deployment ${ids.module}\n`)
   const renames = new Map<string, string>()
   if (rename) {
     for (const f of readdirSync(join(out, 'assets'))) {

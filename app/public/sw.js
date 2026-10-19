@@ -91,6 +91,33 @@ function appKey(url) {
 /** The key of a file of this module version. */
 const moduleKey = (path) => `${at(path)}?v=${MODULE_ID}`
 
+/** Set when a store failed for lack of room (this worker's life; an update's marker records it too). */
+let storageFull = false
+
+/** The bytes of the module's files (openms.mjs, openms.wasm). */
+const MODULE_BYTES = MODULE.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
+
+/** Whether the browser's storage for the site has room for `bytes` more (with a margin); true if it cannot tell. */
+async function room(bytes) {
+  try {
+    const { quota, usage } = await navigator.storage.estimate()
+    return quota === undefined || usage === undefined || quota - usage > bytes * 1.1 + 4e6
+  } catch {
+    return true
+  }
+}
+
+/** cache.put that never fails its caller: false when it could not store (the storage is full). */
+async function store(cache, key, response) {
+  try {
+    await cache.put(key, response)
+    return true
+  } catch (error) {
+    if (error?.name === 'QuotaExceededError') storageFull = true
+    return false
+  }
+}
+
 /** From the server, past the browser's HTTP cache (revalidated: a 304 where nothing changed). */
 const fromServer = (request) => fetch(request, { cache: 'no-cache' })
 
@@ -154,7 +181,8 @@ function conflict(path) {
 
 /**
  * A file of this module version: from the store; the first time from the network, verified, stored
- * and answered from the store (the stored response: Chrome code-caches openms.wasm only for it).
+ * and answered from the store (the stored response: Chrome code-caches openms.wasm only for it). Where
+ * the storage has no room it is answered from the network, unstored.
  */
 async function ownModuleFile(request, path) {
   const cache = await caches.open(MODULE_STORE)
@@ -163,10 +191,21 @@ async function ownModuleFile(request, path) {
   if (hit) return hit
   const response = await fromServer(request)
   if (!response.ok) return response
-  if (!(await isOwn(response.clone(), path))) return conflict(path)
-  await cache.put(key, response)
+  const fits = await room(MANIFEST[path]?.[0] ?? 0)
+  const forPage = response.clone()
+  if (!(await isOwn(response.clone(), path))) {
+    void forPage.body?.cancel()
+    return conflict(path)
+  }
+  if (fits && (await store(cache, key, response))) {
+    void forPage.body?.cancel()
+    void reportStatus()
+    return (await cache.match(key)) ?? fromServer(request)
+  }
+  if (!fits) storageFull = true
+  void response.body?.cancel()
   void reportStatus()
-  return (await cache.match(key)) ?? fromServer(request)
+  return forPage
 }
 
 /**
@@ -180,7 +219,7 @@ async function asset(request, url) {
   if (hit) return hit
   const response = await fromServer(request)
   const path = key.slice(SCOPE.href.length)
-  if (MANIFEST[path] && (await isOwn(response.clone(), path))) await (await caches.open(APP_STORE)).put(key, response.clone())
+  if (MANIFEST[path] && (await isOwn(response.clone(), path))) await store(await caches.open(APP_STORE), key, response.clone())
   return response
 }
 
@@ -198,9 +237,7 @@ async function networkFirst(request, url) {
     throw error
   }
   if (!response.ok) return (await stored()) ?? response
-  if (MANIFEST[path] && (await isOwn(response.clone(), path))) {
-    await (await caches.open(APP_STORE)).put(key, response.clone())
-  }
+  if (MANIFEST[path] && (await isOwn(response.clone(), path))) await store(await caches.open(APP_STORE), key, response.clone())
   return response
 }
 
@@ -212,12 +249,28 @@ function withIsolationHeaders(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
-/** Fetches `path` (at `url`), verifies it, and stores it under `key` in `cache`; throws if it is not this build's. */
+/**
+ * Fetches `path` (at `url`), verifies it, and stores it under `key` in `cache`; throws if it is not
+ * this build's or cannot be stored (a QuotaExceededError where the storage is full).
+ */
 async function storeVerified(cache, path, url, key) {
   if (await cache.match(key)) return
   const response = await fromServer(url)
   if (!(await isOwn(response.clone(), path))) throw new Error(`${path}: not the file of build ${BUILD_ID}`)
-  await cache.put(key, response)
+  if (!(await store(cache, key, response))) throw new DOMException(`${path}: no room to store it`, 'QuotaExceededError')
+}
+
+/** Stores the module (openms.mjs, openms.wasm), verified; false where the storage has no room for it. */
+async function storeModule() {
+  if (!(await room(MODULE_BYTES))) return false
+  const module = await caches.open(MODULE_STORE)
+  try {
+    for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path))
+    return true
+  } catch (error) {
+    if (error?.name === 'QuotaExceededError') return false
+    throw error
+  }
 }
 
 /**
@@ -228,7 +281,8 @@ async function storeVerified(cache, path, url, key) {
  */
 async function install() {
   const app = await caches.open(APP_STORE)
-  await app.put(GENERATION_KEY, Response.json({ build: BUILD_ID, module: MODULE_ID, installed: Date.now(), activated: null, manifest: MANIFEST }))
+  const marker = { build: BUILD_ID, module: MODULE_ID, installed: Date.now(), activated: null, manifest: MANIFEST }
+  if (!(await store(app, GENERATION_KEY, Response.json(marker)))) throw new Error('no room for the shell')
   const responses = await Promise.all(
     SHELL.map(async (path) => {
       const response = await fromServer(at(path))
@@ -236,11 +290,18 @@ async function install() {
       return [at(path), response]
     }),
   )
-  await Promise.all(responses.map(([key, response]) => app.put(key, response)))
+  const stored = await Promise.all(responses.map(([key, response]) => store(app, key, response)))
+  if (!stored.every(Boolean)) throw new Error('no room for the shell')
   if (self.registration.active) {
-    const module = await caches.open(MODULE_STORE)
-    for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path))
-    await carryOver(app, module)
+    // an update: complete before it waits; where the storage has no room for the module even after
+    // dropping what no open page needs, it arrives without (online only, "storage full")
+    let complete = await storeModule()
+    if (!complete) {
+      await freeGenerations()
+      complete = await storeModule()
+    }
+    if (complete) await carryOver(app, await caches.open(MODULE_STORE))
+    else await store(app, GENERATION_KEY, Response.json({ ...marker, moduleSkipped: 'storage full' }))
   }
 }
 
@@ -261,12 +322,11 @@ async function carryOver(app, module) {
     if (await cache.match(key)) return true
     const response = await find(matches)
     if (!response || !(await isOwn(response.clone(), path))) return false
-    await cache.put(key, response)
-    return true
+    return store(cache, key, response)
   }
   let data = true
   for (const path of DATA) data = (await take(app, path, at(path), (url) => url.href === at(path))) && data
-  if (data) await app.put(DATA_MARK, new Response(new Date().toISOString()))
+  if (data) await store(app, DATA_MARK, new Response(new Date().toISOString()))
   for (const path of MODELS) await take(module, path, moduleKey(path), (url) => url.origin + url.pathname === at(path))
 }
 
@@ -275,8 +335,7 @@ async function carryOver(app, module) {
  * before this worker served it (a page isolated by its server, as in the desktop app, starts at once).
  */
 async function storeData() {
-  const module = await caches.open(MODULE_STORE)
-  for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path)).catch(() => {})
+  await storeModule().catch(() => {})
   const cache = await caches.open(APP_STORE)
   if (await cache.match(DATA_MARK)) return true
   const stored = await Promise.all(
@@ -288,7 +347,7 @@ async function storeData() {
     ),
   )
   const complete = stored.every(Boolean)
-  if (complete) await cache.put(DATA_MARK, new Response(new Date().toISOString()))
+  if (complete) await store(cache, DATA_MARK, new Response(new Date().toISOString()))
   return complete
 }
 
@@ -302,13 +361,17 @@ async function status() {
   const models = {}
   for (const path of MODELS) models[path.split('/').pop()] = Boolean(await module.match(moduleKey(path)))
   const previous = (await generations()).find((g) => g.kept)
+  const marker = await (await app.match(GENERATION_KEY))?.json().catch(() => null)
+  const offline = shell && moduleStored
   return {
     type: 'STATUS',
     build: BUILD_ID,
     module: MODULE_ID,
     shell,
     moduleStored,
-    offline: shell && moduleStored,
+    offline,
+    // not stored for lack of room (the app then works online only)
+    storageFull: !offline && (storageFull || Boolean(marker?.moduleSkipped) || !(await room(MODULE_BYTES))),
     models,
     data: Boolean(await app.match(DATA_MARK)),
     kept: previous?.build ?? null,
@@ -341,7 +404,12 @@ async function generations() {
 
 /** The builds of the open pages (they answer BUILD?); null for a page that does not answer in time. */
 async function openBuilds() {
-  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  // the app's own windows only (its page, any query or hash): not the site's other pages, nor other
+  // sites of the origin (on GitHub Pages: every project site of the user), which never answer
+  const clients = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter((client) => {
+    const rest = relative(new URL(client.url))
+    return rest === '' || rest === 'index.html'
+  })
   return Promise.all(
     clients.map(
       (client) =>
@@ -370,10 +438,13 @@ function cleanGenerations() {
       // (a waiting worker of a newer version must not drop the generation that is in use)
       if (self.serviceWorker && self.registration.active !== self.serviceWorker) return
       const own = await status()
-      const builds = own.offline ? await openBuilds() : null
+      // the previous generation stays while this one is incomplete (unless for lack of room: then it
+      // goes as soon as no page needs it, to make room) or a page of its build is open
+      const settled = own.offline || own.storageFull
+      const builds = settled ? await openBuilds() : null
       const keepModules = new Set([MODULE_ID])
       for (const g of await generations()) {
-        const keep = g.newer || (g.kept && (!own.offline || builds.includes(g.build) || builds.includes(null)))
+        const keep = g.newer || (g.kept && (!settled || builds.includes(g.build) || builds.includes(null)))
         if (keep) {
           if (g.module) keepModules.add(g.module)
           continue
@@ -389,6 +460,26 @@ function cleanGenerations() {
     }
   })()
   return cleaning
+}
+
+/**
+ * Makes room for an update's module: drops the generations that neither the active worker (the
+ * newest previous one) nor an open page of the app needs; never a newer one.
+ */
+async function freeGenerations() {
+  const builds = await openBuilds()
+  const keepModules = new Set([MODULE_ID])
+  for (const g of await generations()) {
+    if (g.newer || g.kept || builds.includes(g.build) || builds.includes(null)) {
+      if (g.module) keepModules.add(g.module)
+      continue
+    }
+    await caches.delete(g.store)
+  }
+  for (const name of await caches.keys()) {
+    const module = MODULE_STORE_NAME.exec(name)?.[1]
+    if (module && !keepModules.has(module)) await caches.delete(name)
+  }
 }
 
 /** What the earlier site left in the demos' stores (the entries of openms-demo/ stay). */
@@ -415,7 +506,7 @@ self.addEventListener('activate', (event) => {
     (async () => {
       const app = await caches.open(APP_STORE)
       const marker = (await (await app.match(GENERATION_KEY))?.json().catch(() => null)) ?? { build: BUILD_ID, module: MODULE_ID, installed: Date.now() }
-      await app.put(GENERATION_KEY, Response.json({ ...marker, activated: Date.now() }))
+      await store(app, GENERATION_KEY, Response.json({ ...marker, activated: Date.now() }))
       await dropEarlierSite()
       await self.clients.claim()
       await cleanGenerations()

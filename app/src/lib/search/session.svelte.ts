@@ -3,7 +3,7 @@
 // other views) while the user looks elsewhere.
 
 import type { DesignResolution } from '../design/model'
-import { engineClient, startEngine } from '../engine/app-engine.svelte'
+import { checkModels, engineClient, startEngine } from '../engine/app-engine.svelte'
 import {
   EngineError,
   type EngineInfo,
@@ -12,7 +12,7 @@ import {
   type SearchRequest,
   type SearchThreads,
 } from '../engine/client'
-import { RELOAD, threadsLabel } from '../engine/protocol'
+import { NEWER_VERSION, RELOAD, threadsLabel } from '../engine/protocol'
 import { releaseResultsView } from '../results/view.svelte'
 import { describeFailure, type Failure } from './failure'
 
@@ -208,6 +208,11 @@ export async function runSearch(
       Object.assign(searchRun, { status: 'failed', failure: { context: 'Before the search', summary: problem, detail: null } })
       return null
     }
+    if (request.peptdeep) {
+      searchRun.label = 'Loading the PeptDeep models...'
+      await checkModels()
+      if (id !== runId) return null
+    }
     searchRun.label = 'Reading the files...'
     searchRun.threads = engineClient().threadsFor(request)
     sent = true
@@ -242,7 +247,7 @@ export async function runSearch(
       },
       message,
     )
-    Object.assign(searchRun, { status: 'failed', failure, reload: message.includes(RELOAD) })
+    Object.assign(searchRun, { status: 'failed', failure, reload: message.includes(RELOAD) || message.includes(NEWER_VERSION) })
     return null
   } finally {
     if (id === runId) stopClock()

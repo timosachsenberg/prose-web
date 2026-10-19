@@ -13,6 +13,7 @@
 import { annotate, engineInfo, idXML, loadModels, MS2_MODEL_FILE, predict, runSearch, transferList } from './core'
 import type { MainModule, OpenMSFactory, ProSEResultSet } from './openms-types'
 import {
+  NEWER_VERSION,
   isFatal,
   thrownMessage,
   type EngineCall,
@@ -61,13 +62,23 @@ function moduleFile(path: string): string {
   return new URL(`openms/${path}?v=${__OPENMS_ID__}`, baseUrl).href
 }
 
+/** Whether the service worker answers 409 for this version's module (another version is on the server). */
+async function anotherVersionOnServer(): Promise<boolean> {
+  for (const file of ['openms.mjs', 'openms.wasm']) {
+    const status = await fetch(moduleFile(file)).then(
+      (r) => (void r.body?.cancel(), r.status),
+      () => 0,
+    )
+    if (status === 409) return true
+  }
+  return false
+}
+
 /** A PeptDeep model of the package (`openms/models/`). */
 async function fetchModel(file: string): Promise<Blob> {
   const response = await fetch(moduleFile(`models/${file}`))
   // 409: the service worker found another version's bytes on the server (public/sw.js)
-  if (response.status === 409) {
-    throw new Error(`The PeptDeep model ${file} of this version of ProSE is no longer on the server: a newer version was deployed. Reload the page.`)
-  }
+  if (response.status === 409) throw new Error(`The PeptDeep model ${file} of this version is no longer on the server. ${NEWER_VERSION}`)
   if (!response.ok) throw new Error(`openms/models/${file} could not be loaded (${response.status} ${response.statusText}).`)
   return response.blob()
 }
@@ -89,13 +100,20 @@ const handlers: Handlers = {
       // ?v= on the module and on its wasm (locateFile; the module would ask for openms.wasm without it):
       // the service worker keeps them of one version, and the module's threads, which import it again
       // past the service worker (from a Blob), never meet another version in the HTTP cache
-      const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleFile('openms.mjs'))) as { default: OpenMSFactory }
-      OpenMS = await createOpenMS({
-        numThreads: threads,
-        locateFile: (path: string) => moduleFile(path),
-        print: () => {},
-        printErr: (line: string) => console.debug(line),
-      })
+      try {
+        const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleFile('openms.mjs'))) as { default: OpenMSFactory }
+        OpenMS = await createOpenMS({
+          numThreads: threads,
+          locateFile: (path: string) => moduleFile(path),
+          print: () => {},
+          printErr: (line: string) => console.debug(line),
+        })
+      } catch (e) {
+        // a failed import or wasm fetch says only "Failed to fetch dynamically imported module" or
+        // "Aborted(NetworkError…)": the service worker's 409 means a newer version was deployed
+        if (await anotherVersionOnServer()) throw new Error(`OpenMS of this version is no longer on the server. ${NEWER_VERSION}`)
+        throw e
+      }
       OpenMS.setLogEnabled('info', false)
     }
     return { result: engineInfo(OpenMS, scope.crossOriginIsolated === true) }
