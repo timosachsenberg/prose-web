@@ -15,12 +15,16 @@
   let open = $state(false)
   // the engine's state is no rune: read it each time the menu opens
   let canIdXML = $state(false)
+  let canSpectrum = $state(false)
   let busy = $state(false)
   let error = $state<string | null>(null)
 
   function openChange(next: boolean) {
     open = next
-    if (next) canIdXML = idXMLAvailable(view.result)
+    if (next) {
+      canIdXML = idXMLAvailable(view.result)
+      canSpectrum = view.psm !== null && view.spectrumExporter !== null
+    }
   }
 
   async function guard(action: () => unknown) {
@@ -56,6 +60,11 @@
     <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view))}
       >CSV (current view)</DropdownMenu.Item>
     <DropdownMenu.Item onSelect={() => guard(() => exportDesign(view.result))}>Design (design.tsv)</DropdownMenu.Item>
+    <DropdownMenu.Item
+      disabled={!canSpectrum}
+      title={canSpectrum ? undefined : 'Open a PSM whose spectrum is stored'}
+      class={explained}
+      onSelect={() => guard(() => view.spectrumExporter?.())}>Spectrum (SVG)</DropdownMenu.Item>
     <!-- TODO(C11): the project file comes with History -->
     <DropdownMenu.Item disabled title="Available with History (coming next)" class={explained}>Project (.prose)</DropdownMenu.Item>
     <DropdownMenu.Separator />

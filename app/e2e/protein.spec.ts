@@ -89,19 +89,32 @@ test('a protein opens its coverage, peptides and PSMs', async ({ page }) => {
     await toggle.click()
   }
 
-  // a PSM opens in the PSM table (the PSM view comes with C9): its tab, the PSM selected and in view
+  // a PSM opens in the PSM view, beside the list of its peptide's PSMs (the PSM table with the protein
+  // and the peptide as chips, as in the mockup); Esc goes back to the panel, and the PSM table to what it was
   const psm = shown.first()
   const scan = (await psm.getAttribute('data-scan'))!
   expect(scan).toMatch(/^\d+$/)
   await psm.getByRole('button').click()
-  await expect(page.getByRole('tab', { name: /^PSMs/ })).toHaveAttribute('aria-selected', 'true')
+  const view = page.getByTestId('psm-view')
+  await expect(view.getByTestId('psm-breadcrumb')).toContainText(`scan ${scan}`)
+  await expect(view.getByTestId('psm-breadcrumb')).toContainText(first.accession)
   await expect(panel).toHaveCount(0)
-  const table = page.getByTestId('results-table')
-  const selected = table.locator('tr[aria-selected="true"]')
+  await expect(page.getByRole('button', { name: new RegExp(`^Protein: ${first.accession}`) })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Peptide: / })).toBeVisible()
+  await expect(page.getByTestId('row-count')).toHaveText(new RegExp(`^${psms.toLocaleString('en-US')} of `))
+  const selected = page.getByTestId('results-table').locator('tr[aria-selected="true"]')
   await expect(selected).toHaveCount(1)
-  await expect(selected.locator('[data-column="scan"]')).toHaveText(scan)
   await expect(selected).toBeInViewport()
-  await expect(page.getByRole('grid', { name: 'PSMs' })).toBeFocused()
+  // the debug results keep no peaks
+  await expect(view.getByTestId('spectrum-missing')).toContainText('Spectrum not stored')
+  await page.keyboard.press('Escape')
+  await expect(view).toHaveCount(0)
+  await expect(panel).toBeVisible()
+  await expect(panel.getByTestId('panel-peptide').first().getByRole('button')).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(() => focusInside(panel)).toBe(true)
+  await page.getByRole('tab', { name: /^PSMs/ }).first().click()
+  await expect(page.getByRole('button', { name: /^Protein: / })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /^Peptide: / })).toHaveCount(0)
 })
 
 test('open in PSM table carries the filter', async ({ page }) => {
@@ -337,11 +350,14 @@ test('the PSMs tab of the panel lists the protein\'s PSMs, sorted and virtualize
   await expect(grid.getByRole('columnheader', { name: 'Scan' })).toHaveAttribute('title', /scan number when every spectrum has one.*natural order/)
   const q = grid.getByRole('columnheader', { name: 'q-value' })
   await expect(q).toHaveAttribute('aria-sort', 'ascending')
-  // a click opens the PSM
+  // a click opens the PSM in the PSM view, beside the PSMs of the protein
   const scan = (await grid.locator('[data-index="0"] [data-column="scan"]').textContent())!.trim()
   await grid.locator('[data-index="0"]').click()
-  await expect(page.getByRole('tab', { name: /^PSMs/ }).first()).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('results-table').locator('tr[aria-selected="true"] [data-column="scan"]')).toHaveText(scan)
+  await expect(page.getByTestId('psm-view').getByTestId('psm-breadcrumb')).toContainText(`scan ${scan}`)
+  await expect(page.getByRole('button', { name: new RegExp(`^Protein: ${first.accession}`) })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Peptide: / })).toHaveCount(0)
+  await expect(page.getByTestId('row-count')).toHaveText(new RegExp(`^${first.psms.toLocaleString('en-US')} of `))
+  await expect(page.getByTestId('results-table').locator('tr[aria-selected="true"]')).toHaveCount(1)
 })
 
 test('with the panel open, the filter field does not clip its placeholder', async ({ page }) => {

@@ -31,7 +31,8 @@
     onClose: () => void
     /** "Open in PSM table": the PSMs tab, filtered by this protein, or by one of its peptides. */
     onOpenPsmTable: (filter: { protein: number } | { peptide: number }) => void
-    onOpenPsm: (psm: number) => void
+    /** A PSM of the panel: of a peptide of the Peptides tab (`peptide`), or of the PSMs tab (null). */
+    onOpenPsm: (psm: number, peptide: number | null) => void
   } = $props()
 
   const m = $derived(view.model)
@@ -45,9 +46,9 @@
   const mateNames = $derived(mates.map((q) => parseAccession(pr.accession[q]).id))
   const fixedText = $derived(fixedMods.length > 0 ? fixedMods.join(', ') : 'none')
 
-  /** The peptide that is open in the Peptides tab (a row of `tables.peptides`): the strip shows it. */
-  let expanded = $state<number | null>(null)
-  const selectedSpans = $derived(detail.peptides.find((e) => e.peptide === expanded)?.spans ?? [])
+  // the peptide that is open in the Peptides tab (a row of `tables.peptides`): the strip shows it. The
+  // view keeps it, so that it is still open when the user comes back from a PSM
+  const selectedSpans = $derived(detail.peptides.find((e) => e.peptide === view.panelPeptide)?.spans ?? [])
 
   let heading = $state<HTMLElement | null>(null)
   /** Moves the keyboard focus into the panel (to its heading, which names the protein). */
@@ -55,10 +56,19 @@
     heading?.focus()
   }
 
+  let section = $state<HTMLElement | null>(null)
+  /** Moves the focus to the button of PSM `psm` if the panel lists it, else to the heading. */
+  export function focusPsm(psm: number): void {
+    const button = section?.querySelector<HTMLElement>(`[data-psm="${psm}"]`)
+    if (button) button.focus()
+    else heading?.focus()
+  }
+
   const badge = 'inline-flex h-5 items-center rounded-[5px] border bg-muted px-[7px] text-[11.5px] font-medium whitespace-nowrap'
 </script>
 
 <section
+  bind:this={section}
   aria-label="Protein {accession.id}"
   data-testid="protein-panel"
   class="flex h-full min-h-0 flex-none flex-col border-l bg-background px-[18px] pt-4 pb-3"
@@ -125,12 +135,12 @@
     </Tabs.Content>
     <Tabs.Content value="peptides" class="min-h-0 flex-1 overflow-auto">
       {#if view.panelTab === 'peptides'}
-        <ProteinPeptides {view} {detail} bind:expanded {onOpenPsm} {onOpenPsmTable} />
+        <ProteinPeptides {view} {detail} bind:expanded={view.panelPeptide} onOpenPsm={(psm) => onOpenPsm(psm, view.panelPeptide)} {onOpenPsmTable} />
       {/if}
     </Tabs.Content>
     <Tabs.Content value="psms" class="flex min-h-0 flex-1 flex-col">
       {#if view.panelTab === 'psms'}
-        <ProteinPsms {view} {detail} label="PSMs of {accession.id}" {onOpenPsm} />
+        <ProteinPsms {view} {detail} label="PSMs of {accession.id}" onOpenPsm={(psm) => onOpenPsm(psm, null)} />
       {/if}
     </Tabs.Content>
   </Tabs.Root>

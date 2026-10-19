@@ -2,7 +2,7 @@
   // The protein's peptides with their PSM counts per sample, by position: the first 100, then "Show 100
   // more" (a protein can have a thousand, and Peptides is the tab the panel opens with). A peptide (a
   // modified form of a sequence is a peptide of its own) expands in place to its PSMs, best q-value
-  // first: 10, then "Show 50 more" and "All n in the PSM table". One PSM opens in the PSM table. One
+  // first: 10, then "Show 50 more" and "All n in the PSM table". One PSM opens in the PSM view. One
   // peptide is open at a time: the strip above shows it. Focus follows what is revealed: the first new
   // peptide's expander, the last new PSM's button.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
@@ -133,7 +133,7 @@
       {formatCount(detail.peptides.length)} peptide forms of {formatCount(detail.sequences)} peptides: modified forms of a
       sequence are listed apart.
     {:else}
-      Click a peptide to list its PSMs, a PSM to open it in the PSM table.
+      Click a peptide to list its PSMs, a PSM to open its spectrum.
     {/if}
   </p>
   <div class="overflow-x-auto">
@@ -216,8 +216,9 @@
                   <button
                     type="button"
                     id="{uid}-psm-{i}"
+                    data-psm={i}
                     class="rounded-sm px-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    aria-label="Open the PSM of scan {spectrumLabel(ps.nativeId[i])} in the PSM table"
+                    aria-label="Open the PSM of scan {spectrumLabel(ps.nativeId[i])}"
                     onclick={() => onOpenPsm(i)}>PSM ›</button>
                 </td>
               </tr>

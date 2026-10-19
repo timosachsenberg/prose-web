@@ -1,10 +1,13 @@
 <script lang="ts">
   // The results of the open search: key figures, the tabs of the three levels, one filter row and a
-  // virtualized table per level, the column settings and "Export CSV · n rows".
+  // virtualized table per level, the column settings and "Export CSV · n rows". A protein opens its
+  // panel beside the Proteins table; a PSM opens the PSM view beside the PSM table, which then narrows
+  // to the list that "Previous" and "Next" go through.
   import ColumnsMenu from '$lib/components/results/ColumnsMenu.svelte'
   import FilterBar from '$lib/components/results/FilterBar.svelte'
   import KeyFigures from '$lib/components/results/KeyFigures.svelte'
   import ProteinPanel from '$lib/components/protein/ProteinPanel.svelte'
+  import PsmView from '$lib/components/psm/PsmView.svelte'
   import PeptidesTable from '$lib/components/results/PeptidesTable.svelte'
   import ProteinsEmpty from '$lib/components/results/ProteinsEmpty.svelte'
   import ProteinsTable from '$lib/components/results/ProteinsTable.svelte'
@@ -51,10 +54,13 @@
   // The protein panel stands beside the Proteins table (the key figures give way to it, as in the
   // mockup). It opens with focus inside and closes with focus back on the protein's row.
   const panelOpen = $derived(view !== null && view.tab === 'proteins' && view.panel !== null && !noProteins)
+  // The PSM view stands beside the PSM table, which narrows to a list (its filter row stays)
+  const psmOpen = $derived(view !== null && view.tab === 'psms' && view.psm !== null)
 
   let proteinsTable = $state<ProteinsTable | null>(null)
   let psmsTable = $state<PsmsTable | null>(null)
   let panel = $state<ProteinPanel | null>(null)
+  let psmView = $state<PsmView | null>(null)
 
   async function openProtein(protein: number) {
     view?.openProtein(protein)
@@ -77,11 +83,41 @@
     psmsTable?.focusRow(null)
   }
 
-  /** A PSM of the panel: until the PSM view (C9), the PSMs tab with the PSM selected, scrolled to and focused. */
-  async function openPsm(psm: number) {
+  /**
+   * A PSM of the PSM table opens the PSM view beside it. The focus stays in the table (now the list
+   * beside the view), so that the keyboard goes on through the PSMs; the view announces the PSM, and
+   * Tab leads into it.
+   */
+  function openPsm(psm: number) {
     view?.openPsm(psm)
+  }
+
+  /** A PSM of the protein panel: the PSM view beside the PSMs of its peptide (or protein). */
+  async function openPsmFromPanel(psm: number, peptide: number | null) {
+    view?.openPsmFromPanel(psm, peptide)
     await tick()
-    psmsTable?.focusRow(psm)
+    psmView?.focus()
+  }
+
+  /** Back from the PSM view: to the PSM table at the PSM, or to the protein panel at the PSM's button. */
+  async function closePsm() {
+    if (!view?.psm) return
+    const psm = view.psm.row
+    const origin = view.closePsm()
+    await tick()
+    if (origin?.kind === 'panel') panel?.focusPsm(psm)
+    else psmsTable?.focusRow(psm)
+  }
+
+  /** A breadcrumb of the PSM view: a tab, a protein's panel, or the PSM table of a peptide. */
+  async function breadcrumb(to: { tab: 'proteins' | 'peptides' } | { protein: number } | { peptide: number }) {
+    if (!view) return
+    view.closePsm()
+    if ('tab' in to) view.tab = to.tab
+    else if ('protein' in to) {
+      view.tab = 'proteins'
+      await openProtein(to.protein)
+    } else await openInPsmTable({ peptide: to.peptide })
   }
 
   // Escape closes the panel from the panel and from the Proteins table (menus and fields that use
@@ -101,14 +137,16 @@
 {#if view && figures}
   {@const level = view.level}
   <section data-testid="view-results" class="flex h-[calc(100vh-52px)] min-h-[480px]">
-    <div class="flex min-w-0 flex-1 flex-col gap-3 px-5 py-4">
+    <div
+      class="flex min-w-0 flex-col gap-3 py-4 {psmOpen ? 'flex-none border-r pr-3 pl-4' : 'flex-1 px-5'}"
+      style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>
       <h1 class="sr-only">Results</h1>
-      {#if !panelOpen}
+      {#if !panelOpen && !psmOpen}
         <KeyFigures {figures} proteinFdr={view.result.proteinFdr} proteinFdrApplied={view.result.outcome.summary.proteinFdrApplied} />
       {/if}
 
       <Tabs.Root bind:value={view.tab} class="flex min-h-0 flex-1 flex-col gap-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-2" class:hidden={psmOpen}>
           <Tabs.List>
             {#each tabs as t (t.value)}
               <Tabs.Trigger value={t.value} disabled={t.later !== undefined} title={t.later} class="px-3 text-[13px]">
@@ -145,9 +183,9 @@
             {:else if level.level === 'peptides'}
               <PeptidesTable {view} {level} />
             {:else}
-              <PsmsTable bind:this={psmsTable} {view} {level} />
+              <PsmsTable bind:this={psmsTable} {view} {level} onOpen={openPsm} compact={psmOpen} />
             {/if}
-            {#if level.level !== 'proteins'}
+            {#if level.level !== 'proteins' && !psmOpen}
               <p class="-mt-1 text-xs text-muted-foreground" data-testid="mod-legend">
                 {#if displaySettings.modMode === 'marked'}
                   <span class="legend-mod">M<sup>ox</sup></span> modified residue (hover for the modification) · fixed
@@ -164,8 +202,11 @@
     </div>
     {#if panelOpen && view.panel !== null}
       {#key view.panel}
-        <ProteinPanel bind:this={panel} {view} protein={view.panel} onClose={closePanel} onOpenPsmTable={openInPsmTable} onOpenPsm={openPsm} />
+        <ProteinPanel bind:this={panel} {view} protein={view.panel} onClose={closePanel} onOpenPsmTable={openInPsmTable} onOpenPsm={openPsmFromPanel} />
       {/key}
+    {/if}
+    {#if psmOpen}
+      <PsmView bind:this={psmView} {view} onClose={closePsm} onBreadcrumb={breadcrumb} />
     {/if}
   </section>
 {:else}

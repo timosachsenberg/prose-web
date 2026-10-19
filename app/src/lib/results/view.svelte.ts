@@ -4,6 +4,7 @@
 // same filter state (one cutoff). Kept outside the view, so that it survives a visit to New search.
 
 import { formatPercent, formatQ } from '../format/fdr'
+import type { PsmOptionState } from '../psm/psm'
 import type { OpenResult } from '../search/session.svelte'
 import { columnDef } from './columns'
 import { toCsv } from './csv'
@@ -17,6 +18,18 @@ export type Tab = 'overview' | 'proteins' | 'peptides' | 'psms' | 'samples' | 'q
 export type PanelTab = 'coverage' | 'peptides' | 'psms'
 export type SortDir = 'asc' | 'desc'
 export type SortState = { key: string; dir: SortDir }
+
+/**
+ * Where the open PSM came from: the PSM table, or the protein panel (a PSM of one of its peptides, or
+ * of its PSMs tab). From the panel the PSM table shows the PSMs of that protein (and peptide) while
+ * the PSM is open; `restore` is the table's filter state before, which it gets back when the PSM closes.
+ */
+export type PsmOrigin =
+  | { kind: 'psms' }
+  | { kind: 'panel'; protein: number; peptide: number | null; restore: FilterState }
+
+/** The PSM open in the PSM view (a row of `tables.psms`) and where it came from. */
+export type OpenPsm = { row: number; origin: PsmOrigin }
 
 /** How a level is sorted at first: proteins and peptides by PSMs, PSMs by q-value. */
 const defaultSort: Record<Level, SortState> = {
@@ -109,6 +122,18 @@ export class ResultsView {
   panel = $state<number | null>(null)
   /** The panel's tab: Peptides is the one the mockup opens with. */
   panelTab = $state<PanelTab>('peptides')
+  /** The peptide expanded in the panel's Peptides tab (a row of `tables.peptides`), or null. */
+  panelPeptide = $state<number | null>(null)
+
+  /**
+   * The PSM view: the PSM open beside the PSM table (which narrows to a list), or null. "Previous" and
+   * "Next" go through the rows of the PSM table as it is sorted and filtered.
+   */
+  psm = $state.raw<OpenPsm | null>(null)
+  /** The toggles of the PSM view's spectrum, kept from one PSM to the next. */
+  psmOptions = $state<PsmOptionState>({ ions: ['b', 'y'], charges: null, losses: null, precursor: false, bottom: null })
+  /** Saves the spectrum of the open PSM as SVG: set by the PSM view while it shows a spectrum (the Export menu's item). */
+  spectrumExporter: (() => void) | null = null
 
   readonly search: { openSearch: boolean }
 
@@ -166,6 +191,8 @@ export class ResultsView {
    */
   openProtein(p: number): void {
     if (!Number.isInteger(p) || p < 0 || p >= this.model.tables.proteins.count) return
+    this.psm = null
+    if (p !== this.panel) this.panelPeptide = null
     this.proteins.selected = p
     this.panel = p
   }
@@ -187,6 +214,7 @@ export class ResultsView {
     const index = 'protein' in what ? what.protein : what.peptide
     const count = 'protein' in what ? m.tables.proteins.count : m.tables.peptides.count
     if (!Number.isInteger(index) || index < 0 || index >= count) return
+    this.psm = null
     const contaminant = 'protein' in what ? m.protein.contaminant[index] : m.peptide.contaminant[index]
     const decoy = 'protein' in what ? m.tables.proteins.decoy[index] : m.tables.peptides.decoy[index]
     this.psms.filters = {
@@ -202,14 +230,14 @@ export class ResultsView {
   }
 
   /**
-   * Opens PSM `i` (a row of `tables.psms`). Until the PSM view arrives (C9), this shows the PSMs tab
-   * with the PSM selected; a filter that hides it is lifted (text, protein and peptide filters, the
-   * cutoff, contaminants or decoys as far as it is one). The table scrolls to the selected row.
+   * Opens PSM `i` (a row of `tables.psms`) in the PSM view, from the PSM table: the PSMs tab with the
+   * PSM selected. A filter that hides it is lifted (text, protein and peptide filters, the cutoff,
+   * contaminants or decoys as far as it is one), so that it is a row of the list beside the view.
    */
   openPsm(i: number): void {
+    if (!this.#isPsm(i)) return
     const m = this.model
     const ps = m.tables.psms
-    if (!Number.isInteger(i) || i < 0 || i >= ps.count) return
     const level = this.psms
     if (!level.kept.includes(i)) {
       const f = level.filters
@@ -225,6 +253,75 @@ export class ResultsView {
     }
     level.selected = i
     this.tab = 'psms'
+    // from the PSM view itself (the list beside it), the PSM keeps where it came from
+    this.psm = { row: i, origin: this.psm?.origin ?? { kind: 'psms' } }
+  }
+
+  /**
+   * Opens PSM `i` from the protein panel: a PSM of the open protein's peptide `peptide` (the Peptides
+   * tab), or of the protein (`peptide` null: the PSMs tab). The list beside the view is the PSM table
+   * with the protein and the peptide as filters (as "Open in PSM table" makes it), at the search's
+   * cutoff; the table gets its filters back when the PSM closes.
+   */
+  openPsmFromPanel(i: number, peptide: number | null): void {
+    const protein = this.panel
+    if (!this.#isPsm(i) || protein === null) return
+    const m = this.model
+    const ps = m.tables.psms
+    const level = this.psms
+    const restore = this.psm?.origin.kind === 'panel' ? this.psm.origin.restore : { ...level.filters }
+    level.filters = {
+      ...restore,
+      text: '',
+      maxQ: m.psmFdr,
+      proteinFilter: protein,
+      peptideFilter: peptide ?? undefined,
+      hideContaminants: m.peptide.contaminant[ps.peptide[i]] ? false : restore.hideContaminants,
+      showDecoys: ps.decoy[i] ? true : restore.showDecoys,
+    }
+    level.selected = i
+    this.tab = 'psms'
+    this.psm = { row: i, origin: { kind: 'panel', protein, peptide, restore } }
+  }
+
+  /**
+   * Closes the PSM view and says where it came from. Back to the PSM table, the PSM stays selected;
+   * back to the protein panel, the PSM table gets its filters back and the Proteins tab shows.
+   */
+  closePsm(): PsmOrigin | null {
+    const open = this.psm
+    if (!open) return null
+    this.psm = null
+    if (open.origin.kind === 'panel') {
+      this.psms.filters = open.origin.restore
+      this.tab = 'proteins'
+    }
+    return open.origin
+  }
+
+  /** The PSMs before and after the open one in the PSM table as sorted and filtered (null: none). */
+  get psmNeighbours(): { prev: number | null; next: number | null; position: number; count: number } {
+    const rows = this.psms.rows
+    const position = this.psm ? rows.indexOf(this.psm.row) : -1
+    return {
+      prev: position > 0 ? rows[position - 1] : null,
+      next: position >= 0 && position + 1 < rows.length ? rows[position + 1] : null,
+      position,
+      count: rows.length,
+    }
+  }
+
+  /** Opens the PSM before (-1) or after (1) the open one, if there is one. */
+  stepPsm(direction: 1 | -1): void {
+    const { prev, next } = this.psmNeighbours
+    const target = direction < 0 ? prev : next
+    if (target === null || !this.psm) return
+    this.psms.selected = target
+    this.psm = { row: target, origin: this.psm.origin }
+  }
+
+  #isPsm(i: number): boolean {
+    return Number.isInteger(i) && i >= 0 && i < this.model.tables.psms.count
   }
 
   /** The level of the active tab, or null on Overview, Samples and QC. */

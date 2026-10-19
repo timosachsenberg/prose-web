@@ -271,3 +271,96 @@ describe('the protein panel', () => {
     expect(view.psms.selected).toBe(8)
   })
 })
+
+describe('the PSM view', () => {
+  it('opens a PSM of the PSM table; Prev and Next follow the rows of the table, as sorted and filtered', () => {
+    const view = resultsViewFor(result(1, 1))
+    // by q-value; 7 (a contaminant) and 8 (a decoy) are hidden
+    expect(Array.from(view.psms.rows)).toEqual([1, 3, 0, 4, 5, 6, 2])
+    view.openPsm(3)
+    expect(view.psm).toEqual({ row: 3, origin: { kind: 'psms' } })
+    expect(view.tab).toBe('psms')
+    expect(view.psms.selected).toBe(3)
+    expect(view.psmNeighbours).toEqual({ prev: 1, next: 0, position: 1, count: 7 })
+    view.stepPsm(1)
+    expect(view.psm?.row).toBe(0)
+    expect(view.psms.selected).toBe(0)
+    view.stepPsm(-1)
+    view.stepPsm(-1)
+    view.stepPsm(-1)
+    expect(view.psm?.row).toBe(1)
+    expect(view.psmNeighbours.prev).toBeNull()
+    view.stepPsm(-1) // nothing before the first
+    expect(view.psm?.row).toBe(1)
+
+    // another sort, another order
+    view.psms.sortBy('score') // descending: 50 45 42 41 40 40 30
+    expect(Array.from(view.psms.rows)).toEqual([1, 3, 4, 5, 0, 6, 2])
+    view.openPsm(4)
+    expect(view.psmNeighbours).toMatchObject({ prev: 3, next: 5 })
+    // a filter that hides the PSM: it stays open, without neighbours
+    view.psms.filters.text = 'TFISLL'
+    expect(view.psm?.row).toBe(4)
+    expect(view.psmNeighbours).toEqual({ prev: null, next: null, position: -1, count: 1 })
+
+    expect(view.closePsm()).toEqual({ kind: 'psms' })
+    expect(view.psm).toBeNull()
+    expect(view.tab).toBe('psms')
+    expect(view.psms.selected).toBe(4)
+  })
+
+  it('opens a PSM of the protein panel among the PSMs of its peptide, and restores the PSM table when it closes', () => {
+    const view = resultsViewFor(result(1, 1))
+    view.openProtein(0)
+    view.panelPeptide = 0
+    view.psms.filters.text = 'zzz'
+    view.psms.filters.maxQ = 0.005
+    const before = { ...view.psms.filters }
+
+    view.openPsmFromPanel(0, 0) // PSM 0 of peptide 0 (M[Oxidation]KWVTF of ALBU)
+    expect(view.tab).toBe('psms')
+    expect(view.psm).toMatchObject({ row: 0, origin: { kind: 'panel', protein: 0, peptide: 0 } })
+    expect(view.psms.filters).toMatchObject({ proteinFilter: 0, peptideFilter: 0, text: '', maxQ: 1 })
+    expect(Array.from(view.psms.rows)).toEqual([1, 0, 2])
+    expect(view.psmNeighbours).toMatchObject({ prev: 1, next: 2 })
+
+    expect(view.closePsm()?.kind).toBe('panel')
+    expect(view.tab).toBe('proteins')
+    expect(view.panel).toBe(0)
+    expect(view.panelPeptide).toBe(0) // the panel shows the peptide as it was
+    expect(view.psms.filters).toEqual(before)
+
+    // from the panel's PSMs tab: all PSMs of the protein
+    view.openPsmFromPanel(3, null) // TFISLL of ALBU
+    expect(view.psms.filters).toMatchObject({ proteinFilter: 0, peptideFilter: undefined })
+    expect(Array.from(view.psms.rows)).toEqual([1, 3, 0, 2])
+    view.closePsm()
+
+    // another protein forgets the open peptide
+    view.openProtein(1)
+    expect(view.panelPeptide).toBeNull()
+  })
+
+  it('closes when the user goes elsewhere: a protein, a filter of the PSM table', () => {
+    const view = resultsViewFor(result(1, 1))
+    view.openPsm(0)
+    view.openProtein(1)
+    expect(view.psm).toBeNull()
+    view.openPsm(0)
+    view.filterBy({ peptide: 2 })
+    expect(view.psm).toBeNull()
+    // what is no PSM opens nothing
+    view.openPsm(99)
+    view.openPsmFromPanel(-1, null)
+    expect(view.psm).toBeNull()
+  })
+
+  it('keeps the options of the spectrum from one PSM to the next', () => {
+    const view = resultsViewFor(result(1, 1))
+    expect(view.psmOptions).toEqual({ ions: ['b', 'y'], charges: null, losses: null, precursor: false, bottom: null })
+    view.openPsm(1)
+    view.psmOptions.ions = ['a', 'b', 'y']
+    view.stepPsm(1)
+    expect(view.psmOptions.ions).toEqual(['a', 'b', 'y'])
+  })
+})

@@ -1,6 +1,8 @@
 <script lang="ts">
   // The PSMs of the open result (the best hit of each spectrum). An open search's mass shift above
-  // 0.05 Da goes before the sequence as an unlocalized ProForma mass ("[+15.9949]?").
+  // 0.05 Da goes before the sequence as an unlocalized ProForma mass ("[+15.9949]?"). A row opens the
+  // PSM view (`onOpen`); while it is open, the table is the list beside it (`compact`): peptide,
+  // charge, sample, q-value and precursor error, as in the mockup.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { massShift, peptideView } from '$lib/format/peptide'
   import { baseName } from '$lib/results/model'
@@ -10,7 +12,12 @@
   import DataTable from './DataTable.svelte'
   import ProteinRefs from './ProteinRefs.svelte'
 
-  let { view, level }: { view: ResultsView; level: LevelState } = $props()
+  let {
+    view,
+    level,
+    onOpen,
+    compact = false,
+  }: { view: ResultsView; level: LevelState; onOpen: (psm: number) => void; compact?: boolean } = $props()
 
   const m = $derived(view.model)
   const ps = $derived(m.tables.psms)
@@ -55,7 +62,23 @@
     }
   }
 
-  const columns = $derived(tableColumns(level.visible, cells))
+  /** The list beside the PSM view: these columns, narrower. */
+  const compactColumns: Record<string, { width: number | 'auto'; header?: string; title?: string }> = {
+    peptide: { width: 'auto' },
+    charge: { width: 32 },
+    sample: { width: 74 },
+    qValue: { width: 60, header: 'q' },
+    precursorError: { width: 58, header: 'Δ ppm', title: 'Precursor mass error (ppm)' },
+  }
+
+  const columns = $derived.by(() => {
+    if (!compact) return tableColumns(level.visible, cells)
+    const specs = Object.entries(compactColumns).flatMap(([id, narrow]) => {
+      const spec = level.specs.find((s) => s.id === id)
+      return spec ? [{ ...spec, ...narrow }] : []
+    })
+    return tableColumns(specs, (id) => (id === 'precursorError' ? { cell: (i: number) => signed(ps.precursorErrorPpm[i], 1) } : cells(id)))
+  })
 
   let table = $state<DataTable | null>(null)
   /** Makes the row the grid's active one, scrolls it into view and gives the grid the focus. */
@@ -82,6 +105,7 @@
   {columns}
   sort={level.effectiveSort}
   onSort={(key) => level.sortBy(key)}
-  onRowClick={(i) => (level.selected = i)}
+  onRowClick={onOpen}
   selected={level.selected}
+  autoMinWidth={compact ? 80 : 220}
   empty={level.emptyText} />
