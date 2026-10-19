@@ -6,6 +6,7 @@ import type { DesignResolution } from '../design/model'
 import { engineClient, startEngine } from '../engine/app-engine.svelte'
 import { EngineError, type EngineInfo, type SearchOutcome, type SearchProgress, type SearchRequest } from '../engine/client'
 import { RELOAD } from '../engine/protocol'
+import { releaseResultsView } from '../results/view.svelte'
 import { describeFailure, type Failure } from './failure'
 
 /** A finished search, open in this session (History keeps them later). */
@@ -24,6 +25,8 @@ export type OpenResult = {
     parameters: Record<string, unknown>
     /** The fixed modifications of the search (OpenMS names), which the tables do not mark. */
     fixedMods: string[]
+    /** The FASTA's file name. */
+    database: string
     rescore: boolean
     peptdeep: boolean
     contaminants: boolean
@@ -101,6 +104,7 @@ export const openResult = {
 /** Opens a result that did not come from this session's engine (the debug results; History later). Returns its id. */
 export function openStoredResult(result: Omit<OpenResult, 'id' | 'createdAt' | 'engineResult'>): string {
   const id = newId()
+  releaseResultsView()
   open = { ...result, id, createdAt: new Date().toISOString(), engineResult: false }
   return id
 }
@@ -177,6 +181,7 @@ export async function runSearch(
     const outcome = await engineClient().search(request, onProgress)
     if (id !== runId) return null
     const resultId = newId()
+    releaseResultsView() // the previous result's view, model and caches
     open = { ...meta, id: resultId, createdAt: new Date().toISOString(), outcome, engineResult: true }
     searchRun.status = 'done'
     return resultId

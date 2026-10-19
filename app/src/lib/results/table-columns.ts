@@ -21,6 +21,8 @@ export type ColumnSpec = {
   csv?: string[]
   /** A tooltip of the header (what the numbers count). */
   title?: string
+  /** The sort button's accessible name when the header is not enough (sample "1" is "control 1"). */
+  ariaLabel?: string
   /** The Columns menu can hide it; 'hidden': hidden until shown. */
   optional?: 'shown' | 'hidden'
 }
@@ -37,7 +39,7 @@ function col(id: string, header: string, width: number | 'auto', align: 'left' |
 /** The per-sample count columns, in the order of the model, grouped by condition. */
 function sampleSpecs(m: ResultModel): ColumnSpec[] {
   return m.samples.map((s) =>
-    col(`sample:${s.index}`, sampleHeader(s), 56, 'right', { group: s.condition ?? undefined, title: s.label }),
+    col(`sample:${s.index}`, sampleHeader(s), 56, 'right', { group: s.condition ?? undefined, title: s.label, ariaLabel: s.label }),
   )
 }
 
@@ -52,7 +54,7 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     const atSearch = `At the search PSM FDR (${formatPercent(m.psmFdr)}, ${formatQ(m.psmFdr)})`
     return [
       col('accession', 'Accession', 160, 'left'),
-      col('gene', 'Gene', 84, 'left', { sortKey: undefined, csv: undefined, optional: 'shown' }),
+      col('gene', 'Gene', 84, 'left', { optional: 'shown' }),
       col('description', 'Description', 'auto', 'left'),
       col('coverage', 'Coverage', 112, 'left', { title: `Residues covered by peptides with PSMs at the search PSM FDR` }),
       col('peptides', 'Peptides', 90, 'right', { title: atSearch }),

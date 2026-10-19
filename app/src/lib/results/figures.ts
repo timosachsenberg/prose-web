@@ -7,12 +7,23 @@ import type { Level, ResultModel } from './model'
 
 /**
  * The rows of a level at the search's cutoff (protein FDR for proteins, PSM FDR for peptides and
- * PSMs), contaminants included, decoys only `withDecoys`.
+ * PSMs), contaminants included, decoys only `withDecoys`. Computed once per model; do not modify.
  */
 export function levelRows(m: ResultModel, level: Level, withDecoys: boolean): Uint32Array {
-  const maxQ = level === 'proteins' ? m.proteinFdr : m.psmFdr
-  return applyFilters(m, level, { ...defaultFilters(), maxQ, showDecoys: withDecoys })
+  let cache = levelCache.get(m)
+  if (!cache) levelCache.set(m, (cache = new Map()))
+  const key = `${level}${withDecoys ? '+decoys' : ''}`
+  let rows = cache.get(key)
+  if (!rows) {
+    const maxQ = level === 'proteins' ? m.proteinFdr : m.psmFdr
+    rows = applyFilters(m, level, { ...defaultFilters(), maxQ, showDecoys: withDecoys })
+    cache.set(key, rows)
+  }
+  return rows
 }
+
+/** The rows of `levelRows`, once per model (the key figures, the tabs and "n of total" share them). */
+const levelCache = new WeakMap<ResultModel, Map<string, Uint32Array>>()
 
 /** The number of `levelRows`. */
 export function levelTotal(m: ResultModel, level: Level, withDecoys: boolean): number {
@@ -64,4 +75,13 @@ export function keyFigures(m: ResultModel, summary: ProSEMultiSummary): KeyFigur
     samples: new Set(m.columnSample).size,
     conditions: m.design.conditions.length,
   }
+}
+
+/**
+ * The target proteins a protein FDR needs at least. Picked-protein q-values are (D + 1) / (T + 1)
+ * (OpenMS' conservative estimate), so even without decoys a protein's q-value is at least 1/(T + 1),
+ * T being the target proteins that score at least as well: a cutoff f needs T ≥ 1/f − 1 (99 at 1 %).
+ */
+export function proteinsNeeded(fdr: number): number {
+  return Math.max(0, Math.ceil(1 / fdr - 1 - 1e-9))
 }

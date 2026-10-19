@@ -17,8 +17,12 @@
     title?: string
     /** The cell's tooltip (e.g. the full text of a truncated cell). */
     cellTitle?: (row: number) => string | undefined
-    /** The cell is a placeholder (a zero count, a missing value): shown muted. */
-    muted?: (row: number) => boolean
+    /** The cell is a placeholder ("–" for a zero count or a missing value): shown faint. */
+    placeholder?: (row: number) => boolean
+    /** The cell is data that matters less (e.g. a mass shift that counts as none): shown muted. */
+    secondary?: (row: number) => boolean
+    /** The sort button's accessible name when the header alone is not enough (sample "1" → "control 1"). */
+    ariaLabel?: string
     /** Extra classes of the cells. */
     class?: string
   }
@@ -27,12 +31,14 @@
 </script>
 
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { formatCount } from '$lib/results/display'
-  import { keyTarget, scrollToShow, visibleRange } from '$lib/results/virtual'
+  import { clampInto, keyTarget, rowsInView, scrollToShow, visibleRange } from '$lib/results/virtual'
   import { cn } from '$lib/utils'
   import ArrowDown from '@lucide/svelte/icons/arrow-down'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
+
+  // Keyboard model: the scroll box is the grid and the table's one tab stop; the active row is named
+  // by aria-activedescendant. The active row is always one in view: when the mouse scrolls it away,
+  // it moves to the nearest row in view, so that what Enter selects is what the user sees.
 
   let {
     rows,
@@ -59,16 +65,19 @@
   } = $props()
 
   const overscan = 3
+  const uid = $props.id()
+  const rowId = (index: number) => `${uid}-row-${index}`
 
   let box = $state<HTMLDivElement | null>(null)
   let scrollTop = $state(0)
   let height = $state(600)
   let headerHeight = $state(33)
-  /** The position (not the row value) of the row that takes the focus: one tab stop for the table. */
-  let focusIndex = $state(0)
+  /** The position (not the row value) of the active row. */
+  let active = $state(0)
 
-  const range = $derived(visibleRange(scrollTop, height, rowHeight, rows.length, overscan))
+  const range = $derived(visibleRange(scrollTop, Math.max(0, height - headerHeight), rowHeight, rows.length, overscan))
   const slice = $derived(rows.subarray(range.start, range.end))
+  const inView = $derived(rowsInView(scrollTop, height, rowHeight, headerHeight, rows.length))
 
   const hasGroups = $derived(columns.some((c) => c.group !== undefined))
   const headerRows = $derived(hasGroups ? 2 : 1)
@@ -103,46 +112,58 @@
 
   const minWidth = $derived(columns.reduce((w, c) => w + (c.width === 'auto' ? 220 : c.width), 0))
 
-  // new rows (filtered or sorted): back to the top, and the focus to the first row
+  // new rows (filtered or sorted): back to the top, the first row active
   let lastRows: Uint32Array | null = null
   $effect.pre(() => {
     if (rows === lastRows) return
     lastRows = rows
-    focusIndex = 0
+    active = 0
     scrollTop = 0
     if (box) box.scrollTop = 0
   })
 
   function onscroll() {
-    if (box) scrollTop = box.scrollTop
+    if (!box) return
+    scrollTop = box.scrollTop
+    const view = rowsInView(scrollTop, box.clientHeight, rowHeight, headerHeight, rows.length)
+    if (view) active = clampInto(active, view)
   }
 
-  async function focusRow(index: number) {
-    focusIndex = index
+  function onfocus() {
+    if (inView) active = clampInto(active, inView)
+  }
+
+  /** Makes row `index` active and scrolls it into view. */
+  function activate(index: number) {
+    active = index
     if (!box) return
     const top = scrollToShow(index, box.scrollTop, box.clientHeight, rowHeight, headerHeight)
     if (top !== box.scrollTop) {
       box.scrollTop = top
       scrollTop = top
     }
-    await tick()
-    box.querySelector<HTMLElement>(`tr[data-index="${index}"]`)?.focus({ preventScroll: true })
   }
 
   function onkeydown(event: KeyboardEvent) {
-    const tr = (event.target as HTMLElement).closest<HTMLElement>('tr[data-index]')
-    if (!tr) return
-    const index = Number(tr.dataset.index)
+    // keys of the sort buttons in the header are theirs
+    if (event.target !== box || rows.length === 0) return
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      onRowClick(rows[index])
+      activate(active)
+      onRowClick(rows[active])
       return
     }
     const page = Math.max(1, Math.floor((height - headerHeight) / rowHeight) - 1)
-    const target = keyTarget(event.key, index, rows.length, page)
+    const target = keyTarget(event.key, active, rows.length, page)
     if (target === null) return
     event.preventDefault()
-    void focusRow(target)
+    activate(target)
+  }
+
+  function click(index: number, row: number) {
+    active = index
+    onRowClick(row)
+    box?.focus({ preventScroll: true })
   }
 
   function ariaSort(c: Column): 'ascending' | 'descending' | 'none' | undefined {
@@ -155,6 +176,7 @@
 {#snippet headerCell(c: Column, i: number, rowspan: number)}
   {@const order = ariaSort(c)}
   <th
+    role="columnheader"
     scope="col"
     {rowspan}
     aria-sort={order}
@@ -171,6 +193,7 @@
           'inline-flex max-w-full items-center gap-1 rounded-sm py-0.5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
           order !== 'none' && 'text-foreground',
         )}
+        aria-label={c.ariaLabel}
         onclick={() => onSort(c.sortKey!)}>
         <span class="truncate">{c.header}</span>
         {#if order === 'descending'}
@@ -189,14 +212,21 @@
   bind:this={box}
   bind:clientHeight={height}
   {onscroll}
-  class="relative min-h-0 flex-1 overflow-auto rounded-lg border bg-background"
+  {onkeydown}
+  {onfocus}
+  role="grid"
+  tabindex="0"
+  aria-label={label}
+  aria-readonly="true"
+  aria-rowcount={rows.length + headerRows}
+  aria-colcount={columns.length}
+  aria-activedescendant={rows.length > 0 ? rowId(active) : undefined}
+  class="grid-box relative min-h-0 flex-1 overflow-auto rounded-lg border bg-background outline-none focus-visible:border-ring"
   data-testid="table-scroll">
+  <!-- the box is the grid, the table only lays it out: its parts carry their grid roles explicitly
+       (the svelte-ignore comments below), since a presentational table's parts lose their own -->
   <table
-    role="grid"
-    aria-readonly="true"
-    aria-label={label}
-    aria-rowcount={rows.length + headerRows}
-    aria-colcount={columns.length}
+    role="presentation"
     class="w-full table-fixed border-separate border-spacing-0 tabular-nums"
     style:min-width="{minWidth}px">
     <colgroup>
@@ -204,9 +234,11 @@
         <col style:width={c.width === 'auto' ? undefined : `${c.width}px`} />
       {/each}
     </colgroup>
-    <thead class="sticky top-0 z-10 bg-background" bind:offsetHeight={headerHeight}>
+    <!-- svelte-ignore a11y_no_redundant_roles -->
+    <thead role="rowgroup" class="sticky top-0 z-10 bg-background" bind:offsetHeight={headerHeight}>
       {#if hasGroups}
-        <tr aria-rowindex={1}>
+        <!-- svelte-ignore a11y_no_redundant_roles -->
+        <tr role="row" aria-rowindex={1}>
           {#each groupCells as cell, g (g)}
             {#if cell.group === undefined}
               {@const i = columns.indexOf(cell.columns[0])}
@@ -214,6 +246,7 @@
             {:else}
               {@const i = columns.indexOf(cell.columns[0])}
               <th
+                role="columnheader"
                 scope="colgroup"
                 colspan={cell.columns.length}
                 class={cn(
@@ -224,47 +257,56 @@
             {/if}
           {/each}
         </tr>
-        <tr aria-rowindex={2}>
+        <!-- svelte-ignore a11y_no_redundant_roles -->
+        <tr role="row" aria-rowindex={2}>
           {#each columns as c, i (c.id)}
             {#if c.group !== undefined}{@render headerCell(c, i, 1)}{/if}
           {/each}
         </tr>
       {:else}
-        <tr aria-rowindex={1}>
+        <!-- svelte-ignore a11y_no_redundant_roles -->
+        <tr role="row" aria-rowindex={1}>
           {#each columns as c, i (c.id)}{@render headerCell(c, i, 1)}{/each}
         </tr>
       {/if}
     </thead>
-    <tbody>
+    <!-- svelte-ignore a11y_no_redundant_roles -->
+    <tbody role="rowgroup">
       {#if range.start > 0}
         <tr aria-hidden="true" style:height="{range.start * rowHeight}px"><td colspan={columns.length}></td></tr>
       {/if}
-      {#each slice as row, j}
+      <!-- keyed: a row element always shows the same row (the active descendant's id moves with it) -->
+      {#each slice as row, j (row)}
         {@const index = range.start + j}
+        <!-- svelte-ignore a11y_no_redundant_roles -->
         <tr
+          role="row"
+          id={rowId(index)}
           data-index={index}
           aria-rowindex={headerRows + index + 1}
           aria-selected={row === selected}
-          tabindex={index === focusIndex ? 0 : -1}
           class="row"
           class:selected={row === selected}
+          class:active={index === active}
           style:height="{rowHeight}px"
-          onclick={() => {
-            focusIndex = index
-            onRowClick(row)
-          }}
-          onfocus={() => (focusIndex = index)}
-          {onkeydown}>
+          onclick={() => click(index, row)}>
           {#each columns as c, i (c.id)}
             {@const value = c.cell(row)}
-            <td data-column={c.id} title={c.cellTitle?.(row)} class={cellClass[i]} class:muted={c.muted?.(row)}>
+            <td
+              role="gridcell"
+              data-column={c.id}
+              title={c.cellTitle?.(row)}
+              class={cellClass[i]}
+              class:placeholder={c.placeholder?.(row)}
+              class:secondary={c.secondary?.(row)}>
               {#if typeof value === 'string'}{value}{:else}{@render value(row)}{/if}
             </td>
           {/each}
         </tr>
       {/each}
       {#if range.end < rows.length}
-        <tr aria-hidden="true" style:height="{(rows.length - range.end) * rowHeight}px"><td colspan={columns.length}></td></tr>
+        <tr aria-hidden="true" style:height="{(rows.length - range.end) * rowHeight}px"
+          ><td colspan={columns.length}></td></tr>
       {/if}
     </tbody>
   </table>
@@ -276,20 +318,24 @@
 <style>
   .row {
     cursor: default;
-    outline: none;
   }
   .row:hover {
     background: color-mix(in oklab, var(--color-muted) 50%, transparent);
-  }
-  .row:focus-visible {
-    background: color-mix(in oklab, var(--color-muted) 60%, transparent);
-    box-shadow: inset 2px 0 0 var(--color-ring);
   }
   .row.selected,
   .row.selected:hover {
     background: var(--color-muted);
   }
-  .muted {
+  /* the active row, while the grid has the keyboard focus */
+  .grid-box:focus-visible .row.active {
+    background: color-mix(in oklab, var(--color-muted) 70%, transparent);
+    box-shadow: inset 3px 0 0 var(--color-ring);
+  }
+  /* a placeholder ("–" for zero or missing) is faint; data that matters less is muted, but readable */
+  .placeholder {
     color: #d4d4d8;
+  }
+  .secondary {
+    color: var(--color-muted-foreground);
   }
 </style>

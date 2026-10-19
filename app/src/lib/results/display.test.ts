@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCount, formatQValue, formatScore, parseAccession, parseDescription, resultName, sampleHeader } from './display'
+import { formatCount, formatQValue, formatScore, parseAccession, parseDescription, resultName, sampleHeader, spectrumLabel } from './display'
 import type { ResultSample } from './model'
 
 describe('parseAccession', () => {
@@ -76,5 +76,16 @@ describe('resultName', () => {
     expect(resultName(['/input/0/a b (1).mzML'])).toBe('a_b_1')
     expect(resultName(['control_1.mzML', 'EGF_1.mzML'])).toBe('prose-results')
     expect(resultName([])).toBe('prose-results')
+  })
+})
+
+describe('spectrumLabel', () => {
+  it('shows the scan, spectrum or index number of a native ID', () => {
+    expect(spectrumLabel('controllerType=0 controllerNumber=1 scan=4711')).toBe('4711')
+    expect(spectrumLabel('spectrum=2')).toBe('2')
+    expect(spectrumLabel('index=17')).toBe('17')
+    expect(spectrumLabel('frame=5 scan=12')).toBe('12')
+    expect(spectrumLabel('merged=3 frame=5')).toBe('merged=3 frame=5')
+    expect(spectrumLabel('scan=12a')).toBe('scan=12a')
   })
 })

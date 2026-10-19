@@ -18,10 +18,13 @@ describe('columnSpecs', () => {
       'sample:0', 'sample:1', 'foundIn', 'qValue', 'score', 'length', 'group',
     ])
     const samples = specs.filter((s) => s.id.startsWith('sample:'))
-    expect(samples.map((s) => [s.group, s.header, s.sortKey, s.csv])).toEqual([
-      ['control', '1', 'sample:0', ['sample:0']],
-      ['EGF', '1', 'sample:1', ['sample:1']],
+    expect(samples.map((s) => [s.group, s.header, s.ariaLabel, s.sortKey, s.csv])).toEqual([
+      ['control', '1', 'control 1', 'sample:0', ['sample:0']],
+      ['EGF', '1', 'EGF 1', 'sample:1', ['sample:1']],
     ])
+    // what shows is what the CSV writes: the gene too
+    const gene = specs.find((s) => s.id === 'gene')!
+    expect([gene.sortKey, gene.csv]).toEqual(['gene', ['gene']])
   })
 
   it('says that the protein counts are at the search PSM FDR', () => {
@@ -82,6 +85,8 @@ describe('visibleSpecs and csvColumns', () => {
     expect(csvColumns(visibleSpecs(specs, ['gene', 'qValue', 'score', 'length', 'group']))).toEqual([
       'accession', 'description', 'coverage', 'peptides', 'psms', 'sample:0', 'sample:1', 'foundIn',
     ])
+    // every visible column is exported
+    expect(csvColumns(visibleSpecs(specs, []))).toEqual(ids(specs))
   })
 
   it('write what a PSM column shows: the scan as the native ID, RT in seconds, the file', () => {

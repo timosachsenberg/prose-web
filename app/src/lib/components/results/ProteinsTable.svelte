@@ -18,13 +18,13 @@
     const s = sampleIndex(id)
     if (s >= 0) {
       const count = (p: number) => m.protein.perSample[p * nS + s]
-      return { cell: (p) => (count(p) === 0 ? '–' : formatCount(count(p))), muted: (p) => count(p) === 0 }
+      return { cell: (p) => (count(p) === 0 ? '–' : formatCount(count(p))), placeholder: (p) => count(p) === 0 }
     }
     switch (id) {
       case 'accession':
         return { cell: () => accessionCell, cellTitle: (p) => pr.accession[p] }
       case 'gene':
-        return { cell: (p) => parseDescription(pr.description[p]).gene ?? '–', muted: (p) => parseDescription(pr.description[p]).gene === null }
+        return { cell: (p) => parseDescription(pr.description[p]).gene ?? '–', placeholder: (p) => parseDescription(pr.description[p]).gene === null }
       case 'description':
         return { cell: (p) => parseDescription(pr.description[p]).name, cellTitle: (p) => pr.description[p] }
       case 'coverage':

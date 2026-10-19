@@ -129,6 +129,20 @@ describe('toCsv', () => {
     expect(lines(toCsv(m, 'psms', rows(0), ['score', 'deltaMass', 'peptide'], all))).toEqual(['ln(hyperscore),Delta mass (Da),Peptide', '-12.5,-0.002,AAAAAK'])
   })
 
+  it('writes and sorts the gene of a UniProt description', () => {
+    const tables = sampleTables()
+    tables.proteins.description[0] = 'Serum albumin OS=Homo sapiens OX=9606 GN=ALB PE=1 SV=2'
+    tables.proteins.description[1] = 'Alpha-1-antitrypsin OS=Homo sapiens GN=SERPINA1'
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    expect(lines(toCsv(m, 'proteins', rows(0, 1, 2), ['accession', 'gene'], all))).toEqual([
+      'Accession,Gene',
+      'sp|P02768|ALBU_HUMAN,ALB',
+      'sp|P01009|A1AT_HUMAN,SERPINA1',
+      'CON__P00761,',
+    ])
+    expect(sortRows(m, 'proteins', rows(0, 1, 2), 'gene', 'desc', all)).toEqual(rows(1, 0, 2))
+  })
+
   it('writes the file of a PSM without its directories', () => {
     const tables = sampleTables()
     tables.files = ['/input/0/ctrl_a.mzML', 'C:\\data\\egf_a.mzML']

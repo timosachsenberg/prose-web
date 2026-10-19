@@ -21,7 +21,7 @@
     const s = sampleIndex(id)
     if (s >= 0) {
       const count = (k: number) => counts.perSample[k * nS + s]
-      return { cell: (k) => (count(k) === 0 ? '–' : formatCount(count(k))), muted: (k) => count(k) === 0 }
+      return { cell: (k) => (count(k) === 0 ? '–' : formatCount(count(k))), placeholder: (k) => count(k) === 0 }
     }
     switch (id) {
       case 'peptide':

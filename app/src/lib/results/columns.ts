@@ -7,6 +7,7 @@
 // (see `peptideCounts`): the getters get the counts to read as their third argument.
 
 import { psmProforma } from '../format/peptide'
+import { parseDescription } from './display'
 import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
 
 type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
@@ -34,6 +35,8 @@ const accessions = (m: ResultModel, peptide: number) =>
 
 const proteins: Record<string, ColumnDef> = {
   accession: str('Accession', (m, p) => m.tables.proteins.accession[p]),
+  // the gene name (GN=) of a UniProt-style description; '' without one
+  gene: str('Gene', (m, p) => parseDescription(m.tables.proteins.description[p]).gene ?? ''),
   description: str('Description', (m, p) => m.tables.proteins.description[p]),
   // the best PSM score; the header names it (see `columnDef`)
   score: num('Score', (m, p) => m.tables.proteins.score[p]),

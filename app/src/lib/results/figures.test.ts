@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ProSEMultiSummary } from '../engine/openms-types'
 import { sampleDesign, sampleTables } from './fixtures'
-import { keyFigures, levelTotal } from './figures'
+import { keyFigures, levelRows, levelTotal, proteinsNeeded } from './figures'
 import { buildModel } from './model'
 
 const summary = (ms2: number[], proteinFdrApplied = true) =>
@@ -51,5 +51,26 @@ describe('levelTotal', () => {
     expect(levelTotal(m, 'proteins', true)).toBe(4)
     expect(levelTotal(m, 'psms', false)).toBe(7)
     expect(levelTotal(m, 'peptides', true)).toBe(4) // the decoy peptide's PSM is at q 0.03
+  })
+})
+
+describe('levelRows', () => {
+  it('is computed once per model, level and decoy setting', () => {
+    const m = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 1 })
+    const psms = levelRows(m, 'psms', false)
+    expect(levelRows(m, 'psms', false)).toBe(psms)
+    expect(levelRows(m, 'psms', true)).not.toBe(psms)
+    const other = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 1 })
+    expect(levelRows(other, 'psms', false)).not.toBe(psms)
+    expect(levelRows(other, 'psms', false)).toEqual(psms)
+  })
+})
+
+describe('proteinsNeeded', () => {
+  it('is the number of target proteins a protein FDR needs: q-values are at least 1/(T + 1)', () => {
+    expect(proteinsNeeded(0.01)).toBe(99)
+    expect(proteinsNeeded(0.05)).toBe(19)
+    expect(proteinsNeeded(0.02)).toBe(49)
+    expect(proteinsNeeded(1)).toBe(0)
   })
 })

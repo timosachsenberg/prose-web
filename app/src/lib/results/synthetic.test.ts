@@ -71,6 +71,11 @@ describe('loadDebugResult', () => {
     expect(small.tables.psms.deltaMass[7]).toBeCloseTo(-17.026549)
     expect(Math.abs(small.tables.psms.deltaMass[1])).toBeLessThanOrEqual(0.05)
 
+    // large1: the same tables at a PSM FDR of 1 %
+    const large1 = loadDebugResult('large1')
+    expect(large1.tables.psms.count).toBe(150000)
+    expect([large1.psmFdr, large1.proteinFdr, large1.summary.psmFdr]).toEqual([0.01, 0.01, 0.01])
+
     const large = loadDebugResult('large')
     expect(large.tables.psms.count).toBe(150000)
     expect(large.summary).toMatchObject({ proteinFdrApplied: true, openSearch: false })

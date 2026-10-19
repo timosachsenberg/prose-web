@@ -4,7 +4,7 @@ import type { ColumnSpec } from '$lib/results/table-columns'
 import type { Column } from './DataTable.svelte'
 
 /** What a table adds to a column spec: at least its cell. */
-export type CellDef = Pick<Column, 'cell'> & Partial<Pick<Column, 'cellTitle' | 'muted' | 'class'>>
+export type CellDef = Pick<Column, 'cell'> & Partial<Pick<Column, 'cellTitle' | 'placeholder' | 'secondary' | 'class'>>
 
 /** The DataTable columns of `specs`, with the cells of `cells` (by id, or by `fallback` for e.g. sample columns). */
 export function tableColumns(specs: ColumnSpec[], cells: (id: string) => CellDef): Column[] {
@@ -16,6 +16,7 @@ export function tableColumns(specs: ColumnSpec[], cells: (id: string) => CellDef
     align: s.align,
     sortKey: s.sortKey,
     title: s.title,
+    ariaLabel: s.ariaLabel,
     ...cells(s.id),
   }))
 }

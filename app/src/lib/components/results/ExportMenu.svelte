@@ -23,10 +23,10 @@
     if (next) canIdXML = idXMLAvailable(view.result)
   }
 
-  function guard(action: () => void) {
+  async function guard(action: () => unknown) {
     error = null
     try {
-      action()
+      await action()
     } catch (e) {
       error = String((e as Error)?.message ?? e)
     }
@@ -50,10 +50,11 @@
 {/if}
 <DropdownMenu.Root {open} onOpenChange={openChange}>
   <DropdownMenu.Trigger class={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-7 gap-1 px-2.5 text-xs')} disabled={busy}>
-    {busy ? 'Exporting…' : 'Export'}<ChevronDown class="size-3.5" aria-hidden="true" />
+    {busy || view.exporting ? 'Exporting…' : 'Export'}<ChevronDown class="size-3.5" aria-hidden="true" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Content class="w-auto min-w-52" align="end">
-    <DropdownMenu.Item disabled={view.level === null} onSelect={() => guard(() => exportCsv(view))}>CSV (current view)</DropdownMenu.Item>
+    <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view))}
+      >CSV (current view)</DropdownMenu.Item>
     <DropdownMenu.Item onSelect={() => guard(() => exportDesign(view.result))}>Design (design.tsv)</DropdownMenu.Item>
     <!-- TODO(C11): the project file comes with History -->
     <DropdownMenu.Item disabled title="Available with History (coming next)" class={explained}>Project (.prose)</DropdownMenu.Item>

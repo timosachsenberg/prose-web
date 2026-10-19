@@ -12,12 +12,24 @@ export function exportName(result: OpenResult): string {
   return resultName(result.design.rows.map((r) => r.fileName))
 }
 
-/** The current level's view as `<name>-<level>.csv`; false on a tab without a table. */
-export function exportCsv(view: ResultsView): boolean {
+/** After the browser has painted (so that "Exporting…" shows before a long export). */
+const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
+
+/**
+ * The current level's view as `<name>-<level>.csv` (`view.exporting` meanwhile); false on a tab
+ * without a table or while an export runs.
+ */
+export async function exportCsv(view: ResultsView): Promise<boolean> {
   const level = view.level
-  if (!level) return false
-  download(`${exportName(view.result)}-${level.level}.csv`, level.csv(), 'text/csv;charset=utf-8')
-  return true
+  if (!level || view.exporting) return false
+  view.exporting = true
+  try {
+    await painted()
+    download(`${exportName(view.result)}-${level.level}.csv`, level.csv(), 'text/csv;charset=utf-8')
+    return true
+  } finally {
+    view.exporting = false
+  }
 }
 
 /** The design of the searched files as `<name>_design.tsv` (OpenMS' one-table format). */

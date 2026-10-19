@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { keyTarget, scrollToShow, visibleRange } from './virtual'
+import { clampInto, keyTarget, rowsInView, scrollToShow, visibleRange } from './virtual'
 
 describe('visibleRange', () => {
   it('covers the viewport plus the overscan, within the rows', () => {
@@ -33,5 +33,24 @@ describe('scrollToShow', () => {
     expect(scrollToShow(10, 0, 370, 33, 40)).toBe(33) // row 10 ends at 363
     expect(scrollToShow(2, 200, 370, 33, 40)).toBe(66)
     expect(scrollToShow(999, 0, 370, 33, 40)).toBe(33_000 - 330)
+  })
+})
+
+describe('rowsInView', () => {
+  it('lists the rows wholly visible below the sticky header', () => {
+    // 33 px rows, a 40 px header, a 370 px box: 330 px of rows
+    expect(rowsInView(0, 370, 33, 40, 1000)).toEqual({ first: 0, last: 9 })
+    expect(rowsInView(10, 370, 33, 40, 1000)).toEqual({ first: 1, last: 9 })
+    expect(rowsInView(33 * 40, 370, 33, 40, 1000)).toEqual({ first: 40, last: 49 })
+    expect(rowsInView(32_670, 370, 33, 40, 1000)).toEqual({ first: 990, last: 999 })
+    expect(rowsInView(0, 370, 33, 40, 3)).toEqual({ first: 0, last: 2 })
+    expect(rowsInView(0, 50, 33, 40, 10)).toEqual({ first: 0, last: 0 })
+    expect(rowsInView(0, 370, 33, 40, 0)).toBeNull()
+  })
+
+  it('moves the active row into view', () => {
+    expect(clampInto(2, { first: 40, last: 49 })).toBe(40)
+    expect(clampInto(60, { first: 40, last: 49 })).toBe(49)
+    expect(clampInto(45, { first: 40, last: 49 })).toBe(45)
   })
 })

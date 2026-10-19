@@ -22,12 +22,17 @@ export type DatabaseChoice = { file: File; proteins: number | null }
 /** The entries of the bundled cRAP FASTA (`public/fasta/crap.fasta`). */
 export const CRAP_PROTEINS = 116
 
-/** The example: one mzML searched twice as two replicates of condition "example", with its FASTA. */
+/**
+ * The example: one mzML searched twice as two replicates of condition "example", with its FASTA. Its
+ * database is small (49 proteins): with a decoy ranked first, no protein q-value goes below 1/49, so
+ * the example is searched at a protein FDR of 5 %.
+ */
 export const EXAMPLE = {
   mzML: 'example/DatabaseSuitability_in_spec.mzML',
   fasta: 'example/DatabaseSuitability_database.fasta',
   names: ['DatabaseSuitability_1.mzML', 'DatabaseSuitability_2.mzML'],
   condition: 'example',
+  proteinFdr: 0.05,
 } as const
 
 let nextId = 0
@@ -67,6 +72,12 @@ class SearchForm {
   defaults = $derived(engineState.info ? defaultsOf(engineState.info.parameters) : {})
   values = $derived<Record<string, unknown>>({ ...this.defaults, ...this.overrides })
   design = $derived(resolveDesign(this.files.map(toInput)))
+  /** The files and the database are the bundled example's. */
+  isExample = $derived(
+    this.files.length === EXAMPLE.names.length &&
+      this.files.every((r, i) => r.file.name === EXAMPLE.names[i]) &&
+      this.database?.file.name === EXAMPLE.fasta.split('/').pop(),
+  )
   preset = $derived(this.presets.find((p) => p.id === this.presetId) ?? null)
   /** The settings differ from the preset's. */
   modified = $derived.by(() => {
@@ -167,6 +178,7 @@ class SearchForm {
       this.notices = []
       for (const name of EXAMPLE.names) this.#addRow(new File([mzML], name), { condition: EXAMPLE.condition })
       this.setDatabase(new File([fasta], EXAMPLE.fasta.split('/').pop()!))
+      this.setParam('FDR:protein', EXAMPLE.proteinFdr)
     } catch (e) {
       this.notices.push(`The example could not be loaded (${String((e as Error)?.message ?? e)}).`)
     } finally {

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { ProSEMultiSummary, StoredSpectra } from '../engine/openms-types'
 import type { OpenResult } from '../search/session.svelte'
 import { sampleDesign, sampleTables } from './fixtures'
-import { resultsViewFor } from './view.svelte'
+import { input } from '../design/fixtures'
+import { resolveDesign } from '../design/model'
+import { makeTables } from './synthetic'
+import { releaseResultsView, resultsViewFor } from './view.svelte'
 
 function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false): OpenResult {
   const tables = sampleTables()
@@ -13,7 +16,7 @@ function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false): OpenResult 
     design: sampleDesign(),
     psmFdr,
     proteinFdr,
-    settings: { parameters: {}, fixedMods: [], rescore: rescored, peptdeep: false, contaminants: true },
+    settings: { parameters: {}, fixedMods: [], database: 'db.fasta', rescore: rescored, peptdeep: false, contaminants: true },
     outcome: {
       tables,
       spectra: {} as StoredSpectra,
@@ -32,6 +35,23 @@ function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false): OpenResult 
 }
 
 const csvLines = (csv: string) => csv.slice(1, -1).split('\n')
+
+/** control 1 measured twice (technical replicates) and EGF 1: PSMs 1, 2 and 3 in the three files. */
+function techResult(): OpenResult {
+  const r = result(1, 1)
+  const design = resolveDesign([
+    input('a.mzML', { condition: 'control', replicate: 1, techReplicate: 1 }),
+    input('b.mzML', { condition: 'control', replicate: 1, techReplicate: 2 }),
+    input('c.mzML', { condition: 'EGF', replicate: 1 }),
+  ])
+  const tables = makeTables({
+    files: ['a.mzML', 'b.mzML', 'c.mzML'],
+    proteins: [{ accession: 'P1', sequence: 'AAAAAKCCCCCK' }],
+    peptides: [{ sequence: 'AAAAAK', proteins: [0] }],
+    psms: [{ peptide: 0, file: 0 }, { peptide: 0, file: 1 }, { peptide: 0, file: 1 }, { peptide: 0, file: 2 }],
+  })
+  return { ...r, design, outcome: { ...r.outcome, tables } }
+}
 
 describe('ResultsView', () => {
   it('is kept while the same result is open, and new for another one', () => {
@@ -95,6 +115,32 @@ describe('ResultsView', () => {
     expect(view.proteins.emptyText).toBe("No proteins pass the search's protein FDR (0.01 %, q ≤ 0.0001).")
     view.psms.filters.text = 'nothing like this'
     expect(view.psms.emptyText).toBe('No PSMs match the filters.')
+  })
+
+  it('keeps sorting by the same sample when technical replicates are split or merged', () => {
+    const view = resultsViewFor(techResult())
+    expect(view.model.samples.map((s) => s.label)).toEqual(['control 1', 'EGF 1'])
+    view.proteins.sortBy('sample:1') // EGF 1
+    view.peptides.sortBy('sample:0') // control 1
+    view.setShowTechReplicates(true)
+    expect(view.model.samples.map((s) => s.label)).toEqual(['control 1 · TR1', 'control 1 · TR2', 'EGF 1'])
+    expect(view.proteins.sort).toEqual({ key: 'sample:2', dir: 'desc' })
+    expect(view.peptides.sort).toEqual({ key: 'sample:0', dir: 'desc' }) // the first measurement of control 1
+    view.peptides.sortBy('sample:1') // control 1 · TR2
+    view.setShowTechReplicates(false)
+    expect(view.proteins.sort).toEqual({ key: 'sample:1', dir: 'desc' })
+    expect(view.peptides.sort).toEqual({ key: 'sample:0', dir: 'desc' }) // merged into control 1
+    // other sort keys stay
+    view.psms.sortBy('charge')
+    view.setShowTechReplicates(true)
+    expect(view.psms.sort.key).toBe('charge')
+  })
+
+  it('releases the view of a result that closed', () => {
+    const r = result()
+    const view = resultsViewFor(r)
+    releaseResultsView()
+    expect(resultsViewFor(r)).not.toBe(view)
   })
 
   it('falls back to the default sort when its sample column goes away', () => {

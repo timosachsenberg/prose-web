@@ -4,7 +4,7 @@
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { massShift, peptideView } from '$lib/format/peptide'
   import { baseName } from '$lib/results/model'
-  import { formatQValue, formatScore } from '$lib/results/display'
+  import { formatQValue, formatScore, spectrumLabel } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { fixed, signed, tableColumns, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
@@ -15,8 +15,6 @@
   const m = $derived(view.model)
   const ps = $derived(m.tables.psms)
   const fixedMods = $derived(view.result.settings.fixedMods)
-
-  const scan = (nativeId: string) => /(?:^|\s)scan=(\d+)/.exec(nativeId)?.[1] ?? nativeId
 
   function cells(id: string): CellDef {
     switch (id) {
@@ -30,13 +28,14 @@
       case 'sample':
         return { cell: (i) => m.samples[m.psmSample[i]].label }
       case 'scan':
-        return { cell: (i) => scan(ps.nativeId[i]), cellTitle: (i) => ps.nativeId[i] }
+        return { cell: (i) => spectrumLabel(ps.nativeId[i]), cellTitle: (i) => ps.nativeId[i] }
       case 'charge':
         return { cell: (i) => String(ps.charge[i]) }
       case 'mz':
         return { cell: (i) => fixed(ps.mz[i], 4) }
       case 'rt':
-        return { cell: (i) => fixed(ps.rt[i] / 60, 2) }
+        // negative or unknown (NaN): "–"
+        return { cell: (i) => (ps.rt[i] >= 0 ? fixed(ps.rt[i] / 60, 2) : '–'), placeholder: (i) => !(ps.rt[i] >= 0) }
       case 'precursorError':
         return { cell: (i) => signed(ps.precursorErrorPpm[i], 2) }
       case 'score':
@@ -46,7 +45,7 @@
       case 'pep':
         return { cell: (i) => formatQValue(ps.pep[i]) }
       case 'deltaMass':
-        return { cell: (i) => signed(ps.deltaMass[i], 4), muted: (i) => massShift(ps.deltaMass[i]) === null }
+        return { cell: (i) => signed(ps.deltaMass[i], 4), secondary: (i) => massShift(ps.deltaMass[i]) === null && ps.deltaMass[i] === ps.deltaMass[i], placeholder: (i) => ps.deltaMass[i] !== ps.deltaMass[i] }
       case 'file':
         return { cell: (i) => baseName(m.tables.files[ps.file[i]]) }
       case 'isotopeError':

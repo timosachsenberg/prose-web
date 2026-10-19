@@ -39,6 +39,14 @@ export function sampleHeader(sample: ResultSample): string {
   return condition !== null && label.startsWith(`${condition} `) ? label.slice(condition.length + 1) : label
 }
 
+/**
+ * What the Spectrum column shows of a native ID: the number of its `scan=`, `spectrum=` or `index=`
+ * term (Thermo "controllerType=0 controllerNumber=1 scan=4711" is 4711), else the native ID.
+ */
+export function spectrumLabel(nativeId: string): string {
+  return /(?:^|\s)(?:scan|spectrum|index)=(\d+)(?=\s|$)/.exec(nativeId)?.[1] ?? nativeId
+}
+
 const counts = new Intl.NumberFormat('en-US')
 
 /** A count with thousands separators: "1,284". */

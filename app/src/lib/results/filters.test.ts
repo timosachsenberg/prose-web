@@ -263,6 +263,17 @@ describe('applyFilters', () => {
   })
 })
 
+describe('the protein text filter', () => {
+  it("also finds a protein by the sequence of one of its peptides", () => {
+    const m = model()
+    expect(applyFilters(m, 'proteins', { ...all, text: 'gdahks' })).toEqual(rows(1))
+    expect(applyFilters(m, 'proteins', { ...all, text: 'TFISLL' })).toEqual(rows(0))
+    // all words must match: one in the description, one in a peptide
+    expect(applyFilters(m, 'proteins', { ...all, text: 'albumin mkwvtf' })).toEqual(rows(0))
+    expect(applyFilters(m, 'proteins', { ...all, text: 'albumin gdahks' })).toEqual(rows())
+  })
+})
+
 describe('initialFilters', () => {
   it("starts each level at the search's cutoff, contaminants and decoys hidden", () => {
     const tables = sampleTables()

@@ -31,7 +31,8 @@
     </DropdownMenu.Group>
     {#if hasSamples && view.hasTechReplicates}
       <DropdownMenu.Separator />
-      <DropdownMenu.CheckboxItem bind:checked={view.showTechReplicates}>Show technical replicates separately</DropdownMenu.CheckboxItem>
+      <DropdownMenu.CheckboxItem checked={view.showTechReplicates} onCheckedChange={(on) => view.setShowTechReplicates(on)}
+        >Show technical replicates separately</DropdownMenu.CheckboxItem>
     {/if}
     <DropdownMenu.Separator />
     <DropdownMenu.Group>

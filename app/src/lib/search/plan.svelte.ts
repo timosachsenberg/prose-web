@@ -4,12 +4,13 @@
 import { engineState } from '../engine/app-engine.svelte'
 import type { EngineInfo, SearchRequest } from '../engine/client'
 import { formatBytes } from '../format/bytes'
+import { formatPercent } from '../format/fdr'
 import { navigate } from '../route.svelte'
 import { estimateMemory, formatMemory, INPUT_BUDGET, type Specificity } from '../settings/memory'
 import { unknownModifications } from '../settings/modifications'
-import { requestParameters } from '../settings/parameters'
+import { copyValues, requestParameters } from '../settings/parameters'
 import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
-import { runSearch, searchRun } from './session.svelte'
+import { runSearch, searchRun, type OpenResult } from './session.svelte'
 
 function unknownMessage(names: string[]): string {
   return (
@@ -55,6 +56,7 @@ class SearchPlan {
     } else {
       parts.push('no database yet')
     }
+    if (form.isExample) parts.push(`example: ${formatPercent(Number(form.value('FDR:protein')))} protein FDR, small database`)
     return parts.join(' · ')
   })
 
@@ -135,6 +137,7 @@ export async function startSearch(): Promise<void> {
       settings: {
         parameters,
         fixedMods: (values['modifications:fixed'] as string[] | undefined) ?? [],
+        database: form.database.file.name,
         rescore: form.rescore,
         peptdeep,
         contaminants: form.contaminants,
@@ -144,4 +147,32 @@ export async function startSearch(): Promise<void> {
     check,
   )
   if (id !== null) navigate({ view: 'results', id })
+}
+
+/**
+ * New search still holds the inputs of `result` (a search of this session): the same files, by name
+ * and order, and the same database. It can then search them again with other settings.
+ */
+export function canSearchAgain(result: OpenResult): boolean {
+  const rows = result.design.rows
+  return (
+    result.engineResult &&
+    form.database?.file.name === result.settings.database &&
+    form.files.length === rows.length &&
+    form.files.every((r, i) => r.file.name === rows[i].fileName)
+  )
+}
+
+/**
+ * Back to New search with the inputs and settings of `result`, changed by `changes` (parameters,
+ * e.g. { 'FDR:protein': 0.05 }). The user starts the search there.
+ */
+export function searchAgain(result: OpenResult, changes: Record<string, unknown>): void {
+  const s = result.settings
+  if (s.presetId !== undefined && form.presets.some((p) => p.id === s.presetId)) form.presetId = s.presetId
+  form.overrides = copyValues({ ...s.parameters, ...changes })
+  form.rescore = s.rescore
+  form.peptdeep = s.peptdeep
+  form.contaminants = s.contaminants
+  navigate({ view: 'search' })
 }

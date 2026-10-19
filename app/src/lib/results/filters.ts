@@ -41,6 +41,28 @@ export function defaultFilters(): FilterState {
   return { text: '', maxQ: 1, minPeptides: 0, minReplicatesInCondition: 0, hideContaminants: false, showDecoys: false }
 }
 
+/**
+ * What the protein text filter searches, per protein, lower-cased: its accession, its description and
+ * the sequences of its peptides. Made once per model, on the first text filter.
+ */
+const proteinTexts = new WeakMap<ResultModel, string[]>()
+function proteinText(m: ResultModel): string[] {
+  let texts = proteinTexts.get(m)
+  if (!texts) {
+    const pr = m.tables.proteins
+    const { offsets, peptide } = m.protein.members
+    const sequence = m.tables.peptides.sequence
+    texts = new Array(pr.count)
+    for (let p = 0; p < pr.count; p++) {
+      const parts = [pr.accession[p], pr.description[p]]
+      for (let i = offsets[p]; i < offsets[p + 1]; i++) parts.push(sequence[peptide[i]])
+      texts[p] = parts.join('\n').toLowerCase()
+    }
+    proteinTexts.set(m, texts)
+  }
+  return texts
+}
+
 const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean)
 const matches = (haystack: string, tokens: string[]) => tokens.every((t) => haystack.includes(t))
 
@@ -89,7 +111,7 @@ function peptideMask(m: ResultModel, f: FilterState): Uint8Array {
 /**
  * The rows of `level` that pass the filters, ascending.
  *
- * - Proteins: `text` (accession, description), `maxQ` (protein q-value, limited by `proteinFdr`),
+ * - Proteins: `text` (accession, description, the sequences of its peptides), `maxQ` (protein q-value, limited by `proteinFdr`),
  *   `minPeptides`, `minReplicatesInCondition`, `hideContaminants`, `showDecoys`.
  * - Peptides: `text` (sequence, ProForma, accessions of the proteins), `maxQ` on the best PSM's
  *   q-value (there is no peptide-level FDR; limited by `psmFdr`), `hideContaminants` (peptides that
@@ -106,12 +128,13 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
     const out = new Uint32Array(pr.count)
     const limit = qLimit(f.maxQ, m.proteinFdr)
     const tokens = words(f.text)
+    const texts = tokens.length > 0 ? proteinText(m) : []
     for (let p = 0; p < pr.count; p++) {
       if (!f.showDecoys && pr.decoy[p]) continue
       if (f.hideContaminants && m.protein.contaminant[p]) continue
       if (pr.qValue[p] > limit) continue
       if (m.protein.peptides[p] < f.minPeptides) continue
-      if (tokens.length > 0 && !matches(`${pr.accession[p]}\n${pr.description[p]}`.toLowerCase(), tokens)) continue
+      if (tokens.length > 0 && !matches(texts[p], tokens)) continue
       if (f.minReplicatesInCondition > 0 && !foundInReplicates(m, p, f.minReplicatesInCondition)) continue
       out[kept++] = p
     }

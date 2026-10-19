@@ -9,9 +9,9 @@
   import Results from './views/Results.svelte'
 
   readHash()
-  // ?debug=large|small: a stored synthetic result (?debug=engine is handled by the engine module)
+  // ?debug=large|large1|small: a stored synthetic result (?debug=engine is handled by the engine module)
   const debug = debugFlag(location.search)
-  if (debug === 'large' || debug === 'small') openDebugResult(debug)
+  if (debug !== null && debug !== 'engine') openDebugResult(debug)
   // OpenMS loads in the background from the start: the status chip and the search form need it
   void startEngine().catch(() => {})
 </script>

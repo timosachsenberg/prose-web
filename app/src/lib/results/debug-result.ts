@@ -1,13 +1,12 @@
 // ?debug=large|small (see debug.ts): opens a stored synthetic result in Results, as History will
 // open a stored search. For the e2e tests and for trying the tables without a search.
 
-import type { DebugFlag } from '../debug'
+import type { DebugResultFlag } from '../debug'
 import { navigate } from '../route.svelte'
 import { openStoredResult } from '../search/session.svelte'
 import { loadDebugResult } from './synthetic'
 
-export function openDebugResult(flag: DebugFlag): void {
-  if (flag !== 'large' && flag !== 'small') return
+export function openDebugResult(flag: DebugResultFlag): void {
   const { tables, design, summary, psmFdr, proteinFdr } = loadDebugResult(flag)
   const id = openStoredResult({
     outcome: {
@@ -29,7 +28,8 @@ export function openDebugResult(flag: DebugFlag): void {
     settings: {
       parameters: {},
       fixedMods: ['Carbamidomethyl (C)'],
-      rescore: flag === 'large',
+      database: 'synthetic.fasta',
+      rescore: flag !== 'small',
       peptdeep: false,
       contaminants: true,
     },

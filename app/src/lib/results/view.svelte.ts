@@ -98,6 +98,8 @@ export class ResultsView {
   tab = $state<Tab>('proteins')
   /** "Show technical replicates separately" (the Columns menu): one count column per measurement. */
   showTechReplicates = $state(false)
+  /** A CSV export is being written (the button says "Exporting…"). */
+  exporting = $state(false)
 
   readonly search: { openSearch: boolean }
 
@@ -127,6 +129,28 @@ export class ResultsView {
     this.psms = new LevelState(this, 'psms')
   }
 
+  /**
+   * Splits or merges the technical replicates' count columns. A level sorted by a sample column stays
+   * sorted by that sample: by its first measurement when split, by the whole sample when merged.
+   */
+  setShowTechReplicates(on: boolean): void {
+    if (on === this.showTechReplicates) return
+    const before = this.model.samples
+    this.showTechReplicates = on
+    const after = this.model.samples
+    for (const level of [this.proteins, this.peptides, this.psms]) {
+      const match = /^sample:(\d+)$/.exec(level.sort.key)
+      const old = match ? before[Number(match[1])] : undefined
+      if (!old) continue
+      const next = after.find(
+        (s) =>
+          s.designSample === old.designSample &&
+          (s.techReplicate === old.techReplicate || s.techReplicate === null || old.techReplicate === null),
+      )
+      if (next) level.sort = { key: `sample:${next.index}`, dir: level.sort.dir }
+    }
+  }
+
   /** The level of the active tab, or null on Overview, Samples and QC. */
   get level(): LevelState | null {
     return this.tab === 'proteins' || this.tab === 'peptides' || this.tab === 'psms' ? this[this.tab] : null
@@ -146,6 +170,12 @@ export class ResultsView {
 /** The view of the open result. Its own effect root owns its deriveds, so that they keep working
  * after the component that first asked for it unmounts (the state survives a visit to New search). */
 let cached: { view: ResultsView; destroy: () => void } | null = null
+
+/** Releases the view of the open result (its model and caches), e.g. when another result opens. */
+export function releaseResultsView(): void {
+  cached?.destroy()
+  cached = null
+}
 
 /** The view state of `result`: the same object while the same result stays open, a new one for another result. */
 export function resultsViewFor(result: OpenResult): ResultsView {

@@ -397,13 +397,14 @@ export type DebugResult = {
 
 /**
  * The result that the debug hook shows (see `debug.ts`): `large` is 150,000 PSMs of a closed search
- * rescored by Percolator; `small` 3,000 PSMs of an open search without Percolator and without
+ * rescored by Percolator, at a PSM FDR of 100 % (every PSM counts); `large1` the same at 1 %; `small` 3,000 PSMs of an open search without Percolator and without
  * protein FDR (the protein q-values are NaN), in which every fifth PSM has a mass shift of
  * +15.9949 Da and every seventh one of -17.0265 Da.
  */
-export function loadDebugResult(which: 'large' | 'small'): DebugResult {
-  const tables = which === 'large' ? makeLargeTables(150000, 20000, 4000) : makeLargeTables(3000, 600, 120)
-  const summary = syntheticSummary(tables, debugCutoffs)
+export function loadDebugResult(which: 'large' | 'large1' | 'small'): DebugResult {
+  const tables = which === 'small' ? makeLargeTables(3000, 600, 120) : makeLargeTables(150000, 20000, 4000)
+  const cutoffs = which === 'large1' ? { psmFdr: 0.01, proteinFdr: 0.01 } : debugCutoffs
+  const summary = syntheticSummary(tables, cutoffs)
   if (which === 'small') {
     tables.proteins.qValue.fill(NaN)
     const delta = tables.psms.deltaMass
@@ -412,5 +413,5 @@ export function loadDebugResult(which: 'large' | 'small'): DebugResult {
     summary.openSearch = true
     for (const f of summary.files) f.percolator = null
   }
-  return { tables, design: syntheticDesign(tables.files), summary, ...debugCutoffs }
+  return { tables, design: syntheticDesign(tables.files), summary, ...cutoffs }
 }

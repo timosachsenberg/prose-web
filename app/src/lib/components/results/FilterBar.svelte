@@ -17,7 +17,7 @@
   let { view, level, proteinFdrApplied }: { view: ResultsView; level: LevelState; proteinFdrApplied: boolean } = $props()
 
   const names = {
-    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, description…', q: 'Protein FDR' },
+    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, description, peptide…', q: 'Protein FDR' },
     peptides: { filter: 'Filter peptides', placeholder: 'Sequence, modification, accession…', q: 'Best PSM q-value' },
     psms: { filter: 'Filter PSMs', placeholder: 'Sequence, modification, accession…', q: 'PSM FDR' },
   } as const
@@ -64,7 +64,7 @@
 </script>
 
 <div class="flex flex-wrap items-center gap-2" data-testid="filter-bar">
-  <label class="relative flex h-8 w-72 items-center">
+  <label class="relative flex h-8 max-w-80 min-w-56 grow basis-64 items-center">
     <span class="sr-only">{name.filter}</span>
     <SearchIcon class="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" aria-hidden="true" />
     <input

@@ -5,7 +5,7 @@ import { expect, test, type Page } from '@playwright/test'
 // 20,000 peptides, 4,000 proteins in 6 files, control 1–3 and EGF 1–3), ?debug=small a 3,000-PSM one.
 // The debug result's PSM FDR is 100 % (every PSM counts), its protein FDR 1 %.
 
-async function openDebug(page: Page, which: 'large' | 'small') {
+async function openDebug(page: Page, which: 'large' | 'large1' | 'small') {
   await page.goto(`./?debug=${which}`)
   await expect(page).toHaveURL(/#\/results\/[^/]+$/)
   await expect(page.getByTestId('results-table')).toBeVisible({ timeout: 30_000 })
@@ -204,20 +204,61 @@ test('switches modifications to ProForma', async ({ page }) => {
   await expect(cell).not.toContainText('[Oxidation]')
 })
 
+/** The grid's active row (aria-activedescendant): its position and whether it is in the scroll box's view. */
+async function activeRow(page: Page): Promise<{ index: number; inView: boolean }> {
+  return page.getByTestId('table-scroll').evaluate((box: HTMLElement) => {
+    const id = box.getAttribute('aria-activedescendant')
+    const row = id ? document.getElementById(id) : null
+    if (!row) return { index: -1, inView: false }
+    const header = box.querySelector('thead')!.getBoundingClientRect()
+    const r = row.getBoundingClientRect()
+    const b = box.getBoundingClientRect()
+    return { index: Number(row.dataset.index), inView: r.top >= header.bottom - 1 && r.bottom <= b.bottom + 1 }
+  })
+}
+
 test('tables are keyboard-navigable and filters are labelled', async ({ page }) => {
   await openDebug(page, 'small')
   const table = page.getByTestId('results-table')
-  await table.locator('[data-index="0"]').focus()
+  const grid = page.getByRole('grid', { name: 'Proteins' })
+
+  // the grid is the table's one tab stop: from "+ Filter", Tab goes to it
+  await page.getByRole('button', { name: '+ Filter' }).focus()
+  await page.keyboard.press('Tab')
+  await expect(grid).toBeFocused()
+  expect(await activeRow(page)).toEqual({ index: 0, inView: true })
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
-  const third = table.locator('[data-index="2"]')
-  await expect(third).toBeFocused()
+  expect(await activeRow(page)).toEqual({ index: 2, inView: true })
   await page.keyboard.press('Enter')
-  await expect(third).toHaveAttribute('aria-selected', 'true')
+  await expect(table.locator('[data-index="2"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(table.locator('[aria-selected="true"]')).toHaveCount(1)
   await page.keyboard.press('End')
-  await expect(table.locator('[aria-selected]').last()).toBeVisible()
+  expect(await activeRow(page)).toMatchObject({ inView: true })
+  expect((await activeRow(page)).index).toBe((await exportCount(page)) - 1)
   await page.keyboard.press('Home')
-  await expect(table.locator('[data-index="0"]')).toBeFocused()
+  expect(await activeRow(page)).toEqual({ index: 0, inView: true })
+
+  // a click selects the row and makes it the active one
+  await table.locator('[data-index="4"]').click()
+  await expect(table.locator('[data-index="4"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(grid).toBeFocused()
+  expect((await activeRow(page)).index).toBe(4)
+
+  // the sort buttons in the header keep their keys: Enter on one sorts, it does not select a row
+  const selectedAccession = await table.locator('[aria-selected="true"] [data-column="accession"]').textContent()
+  const egf3 = grid.getByRole('button', { name: 'EGF 3', exact: true })
+  await egf3.focus()
+  await page.keyboard.press('Enter')
+  await expect(grid.getByRole('columnheader', { name: 'EGF 3' })).toHaveAttribute('aria-sort', 'descending')
+  await expect(egf3).toBeFocused()
+  for (const cell of await table.locator('[aria-selected="true"] [data-column="accession"]').all()) {
+    await expect(cell).toHaveText(selectedAccession!) // still the same protein, wherever it is now
+  }
+
+  // sample columns are named with their condition
+  await expect(grid.getByRole('button', { name: 'control 1', exact: true })).toBeVisible()
+  await expect(grid.getByRole('button', { name: 'EGF 3', exact: true })).toBeVisible()
 
   // contaminants are hidden by default; the chip shows them again
   const chip = page.getByRole('button', { name: /Contaminants hidden/ })
@@ -238,6 +279,67 @@ test('tables are keyboard-navigable and filters are labelled', async ({ page }) 
     expect(unlabelled).toEqual([])
   }
   await expect(page.getByLabel('Filter PSMs')).toBeVisible()
+})
+
+test('after scrolling with the mouse, the keyboard goes on from a row in view', async ({ page }) => {
+  await openDebug(page, 'large')
+  await page.getByRole('tab', { name: /^PSMs/ }).click()
+  const table = page.getByTestId('results-table')
+  const grid = page.getByRole('grid', { name: 'PSMs' })
+
+  // focus row 2, then scroll 40 rows away with the mouse wheel
+  await table.locator('[data-index="2"]').click()
+  await page.keyboard.press('ArrowDown')
+  expect(await activeRow(page)).toEqual({ index: 3, inView: true })
+  await grid.hover()
+  await page.mouse.wheel(0, 33 * 40)
+  await expect.poll(async () => (await activeRow(page)).index).toBeGreaterThan(30)
+  const moved = await activeRow(page)
+  expect(moved.inView).toBe(true)
+  await expect(grid).toBeFocused()
+  // Enter selects the row the user sees, ArrowDown goes on from it
+  await page.keyboard.press('Enter')
+  await expect(table.locator(`[data-index="${moved.index}"]`)).toHaveAttribute('aria-selected', 'true')
+  await expect(table.locator('[aria-selected="true"]')).toHaveCount(1) // not row 3 any more
+  await page.keyboard.press('ArrowDown')
+  expect(await activeRow(page)).toEqual({ index: moved.index + 1, inView: true })
+
+  // scrolled with the mouse and nothing focused: Tab still reaches the grid, at a row in view
+  await page.getByLabel('Filter PSMs').focus()
+  await grid.hover()
+  await page.mouse.wheel(0, 33 * 500)
+  await expect.poll(async () => (await activeRow(page)).index).toBeGreaterThan(400)
+  await page.getByRole('button', { name: '+ Filter' }).focus()
+  await page.keyboard.press('Tab')
+  await expect(grid).toBeFocused()
+  const after = await activeRow(page)
+  expect(after.inView).toBe(true)
+  await page.keyboard.press('ArrowUp')
+  expect(await activeRow(page)).toEqual({ index: after.index - 1, inView: true })
+})
+
+test('a search at a PSM FDR of 1 %: the PSM filter tightens it, and the CSV follows', async ({ page }) => {
+  await openDebug(page, 'large1')
+  await page.getByRole('tab', { name: /^PSMs/ }).click()
+  const filter = page.getByRole('button', { name: /^PSM FDR ≤ 1 %/ })
+  await expect(filter).toContainText('(q ≤ 0.01)')
+  const atSearch = await exportCount(page)
+  expect(atSearch).toBeGreaterThan(10_000)
+  expect(atSearch).toBeLessThan(150_000)
+
+  // looser choices are disabled; 0.1 % tightens it
+  await filter.click()
+  await expect(page.getByRole('button', { name: '5 %', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '0.1 %', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: /^PSM FDR ≤ 0.1 %/ })).toBeVisible()
+  await expect.poll(() => exportCount(page)).toBeLessThan(atSearch)
+  const n = await exportCount(page)
+  const { lines } = await downloadCsv(page, () => page.getByRole('button', { name: /^Export CSV · / }).click())
+  expect(lines).toHaveLength(n + 1)
+  const q = fields(lines[0]).indexOf('q-value')
+  expect(lines.slice(1).every((line) => Number(fields(line)[q]) <= 0.001)).toBe(true)
+  await expect(page.getByRole('button', { name: /^Export CSV · / })).toBeEnabled()
 })
 
 test('an open search without protein FDR: the shifts, the score, the unavailable filter', async ({ page }) => {

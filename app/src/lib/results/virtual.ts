@@ -51,3 +51,25 @@ export function scrollToShow(index: number, scrollTop: number, height: number, r
   if (bottom > scrollTop + body) return bottom - body
   return scrollTop
 }
+
+/**
+ * The rows wholly in view below a sticky header of `headerHeight` (positions; `last` inclusive), or
+ * null without rows. A viewport smaller than a row still has one row in view.
+ */
+export function rowsInView(
+  scrollTop: number,
+  height: number,
+  rowHeight: number,
+  headerHeight: number,
+  count: number,
+): { first: number; last: number } | null {
+  if (count === 0) return null
+  const first = Math.min(count - 1, Math.max(0, Math.ceil(scrollTop / rowHeight - 1e-6)))
+  const last = Math.min(count - 1, Math.floor((scrollTop + height - headerHeight) / rowHeight + 1e-6) - 1)
+  return { first, last: Math.max(first, last) }
+}
+
+/** `index` moved into `view` (the active row follows the rows in view when the mouse scrolls). */
+export function clampInto(index: number, view: { first: number; last: number }): number {
+  return Math.min(view.last, Math.max(view.first, index))
+}
