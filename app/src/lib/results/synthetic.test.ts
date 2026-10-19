@@ -81,4 +81,18 @@ describe('loadDebugResult', () => {
     expect(large.summary).toMatchObject({ proteinFdrApplied: true, openSearch: false })
     expect(large.summary.files.every((f) => f.percolator?.applied)).toBe(true)
   })
+
+  it('loads the dense result: 20 proteins with about a thousand peptides each, in 24 files', () => {
+    const dense = loadDebugResult('dense')
+    expect(dense.tables.psms.count).toBe(150000)
+    expect(dense.tables.proteins.count).toBe(20)
+    expect(dense.tables.files).toHaveLength(24)
+    expect(dense.design.samples).toHaveLength(24)
+    expect([dense.psmFdr, dense.proteinFdr]).toEqual([1, 0.01])
+    // the peptides of the first target proteins: 20,000 peptides over 19 targets, a tenth of them shared
+    const t = dense.tables
+    const perProtein = new Uint32Array(t.proteins.count)
+    for (const p of t.peptides.protein) perProtein[p]++
+    expect(Math.max(...perProtein)).toBeGreaterThan(900)
+  })
 })

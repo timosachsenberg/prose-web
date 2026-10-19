@@ -25,6 +25,12 @@
   const cutoff = $derived(level.level === 'proteins' ? view.result.proteinFdr : view.result.psmFdr)
   const qId = $derived(`q-filter-${level.level}`)
 
+  /** The peptide (ProForma) that the PSM table is restricted to ("All n in the PSM table"). */
+  const peptide = $derived.by(() => {
+    const k = level.filters.peptideFilter
+    return k === undefined || level.level !== 'psms' ? null : (view.model.tables.peptides.proforma[k] ?? null)
+  })
+
   /** The protein the table is restricted to ("Open in PSM table"), as its accession shows in the tables. */
   const protein = $derived.by(() => {
     const p = level.filters.proteinFilter
@@ -139,6 +145,11 @@
   {#if protein}
     <button type="button" class={chip} title={protein.accession} onclick={() => (level.filters.proteinFilter = undefined)}>
       Protein: {protein.id}<XIcon class="size-3" aria-hidden="true" /><span class="sr-only">(remove the filter)</span>
+    </button>
+  {/if}
+  {#if peptide}
+    <button type="button" class={chip} title={peptide} onclick={() => (level.filters.peptideFilter = undefined)}>
+      <span class="max-w-[16rem] truncate">Peptide: {peptide}</span><XIcon class="size-3 shrink-0" aria-hidden="true" /><span class="sr-only">(remove the filter)</span>
     </button>
   {/if}
   {#if level.filters.hideContaminants}

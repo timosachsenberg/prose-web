@@ -176,22 +176,27 @@ export class ResultsView {
   }
 
   /**
-   * "Open in PSM table": the PSM table shows the PSMs of `protein` and only those (a "Protein: <accession>"
-   * chip says so and removes the filter): the search's cutoff, no text or peptide filter, and
-   * contaminants or decoys shown if the protein is one.
+   * "Open in PSM table": the PSM table shows the PSMs of one `protein`, or of one `peptide` (a row of
+   * `tables.peptides`: "All n in the PSM table"), and only those. A chip ("Protein: <accession>",
+   * "Peptide: <ProForma>") says so and removes the filter. The table is at the search's cutoff, without
+   * text filter or the other restriction, and shows contaminants or decoys if the protein or peptide is one.
    */
-  filterBy({ protein }: { protein: number }): void {
+  filterBy(what: { protein: number } | { peptide: number }): void {
     const m = this.model
-    if (!Number.isInteger(protein) || protein < 0 || protein >= m.tables.proteins.count) return
     const f = this.psms.filters
+    const index = 'protein' in what ? what.protein : what.peptide
+    const count = 'protein' in what ? m.tables.proteins.count : m.tables.peptides.count
+    if (!Number.isInteger(index) || index < 0 || index >= count) return
+    const contaminant = 'protein' in what ? m.protein.contaminant[index] : m.peptide.contaminant[index]
+    const decoy = 'protein' in what ? m.tables.proteins.decoy[index] : m.tables.peptides.decoy[index]
     this.psms.filters = {
       ...f,
       text: '',
       maxQ: m.psmFdr,
-      proteinFilter: protein,
-      peptideFilter: undefined,
-      hideContaminants: m.protein.contaminant[protein] ? false : f.hideContaminants,
-      showDecoys: m.tables.proteins.decoy[protein] ? true : f.showDecoys,
+      proteinFilter: 'protein' in what ? index : undefined,
+      peptideFilter: 'peptide' in what ? index : undefined,
+      hideContaminants: contaminant ? false : f.hideContaminants,
+      showDecoys: decoy ? true : f.showDecoys,
     }
     this.tab = 'psms'
   }

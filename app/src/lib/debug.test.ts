@@ -7,6 +7,7 @@ describe('debugFlag', () => {
     expect(debugFlag('?x=1&debug=large')).toBe('large')
     expect(debugFlag('?debug=small')).toBe('small')
     expect(debugFlag('?debug=large1')).toBe('large1')
+    expect(debugFlag('?debug=dense')).toBe('dense')
     expect(debugFlag('?debug=other')).toBeNull()
     expect(debugFlag('')).toBeNull()
   })

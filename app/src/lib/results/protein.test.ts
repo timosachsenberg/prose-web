@@ -3,7 +3,7 @@ import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import { cutoffs, sampleDesign, sampleTables } from './fixtures'
 import { buildModel, type ResultModel } from './model'
-import { groupMates, peptidePsms, proteinDetail, proteinPsms } from './protein'
+import { groupMates, peptidePsms, proteinDetail, proteinPsms, siteTitle } from './protein'
 import { makeLargeTables, makeTables } from './synthetic'
 
 const model = (tables = sampleTables(), opts: Partial<{ psmFdr: number; proteinFdr: number }> = {}) =>
@@ -147,9 +147,9 @@ describe('proteinDetail: modified sites', () => {
     const m = oneProtein(peptides, protein)
     const sites = proteinDetail(m, 0, ['Carbamidomethyl (C)']).sites
     // the peptide AMCSK starts at residue 2: A 2, M 3, C 4, S 5, K 6
-    expect(sites.map((s) => [s.position, s.residue, s.mod.label])).toEqual([
-      [3, 'M', 'ox'],
-      [5, 'S', 'ph'],
+    expect(sites.map((s) => [s.position, s.residue, s.mods.map((mod) => mod.label)])).toEqual([
+      [3, 'M', ['ox']],
+      [5, 'S', ['ph']],
     ])
     // without the search's fixed modifications, the C is a site as well
     expect(proteinDetail(m, 0, []).sites.map((s) => s.position)).toEqual([3, 4, 5])
@@ -164,6 +164,29 @@ describe('proteinDetail: modified sites', () => {
       protein,
     )
     expect(proteinDetail(m, 0, []).sites.map((s) => s.position)).toEqual([3])
+  })
+
+  it('lists every modification that several peptide forms put on one residue', () => {
+    const m = oneProtein(
+      [
+        { sequence: 'AMCSK', proforma: 'AM[Oxidation]CSK', mods: [{ position: 1, name: 'Oxidation', unimod: 35, mass: 15.9949 }], proteins: [{ protein: 0, start: 2 }] },
+        { sequence: 'MCSKG', proforma: 'M[Dioxidation]CSKG', mods: [{ position: 0, name: 'Dioxidation', unimod: 425, mass: 31.9898 }], proteins: [{ protein: 0, start: 3 }] },
+        // the same modification again, on the same residue: not listed twice
+        { sequence: 'MCSKG', proforma: 'M[Oxidation]CSKG', mods: [{ position: 0, name: 'Oxidation', unimod: 35, mass: 15.9949 }], proteins: [{ protein: 0, start: 3 }] },
+        // an N-terminal acetyl on that residue as well
+        { sequence: 'MCSKG', proforma: '[Acetyl]-MCSKG', mods: [{ position: -1, name: 'Acetyl', unimod: 1, mass: 42.0106 }], proteins: [{ protein: 0, start: 3 }] },
+      ],
+      protein,
+    )
+    const sites = proteinDetail(m, 0, []).sites
+    expect(sites).toHaveLength(1)
+    expect(sites[0].position).toBe(3)
+    expect(sites[0].mods.map((mod) => mod.name).sort()).toEqual(['Acetyl', 'Dioxidation', 'Oxidation'])
+    // the title of its dot lists them all, after the residue and its 1-based position
+    const title = siteTitle(sites[0])
+    expect(title.startsWith('M4: ')).toBe(true)
+    expect(title.split('; ')).toHaveLength(3)
+    for (const text of ['Oxidation (Unimod:35) +15.9949', 'Dioxidation (Unimod:425) +31.9898', 'Acetyl (Unimod:1) +42.0106']) expect(title).toContain(text)
   })
 
   it('places terminal modifications on the first and last residue of the peptide', () => {
@@ -181,9 +204,9 @@ describe('proteinDetail: modified sites', () => {
       ],
       protein,
     )
-    expect(proteinDetail(m, 0, []).sites.map((s) => [s.position, s.mod.label])).toEqual([
-      [2, 'ac'],
-      [6, 'ami'],
+    expect(proteinDetail(m, 0, []).sites.map((s) => [s.position, s.mods.map((mod) => mod.label)])).toEqual([
+      [2, ['ac']],
+      [6, ['ami']],
     ])
   })
 

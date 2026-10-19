@@ -3,9 +3,8 @@
   // PSMs cover shaded and the modified residues dotted (#1baf7a, with the modification on hover).
   // Each row is made of a few runs of residues (covered or not, modified), not one node per residue,
   // and is only laid out when it is near the screen.
-  import { modTitle } from '$lib/format/peptide'
   import { formatCount } from '$lib/results/display'
-  import type { ProteinDetail } from '$lib/results/protein'
+  import { siteTitle, type ProteinDetail } from '$lib/results/protein'
 
   let { detail, sequence }: { detail: ProteinDetail; sequence: string } = $props()
 
@@ -23,7 +22,7 @@
       const covered = detail.covered[i] === 1
       const site = sites.get(i)
       const last = out[out.length - 1]
-      if (site) out.push({ text: sequence[i], covered, title: `${site.residue}${i + 1}: ${modTitle(site.mod)}` })
+      if (site) out.push({ text: sequence[i], covered, title: siteTitle(site) })
       else if (last && !last.title && last.covered === covered) last.text += sequence[i]
       else out.push({ text: sequence[i], covered })
     }

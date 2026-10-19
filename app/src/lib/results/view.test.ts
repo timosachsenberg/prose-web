@@ -5,6 +5,7 @@ import { sampleDesign, sampleTables } from './fixtures'
 import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import { makeTables } from './synthetic'
+import { peptidePsms } from './protein'
 import { releaseResultsView, resultsViewFor } from './view.svelte'
 
 function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false): OpenResult {
@@ -207,6 +208,33 @@ describe('the protein panel', () => {
     expect(Array.from(view.psms.rows)).toEqual([8])
     view.filterBy({ protein: 0 })
     expect(view.psms.filters).toMatchObject({ hideContaminants: false, showDecoys: true }) // what was shown stays shown
+  })
+
+  it("'All in the PSM table' of a peptide filters the PSMs by that peptide and shows them", () => {
+    const view = resultsViewFor(result(1, 1))
+    view.psms.filters.text = 'zzz'
+    view.psms.filters.maxQ = 0.001
+    view.filterBy({ peptide: 0 }) // M[Oxidation]KWVTF: PSMs 0, 1 and 2
+    expect(view.tab).toBe('psms')
+    expect(view.psms.filters).toMatchObject({ text: '', maxQ: 1, peptideFilter: 0, proteinFilter: undefined })
+    expect(Array.from(view.psms.rows)).toEqual([1, 0, 2]) // by q-value
+    expect(view.psms.rows.length).toBe(peptidePsms(view.model, 0).length)
+    // a contaminant's or a decoy's peptide is shown, too
+    view.filterBy({ peptide: 3 })
+    expect(view.psms.filters.hideContaminants).toBe(false)
+    expect(Array.from(view.psms.rows)).toEqual([7])
+    view.filterBy({ peptide: 4 })
+    expect(view.psms.filters.showDecoys).toBe(true)
+    expect(Array.from(view.psms.rows)).toEqual([8])
+    // the protein filter of an earlier "Open in PSM table" does not stay
+    view.filterBy({ protein: 0 })
+    view.filterBy({ peptide: 2 })
+    expect(view.psms.filters.proteinFilter).toBeUndefined()
+    expect(Array.from(view.psms.rows)).toEqual([4, 5, 6])
+    // what is no peptide opens nothing
+    view.filterBy({ peptide: 99 })
+    view.filterBy({ peptide: -1 })
+    expect(view.psms.filters.peptideFilter).toBe(2)
   })
 
   it('opens a PSM in the PSM table: its tab, the PSM selected, the filters that hid it lifted', () => {

@@ -6,7 +6,7 @@
 // The coverage is computed by `markCovered`, which `buildModel` uses for the Coverage column of the
 // table: the panel cannot disagree with it.
 
-import { peptideView, type ModInfo } from '../format/peptide'
+import { modTitle, peptideView, type ModInfo } from '../format/peptide'
 import type { ResultModel } from './model'
 
 /** A stretch of a protein's sequence: residues `start` to `end - 1` (0-based). */
@@ -64,13 +64,22 @@ export type PanelPeptide = {
   psms: number
 }
 
-/** A modified residue of the protein, marked by the first of its peptides that carries the modification. */
+/**
+ * A modified residue of the protein. Peptide forms can put different modifications on one residue
+ * (oxidation in one, a pyro-glu or an N-terminal acetyl in another): `mods` lists each of them once.
+ */
 export type ModifiedSite = {
   /** 0-based residue of the protein. */
   position: number
   residue: string
+  /** The first of its peptides that carries a modification there. */
   peptide: number
-  mod: ModInfo
+  mods: ModInfo[]
+}
+
+/** The hover title of a modified residue: "M572: Oxidation (Unimod:35) +15.9949", every modification there. */
+export function siteTitle(site: ModifiedSite): string {
+  return `${site.residue}${site.position + 1}: ${site.mods.map(modTitle).join('; ')}`
 }
 
 export type ProteinDetail = {
@@ -153,8 +162,10 @@ export function proteinDetail(m: ResultModel, p: number, fixedMods: string[]): P
     const size = pt.sequence[e.peptide].length
     for (const at of starts.get(e.peptide)!) {
       const add = (position: number, mod: ModInfo | undefined) => {
-        if (!mod || position < 0 || position >= length || sites.has(position)) return
-        sites.set(position, { position, residue: sequence[position], peptide: e.peptide, mod })
+        if (!mod || position < 0 || position >= length) return
+        const site = sites.get(position)
+        if (!site) sites.set(position, { position, residue: sequence[position], peptide: e.peptide, mods: [mod] })
+        else if (!site.mods.some((x) => x.name === mod.name && x.unimod === mod.unimod && x.mass === mod.mass)) site.mods.push(mod)
       }
       add(at, view.nTerm)
       view.residues.forEach((r, j) => add(at + j, r.mod))

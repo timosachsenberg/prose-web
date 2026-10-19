@@ -70,9 +70,9 @@
     proteinsTable?.focusRow(protein)
   }
 
-  /** "Open in PSM table": the PSMs tab with the protein's chip; the focus goes to the table. */
-  async function openInPsmTable(protein: number) {
-    view?.filterBy({ protein })
+  /** "Open in PSM table": the PSMs tab with the chip of the protein or peptide; the focus goes to the table. */
+  async function openInPsmTable(filter: { protein: number } | { peptide: number }) {
+    view?.filterBy(filter)
     await tick()
     psmsTable?.focusRow(null)
   }

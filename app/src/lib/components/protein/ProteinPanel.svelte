@@ -29,8 +29,8 @@
     /** The protein: a row of `tables.proteins`. */
     protein: number
     onClose: () => void
-    /** "Open in PSM table": the PSMs tab, filtered by this protein. */
-    onOpenPsmTable: (protein: number) => void
+    /** "Open in PSM table": the PSMs tab, filtered by this protein, or by one of its peptides. */
+    onOpenPsmTable: (filter: { protein: number } | { peptide: number }) => void
     onOpenPsm: (psm: number) => void
   } = $props()
 
@@ -110,33 +110,39 @@
         <Tabs.Trigger value="psms" class="px-3 text-[13px]"
           >PSMs<span class="ml-1 text-xs font-normal text-muted-foreground tabular-nums">{formatCount(detail.psms)}</span></Tabs.Trigger>
       </Tabs.List>
-      <Button variant="outline" size="sm" class="h-7 px-2.5 text-xs" onclick={() => onOpenPsmTable(protein)}>Open in PSM table ›</Button>
+      <Button variant="outline" size="sm" class="h-7 px-2.5 text-xs" onclick={() => onOpenPsmTable({ protein })}>Open in PSM table ›</Button>
     </div>
 
+    <!-- only the open tab is rendered: the map of a long protein is thousands of nodes, the PSM list a sort -->
     <Tabs.Content value="coverage" class="min-h-0 flex-1 overflow-auto pt-1">
-      {#if detail.length === 0}
-        <p class="py-8 text-center text-muted-foreground">This protein has no sequence in the result, so there is no coverage map.</p>
-      {:else}
-        <CoverageMap {detail} sequence={pr.sequence[protein]} />
+      {#if view.panelTab === 'coverage'}
+        {#if detail.length === 0}
+          <p class="py-8 text-center text-muted-foreground">This protein has no sequence in the result, so there is no coverage map.</p>
+        {:else}
+          <CoverageMap {detail} sequence={pr.sequence[protein]} />
+        {/if}
       {/if}
     </Tabs.Content>
     <Tabs.Content value="peptides" class="min-h-0 flex-1 overflow-auto">
-      <ProteinPeptides {view} {detail} bind:expanded {onOpenPsm} />
+      {#if view.panelTab === 'peptides'}
+        <ProteinPeptides {view} {detail} bind:expanded {onOpenPsm} {onOpenPsmTable} />
+      {/if}
     </Tabs.Content>
     <Tabs.Content value="psms" class="flex min-h-0 flex-1 flex-col">
-      <ProteinPsms {view} {detail} label="PSMs of {accession.id}" {onOpenPsm} />
+      {#if view.panelTab === 'psms'}
+        <ProteinPsms {view} {detail} label="PSMs of {accession.id}" {onOpenPsm} />
+      {/if}
     </Tabs.Content>
   </Tabs.Root>
 
+  <!-- what a dot is, the strip says; this says what a marked residue is and what is not marked -->
   <p class="mt-2 text-xs text-muted-foreground" data-testid="panel-legend">
     {#if displaySettings.modMode === 'marked'}
-      <span class="legend-mod">M<sup>ox</sup></span> modified residue (hover for the modification) ·
-      <b class="mr-0.5 inline-block size-2 rounded-full bg-[#1baf7a] align-[-0.5px]"></b>modified site in the strip and the map · fixed
-      modifications ({fixedText}) are not marked
+      <span class="legend-mod">M<sup>ox</sup></span> modified residue (hover for the modification){#if fixedMods.length > 0}{' · '}fixed
+        modifications are not marked: {fixedText}{/if}
     {:else}
-      ProForma: fixed modifications included ({fixedText}) ·
-      <b class="mr-0.5 inline-block size-2 rounded-full bg-[#1baf7a] align-[-0.5px]"></b>modified site in the strip and the map; fixed
-      modifications are not dotted
+      ProForma writes all modifications{#if fixedMods.length > 0}, the fixed ones too: {fixedText}. Only the others are dotted as
+        sites{/if}
     {/if}
   </p>
 </section>

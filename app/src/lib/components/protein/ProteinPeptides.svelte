@@ -1,14 +1,19 @@
 <script lang="ts">
-  // The protein's peptides with their PSM counts per sample, by position. A peptide (a modified form
-  // of a sequence is a peptide of its own) expands in place to its PSMs, best q-value first, and one
-  // PSM opens in the PSM table. One peptide is open at a time: the strip above shows it.
+  // The protein's peptides with their PSM counts per sample, by position: the first 100, then "Show 100
+  // more" (a protein can have a thousand, and Peptides is the tab the panel opens with). A peptide (a
+  // modified form of a sequence is a peptide of its own) expands in place to its PSMs, best q-value
+  // first: 10, then "Show 50 more" and "All n in the PSM table". One PSM opens in the PSM table. One
+  // peptide is open at a time: the strip above shows it. Focus follows what is revealed: the first new
+  // peptide's expander, the last new PSM's button.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
+  import { Button } from '$lib/components/ui/button'
   import { massShift, peptideView } from '$lib/format/peptide'
   import { formatCount, formatQValue, sampleHeader, spectrumLabel } from '$lib/results/display'
   import { peptidePsms, type ProteinDetail } from '$lib/results/protein'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
+  import { tick } from 'svelte'
   import { signed } from '../results/cells'
 
   let {
@@ -16,17 +21,25 @@
     detail,
     expanded = $bindable(null),
     onOpenPsm,
+    onOpenPsmTable,
   }: {
     view: ResultsView
     detail: ProteinDetail
     /** The peptide whose PSMs show (a row of `tables.peptides`), or null. */
     expanded?: number | null
     onOpenPsm: (psm: number) => void
+    /** "All n in the PSM table": the PSM table filtered by one peptide. */
+    onOpenPsmTable: (filter: { peptide: number }) => void
   } = $props()
 
-  /** The PSMs a peptide shows at first, and how many more each "more" adds. */
+  /** The peptides the list shows at first, and how many more each "Show more" adds. */
+  const firstPeptides = 100
+  const morePeptides = 100
+  /** The PSMs a peptide shows at first, and how many more each "Show more" adds. */
   const firstPsms = 10
   const morePsms = 50
+
+  const uid = $props.id()
 
   /** Pixels of a per-sample count column. */
   const sampleWidth = 34
@@ -52,6 +65,22 @@
   /** "F2" next to the sample when the design has fractions. */
   const fractions = $derived(m.design.rows.some((r) => r.fraction > 1))
 
+  // the peptides listed: the first 100 and what was asked for since; the open peptide is always listed
+  // (it can be one that was revealed before a visit to another tab)
+  let asked = $state(firstPeptides)
+  const openIndex = $derived(expanded === null ? -1 : detail.peptides.findIndex((e) => e.peptide === expanded))
+  const count = $derived(Math.min(detail.peptides.length, Math.max(asked, openIndex + 1)))
+  const listed = $derived(detail.peptides.slice(0, count))
+  const left = $derived(detail.peptides.length - count)
+
+  /** Reveals the next peptides, and moves the focus to the first of them (the button moved down). */
+  async function showMorePeptides() {
+    const first = count
+    asked = count + morePeptides
+    await tick()
+    document.getElementById(`${uid}-peptide-${detail.peptides[first].peptide}`)?.focus()
+  }
+
   let shown = $state(firstPsms)
   const psms = $derived(expanded === null ? new Uint32Array(0) : peptidePsms(m, expanded))
 
@@ -60,16 +89,35 @@
     shown = firstPsms
   }
 
-  function describe(i: number): string {
+  /**
+   * Reveals the next PSMs of the open peptide. The button stays where it is (below the new rows) while
+   * there are more; when the last ones appear it goes, and the focus moves to the last PSM's button
+   * instead of being lost.
+   */
+  async function showMorePsms() {
+    shown += morePsms
+    if (shown < psms.length) return
+    await tick()
+    document.getElementById(`${uid}-psm-${psms[psms.length - 1]}`)?.focus()
+  }
+
+  /** The columns the text of a PSM row spans (the q-value and the button take the rest). */
+  const descriptionSpan = $derived(Math.min(nS, 6))
+
+  /** "control 1 · F2 · scan 4711 · 2+ · Δ +0.6 ppm"; with a shift, the shift first (for the title). */
+  function describe(i: number, shift: string | null = null): string {
     const parts: string[] = [m.samples[m.psmSample[i]].label]
     if (fractions) parts.push(`F${m.design.rows[ps.file[i]].fraction}`)
     parts.push(`scan ${spectrumLabel(ps.nativeId[i])}`, `${ps.charge[i]}+`)
     if (ps.precursorErrorPpm[i] === ps.precursorErrorPpm[i]) parts.push(`Δ ${signed(ps.precursorErrorPpm[i], 1)} ppm`)
-    return parts.join(' · ')
+    return `${shift === null ? '' : `[${shift}]? `}${parts.join(' · ')}`
   }
 
   const th = 'h-8 border-b px-2 text-right text-xs font-medium whitespace-nowrap text-muted-foreground'
   const td = 'border-b px-2 py-[7px] text-right whitespace-nowrap'
+  // made once: a hundred rows of up to dozens of count cells are not worth a class merge each
+  const countCell = 'border-b px-1 py-[7px] text-right whitespace-nowrap'
+  const noCount = `${countCell} text-[#d4d4d8]`
 </script>
 
 {#if detail.peptides.length === 0}
@@ -78,7 +126,10 @@
   </p>
 {:else}
   <p class="mb-1.5 text-xs text-muted-foreground" data-testid="peptide-note">
-    {#if detail.peptides.length !== detail.sequences}
+    {#if left > 0}
+      Showing {formatCount(count)} of {formatCount(detail.peptides.length)} peptides{#if detail.peptides.length !== detail.sequences}
+        ({formatCount(detail.sequences)} sequences; modified forms are listed apart){/if}, by position.
+    {:else if detail.peptides.length !== detail.sequences}
       {formatCount(detail.peptides.length)} peptide forms of {formatCount(detail.sequences)} peptides: modified forms of a
       sequence are listed apart.
     {:else}
@@ -120,7 +171,7 @@
         {/if}
       </thead>
       <tbody>
-        {#each detail.peptides as e (e.peptide)}
+        {#each listed as e (e.peptide)}
           {@const open = expanded === e.peptide}
           {@const start = e.located ? e.spans[0].start + 1 : null}
           <!-- the whole row toggles; the button in its first cell is the keyboard's way in (its click bubbles up here) -->
@@ -133,6 +184,7 @@
             <td class="overflow-hidden border-b py-[5px] pr-2 pl-1">
               <button
                 type="button"
+                id="{uid}-peptide-{e.peptide}"
                 aria-expanded={open}
                 title={pt.proforma[e.peptide]}
                 class="flex max-w-full items-center gap-1 rounded-sm py-0.5 pr-1 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
@@ -148,34 +200,41 @@
             <td class={td} data-column="bestq">{formatQValue(m.peptide.bestQ[e.peptide])}</td>
             {#each m.samples as s (s.index)}
               {@const count = m.peptide.perSample[e.peptide * nS + s.index]}
-              <td class={cn(td, 'px-1', count === 0 && 'text-[#d4d4d8]')}>{count === 0 ? '–' : formatCount(count)}</td>
+              <td class={count === 0 ? noCount : countCell}>{count === 0 ? '–' : formatCount(count)}</td>
             {/each}
           </tr>
           {#if open}
             {#each psms.subarray(0, shown) as i (i)}
               {@const shift = massShift(ps.deltaMass[i])}
+              <!-- one line: the text takes the first columns (up to six), the q-value and the button what is right of them -->
               <tr data-testid="panel-psm" data-scan={spectrumLabel(ps.nativeId[i])} class="bg-[#fafafa] text-xs">
-                <!-- the text wraps (an open search's mass shift makes it longer than the three columns it spans) -->
-                <td colspan="3" class="border-b py-1 pr-2 pl-[34px] text-left">
-                  {#if shift !== null}<span class="font-mono whitespace-nowrap text-muted-foreground" title="Unassigned mass shift (Da), not localized">[{shift}]?</span>{' '}{/if}{describe(i)}
+                <td colspan={descriptionSpan} class="overflow-hidden border-b py-1 pr-2 pl-[34px] text-left text-ellipsis whitespace-nowrap" title={describe(i, shift)}>
+                  {#if shift !== null}<span class="font-mono text-muted-foreground">[{shift}]?</span>{' '}{/if}{describe(i)}
                 </td>
-                <td class="border-b px-2 py-1 text-right">{formatQValue(ps.qValue[i])}</td>
-                <td colspan={nS} class="border-b px-1 py-1 text-right">
+                <td colspan="2" class="border-b px-2 py-1 text-right whitespace-nowrap">{formatQValue(ps.qValue[i])}</td>
+                <td colspan={nS - descriptionSpan + 2} class="border-b px-2 py-1 text-left whitespace-nowrap">
                   <button
                     type="button"
+                    id="{uid}-psm-{i}"
                     class="rounded-sm px-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                     aria-label="Open the PSM of scan {spectrumLabel(ps.nativeId[i])} in the PSM table"
                     onclick={() => onOpenPsm(i)}>PSM ›</button>
                 </td>
               </tr>
             {/each}
-            {#if psms.length > shown}
+            {#if psms.length > firstPsms}
               <tr class="bg-[#fafafa] text-xs">
-                <td colspan={4 + nS} class="border-b py-1 pl-[34px] text-left">
+                <td colspan={4 + nS} class="border-b py-1 pl-[34px] text-left whitespace-nowrap">
+                  {#if psms.length > shown}
+                    <button
+                      type="button"
+                      class="mr-4 rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                      onclick={showMorePsms}>Show {Math.min(morePsms, psms.length - shown)} more ({formatCount(psms.length - shown)} left)</button>
+                  {/if}
                   <button
                     type="button"
                     class="rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    onclick={() => (shown += morePsms)}>+ {formatCount(psms.length - shown)} more PSMs</button>
+                    onclick={() => onOpenPsmTable({ peptide: e.peptide })}>All {formatCount(psms.length)} in the PSM table ›</button>
                 </td>
               </tr>
             {/if}
@@ -184,4 +243,10 @@
       </tbody>
     </table>
   </div>
+  {#if left > 0}
+    <div class="mt-2 mb-1 flex justify-center">
+      <Button variant="outline" size="sm" class="h-7 px-2.5 text-xs" onclick={showMorePeptides}
+        >Show {Math.min(morePeptides, left)} more ({formatCount(left)} left)</Button>
+    </div>
+  {/if}
 {/if}

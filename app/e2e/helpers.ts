@@ -4,7 +4,7 @@ import { expect, type Page } from '@playwright/test'
 // Shared by the Results e2e specs: opening a stored synthetic result (see debug.ts), reading the
 // export button and the CSV files, and the grid's active row.
 
-export async function openDebug(page: Page, which: 'large' | 'large1' | 'small') {
+export async function openDebug(page: Page, which: 'large' | 'large1' | 'dense' | 'small') {
   await page.goto(`./?debug=${which}`)
   await expect(page).toHaveURL(/#\/results\/[^/]+$/)
   await expect(page.getByTestId('results-table')).toBeVisible({ timeout: 30_000 })

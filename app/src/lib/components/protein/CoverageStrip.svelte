@@ -3,9 +3,8 @@
   // (blue) and a dot on every modified residue (#1baf7a, the colour of a modified residue everywhere).
   // Positions are percentages of the sequence, so the strip is as wide as the panel. It is a picture:
   // the Coverage tab has the same as text, and the Peptides tab lists the peptides.
-  import { modTitle } from '$lib/format/peptide'
   import { formatCount } from '$lib/results/display'
-  import type { ProteinDetail, Span } from '$lib/results/protein'
+  import { siteTitle, type ProteinDetail, type Span } from '$lib/results/protein'
 
   let { detail, selected = [] }: { detail: ProteinDetail; selected?: Span[] } = $props()
 
@@ -13,7 +12,23 @@
   const left = (position: number) => `${((position / length) * 100).toFixed(3)}%`
   const width = (span: Span) => `${(((span.end - span.start) / length) * 100).toFixed(3)}%`
 
-  // one block per distinct stretch (the modified forms of a sequence lie on the same one)
+  // One block per distinct place of a peptide (the modified forms of a sequence lie on the same one). A
+  // protein with hundreds of peptides has them sub-pixel wide, and a thousand blocks are as many nodes
+  // to make when the panel opens: past `individually`, the strip draws the stretches that peptides
+  // cover, joined across gaps narrower than a pixel (the strip is about 500 px wide), which looks the
+  // same at that density.
+  const individually = 200
+
+  function joined(spans: Span[]): Span[] {
+    const gap = length / 500
+    const out: Span[] = []
+    for (const s of spans) {
+      const last = out[out.length - 1]
+      if (last && s.start - last.end <= gap) out[out.length - 1] = { start: last.start, end: s.end }
+      else out.push(s)
+    }
+    return out
+  }
   const blocks = $derived.by(() => {
     const seen = new Set<string>()
     const out: Span[] = []
@@ -23,6 +38,7 @@
         if (seen.has(key)) continue
         seen.add(key)
         out.push(s)
+        if (out.length > individually) return joined(detail.spans)
       }
     }
     return out
@@ -59,7 +75,7 @@
       {#each detail.sites as site (site.position)}
         <b
           data-testid="mod-dot"
-          title={`${site.residue}${site.position + 1}: ${modTitle(site.mod)}`}
+          title={siteTitle(site)}
           class="absolute -top-[5px] -ml-[3.5px] size-[7px] rounded-full border-[1.5px] border-white bg-[#1baf7a]"
           style:left={left(site.position + 0.5)}></b>
       {/each}

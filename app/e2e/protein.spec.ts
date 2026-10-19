@@ -20,6 +20,9 @@ async function proteinRow(page: Page, index: number) {
   }
 }
 
+/** The heights of rows (a row that wraps is taller than the others). */
+const rowHeights = (rows: Locator) => rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))
+
 const panelOf = (page: Page, accession: string) => page.getByRole('region', { name: `Protein ${accession}` })
 
 /** Whether the focus is inside `panel`. */
@@ -70,7 +73,15 @@ test('a protein opens its coverage, peptides and PSMs', async ({ page }) => {
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   const shown = panel.getByTestId('panel-psm')
   await expect(shown).toHaveCount(Math.min(psms, 10))
-  if (psms > 10) await expect(panel.getByRole('button', { name: `+ ${psms - 10} more PSMs` })).toBeVisible()
+  // the PSM rows are one line each, as high as a peptide row at most
+  const heights = await rowHeights(shown)
+  expect(Math.max(...heights)).toBeLessThanOrEqual(Math.min(...heights) + 1)
+  expect(Math.max(...heights)).toBeLessThan(34)
+  // more than ten: "Show 50 more (n left)", and all of them in the PSM table
+  if (psms > 10) {
+    await expect(panel.getByRole('button', { name: `Show 50 more (${psms - 10} left)` })).toBeVisible()
+    await expect(panel.getByRole('button', { name: `All ${psms.toLocaleString('en-US')} in the PSM table ›` })).toBeVisible()
+  }
   // only one peptide is open at a time: the next one closes the first
   if ((await peptides.count()) > 1) {
     await peptides.nth(1).getByRole('button').click()
@@ -230,8 +241,14 @@ test('the coverage strip and map show the coverage and its modified sites', asyn
   expect(((covered / length) * 100).toFixed(1)).toBe(percent.toFixed(1))
   expect(dotted).toBe(sites)
   // the legend says what is marked, and that fixed modifications are not
-  await expect(panel.getByTestId('panel-legend')).toContainText('modified residue')
-  await expect(panel.getByTestId('panel-legend')).toContainText('fixed modifications (Carbamidomethyl (C)) are not marked')
+  // the footer says what a marked residue is and that fixed modifications are not marked; the dot is
+  // explained once, under the strip
+  const legend = panel.getByTestId('panel-legend')
+  await expect(legend).toContainText('modified residue')
+  await expect(legend).toContainText('fixed modifications are not marked: Carbamidomethyl (C)')
+  await expect(legend).not.toContainText('modified site')
+  await expect(legend).not.toContainText('(Carbamidomethyl (C))')
+  await expect(strip.locator('..')).toContainText('modified site')
 })
 
 test('a decoy protein has a panel, too', async ({ page }) => {
@@ -289,15 +306,20 @@ test('an open search: the panel\'s PSMs show their mass shift as the PSM table d
   const peptides = panel.getByTestId('panel-peptide')
   let withShift = 0
   let without = 0
+  const heights: number[] = []
   for (let i = 0; i < Math.min(await peptides.count(), 6); i++) {
     await peptides.nth(i).getByRole('button').click()
     for (const text of await panel.getByTestId('panel-psm').allTextContents()) {
       if (/\[[+-]\d+\.\d{4}\]\?/.test(text)) withShift++
       else without++
     }
+    heights.push(...(await rowHeights(panel.getByTestId('panel-psm'))))
   }
   expect(withShift).toBeGreaterThan(0)
   expect(without).toBeGreaterThan(0)
+  // a shift does not make a PSM row wrap: every PSM row is one line
+  expect(heights.length).toBe(withShift + without)
+  expect(Math.max(...heights)).toBeLessThanOrEqual(Math.min(...heights) + 1)
 })
 
 test('the PSMs tab of the panel lists the protein\'s PSMs, sorted and virtualized', async ({ page }) => {
@@ -311,6 +333,8 @@ test('the PSMs tab of the panel lists the protein\'s PSMs, sorted and virtualize
   await expect(grid).toBeVisible()
   await expect(grid).toHaveAttribute('aria-rowcount', String(first.psms + 1))
   // best q-value first
+  // the Scan header sorts as the table's Spectrum header does, and says so
+  await expect(grid.getByRole('columnheader', { name: 'Scan' })).toHaveAttribute('title', /scan number when every spectrum has one.*natural order/)
   const q = grid.getByRole('columnheader', { name: 'q-value' })
   await expect(q).toHaveAttribute('aria-sort', 'ascending')
   // a click opens the PSM
@@ -333,4 +357,154 @@ test('with the panel open, the filter field does not clip its placeholder', asyn
     return { text: canvas.measureText(input.placeholder).width, room: input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) }
   })
   expect(text + 4).toBeLessThanOrEqual(room)
+})
+
+/** The long tasks (ms) that the page has had since `watchLongTasks`. */
+async function watchLongTasks(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __long: number[] }
+    w.__long = []
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) w.__long.push(Math.round(entry.duration))
+    }).observe({ type: 'longtask' })
+  })
+}
+const longTasks = (page: Page) => page.evaluate(() => (window as unknown as { __long: number[] }).__long)
+
+test('a protein with a thousand peptides lists the first hundred, the rest on demand', async ({ page }) => {
+  test.setTimeout(120_000)
+  // ?debug=dense: 20,000 peptides in 20 proteins, in 24 files: the first protein has about 1,000
+  await openDebug(page, 'dense')
+  const first = await proteinRow(page, 0)
+  expect(first.peptides).toBeGreaterThan(900)
+  await watchLongTasks(page)
+  await first.row.click()
+  const panel = panelOf(page, first.accession)
+  const peptides = panel.getByTestId('panel-peptide')
+  await expect(peptides).toHaveCount(100)
+  // the tab still counts all of them, and says what is listed
+  const total = number(await panel.getByRole('tab', { name: /^Peptides/ }).textContent())
+  expect(total).toBeGreaterThan(900)
+  await expect(panel.getByTestId('peptide-note')).toContainText(/^Showing 100 of [\d,]+ peptides/)
+  // a hundred rows, not a thousand: the panel has a few thousand nodes (rendering all of them was about 48,000)
+  expect(await panel.evaluate((el) => el.querySelectorAll('*').length)).toBeLessThan(8000)
+
+  // and it opens quickly: no long task over 200 ms (rendering all the rows was one of 1.5 s). Timing is
+  // noisy on a busy machine, which stalls any run; a regression is slow in every run, so the bound is
+  // for the best of three openings.
+  let best = Infinity
+  for (let attempt = 0; attempt < 3 && best >= 200; attempt++) {
+    if (attempt > 0) {
+      await page.keyboard.press('Escape')
+      await expect(panel).toHaveCount(0)
+      await page.evaluate(() => ((window as unknown as { __long: number[] }).__long.length = 0))
+      await first.row.click()
+      await expect(peptides).toHaveCount(100)
+    }
+    await page.waitForTimeout(500)
+    best = Math.min(best, Math.max(0, ...(await longTasks(page))))
+    console.log(`long tasks while opening a protein with ${first.peptides} peptides, opening ${attempt + 1}: ${JSON.stringify(await longTasks(page))} ms`)
+  }
+  expect(best).toBeLessThan(200)
+
+  // 100 more, by keyboard; the focus goes to the first row that appeared, which is where the user reads on
+  const more = panel.getByRole('button', { name: `Show 100 more (${total - 100} left)` })
+  await more.focus()
+  await page.keyboard.press('Enter')
+  await expect(peptides).toHaveCount(200)
+  await expect(peptides.nth(100).getByRole('button')).toBeFocused()
+  await expect(panel.getByRole('button', { name: `Show 100 more (${total - 200} left)` })).toBeVisible()
+
+  // and to the end (the button is clicked in the page: this many rows are slow to query one by one): the
+  // last chunk says how many it shows, the button goes, and the focus is on the first row of that chunk
+  const lastChunk = total - 100 * Math.floor((total - 1) / 100)
+  await panel.evaluate(async (el, stopAt) => {
+    for (;;) {
+      const button = [...el.querySelectorAll('button')].find((b) => /^Show \d+ more \(/.test(b.textContent ?? ''))
+      const left = Number(/\(([\d,]+) left\)/.exec(button?.textContent ?? '')?.[1].replace(/,/g, ''))
+      if (!button || left <= stopAt) return
+      button.click()
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    }
+  }, lastChunk)
+  const last = panel.getByRole('button', { name: `Show ${lastChunk} more (${lastChunk} left)` })
+  await expect(last).toBeVisible()
+  await last.click()
+  await expect(peptides).toHaveCount(total)
+  const shown = total
+  await expect(peptides.nth(total - lastChunk).getByRole('button')).toBeFocused()
+  await expect(panel.getByRole('button', { name: /^Show \d+ more/ })).toHaveCount(0)
+  await expect(panel.getByTestId('peptide-note')).not.toContainText('Showing')
+  // a peptide expanded further down still expands, and the strip shows it
+  await peptides.nth(shown - 1).getByRole('button').click()
+  await expect(peptides.nth(shown - 1).getByRole('button')).toHaveAttribute('aria-expanded', 'true')
+  await expect(panel.getByTestId('selected-block').first()).toBeVisible()
+  // ... and it is still there after a visit to another tab
+  await panel.getByRole('tab', { name: 'Coverage' }).click()
+  await panel.getByRole('tab', { name: /^Peptides/ }).click()
+  await expect(panel.getByTestId('panel-peptide').getByRole('button', { expanded: true })).toHaveCount(1)
+})
+
+test('"Show 50 more" and the PSM table link work by keyboard, and the focus stays in the list', async ({ page }) => {
+  test.setTimeout(120_000)
+  await openDebug(page, 'dense')
+  const first = await proteinRow(page, 0)
+  await first.row.click()
+  const panel = panelOf(page, first.accession)
+  const peptides = panel.getByTestId('panel-peptide')
+  await expect(peptides).toHaveCount(100)
+
+  // a peptide with 11 to 50 PSMs: its list is complete after one "Show 50 more"
+  const counts = await peptides.evaluateAll((rows) => rows.map((r) => Number((r.querySelector('[data-column="psms"]')!.textContent ?? '').replace(/\D/g, ''))))
+  const index = counts.findIndex((n) => n > 10 && n <= 50)
+  expect(index, 'a peptide with 11 to 50 PSMs among the first hundred').toBeGreaterThanOrEqual(0)
+  const n = counts[index]
+  const expander = peptides.nth(index).getByRole('button')
+  await expander.focus()
+  await page.keyboard.press('Enter')
+  await expect(expander).toHaveAttribute('aria-expanded', 'true')
+  await expect(panel.getByTestId('panel-psm')).toHaveCount(10)
+
+  // Tab goes through the ten PSM buttons to "Show n more" (50 at most)
+  const more = panel.getByRole('button', { name: `Show ${Math.min(50, n - 10)} more (${n - 10} left)` })
+  for (let i = 0; i < 30 && !(await more.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press('Tab')
+  await expect(more).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(panel.getByTestId('panel-psm')).toHaveCount(n)
+  // the button is gone: the focus is on the last PSM's button, not lost
+  await expect(more).toHaveCount(0)
+  const last = panel.getByTestId('panel-psm').last()
+  await expect(last.getByRole('button')).toBeFocused()
+
+  // the next stop is the link to all of them in the PSM table
+  await page.keyboard.press('Tab')
+  const all = panel.getByRole('button', { name: `All ${n} in the PSM table ›` })
+  await expect(all).toBeFocused()
+  const proforma = await peptides.nth(index).getByRole('button').getAttribute('title')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('tab', { name: /^PSMs/ })).toHaveAttribute('aria-selected', 'true')
+  const chip = page.getByRole('button', { name: /^Peptide: / })
+  await expect(chip).toBeVisible()
+  await expect(chip).toHaveAttribute('title', proforma!)
+  await expect(page.getByTestId('row-count')).toHaveText(new RegExp(`^${n} of `))
+  await expect(page.getByRole('grid', { name: 'PSMs' })).toBeFocused()
+  await chip.click()
+  await expect(chip).toHaveCount(0)
+})
+
+test('"Show 50 more" counts down, and keeps the focus on the button while there is more', async ({ page }) => {
+  await openDebug(page, 'large')
+  const first = await proteinRow(page, 0)
+  await first.row.click()
+  const panel = panelOf(page, first.accession)
+  const one = panel.getByTestId('panel-peptide').first()
+  const psms = number(await one.locator('[data-column="psms"]').textContent())
+  expect(psms).toBeGreaterThan(110)
+  await one.getByRole('button').click()
+  const more = panel.getByRole('button', { name: `Show 50 more (${psms - 10} left)` })
+  await more.focus()
+  await page.keyboard.press('Space')
+  await expect(panel.getByTestId('panel-psm')).toHaveCount(60)
+  const next = panel.getByRole('button', { name: `Show 50 more (${psms - 60} left)` })
+  await expect(next).toBeFocused()
 })

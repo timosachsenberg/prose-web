@@ -1,4 +1,4 @@
-// ?debug=large|small (see debug.ts): opens a stored synthetic result in Results, as History will
+// ?debug=large|large1|dense|small (see debug.ts): opens a stored synthetic result in Results, as History will
 // open a stored search. For the e2e tests and for trying the tables without a search.
 
 import type { DebugResultFlag } from '../debug'

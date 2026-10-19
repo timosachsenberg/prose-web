@@ -27,6 +27,9 @@ export type ColumnSpec = {
   optional?: 'shown' | 'hidden'
 }
 
+/** The tooltip of a spectrum column: how it sorts (the PSM table and the protein panel share it). */
+export const spectrumTitle = 'Sorts by scan number when every spectrum has one, else by native ID in natural order (scan 2 before scan 10)'
+
 /** The pseudo-id of the Columns menu that hides all per-sample columns. */
 export const samplesColumn = 'samples'
 
@@ -82,7 +85,7 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
     col('proteins', 'Proteins', 150, 'left'),
     col('sample', 'Sample', 96, 'left'),
-    col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: 'Sorts by scan number when every spectrum has one, else by native ID in natural order (scan 2 before scan 10)' }),
+    col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: spectrumTitle }),
     col('charge', 'z', 44, 'right', { title: 'Charge' }),
     col('mz', 'm/z', 94, 'right'),
     col('rt', 'RT (min)', 84, 'right', { title: 'Retention time (the CSV writes seconds)' }),
