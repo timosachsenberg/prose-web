@@ -1,0 +1,201 @@
+# ProSE app: decision log
+
+Companion of [`../prose-app-spec.md`](../prose-app-spec.md) (snapshot of 2026-10-19). It preserves every
+ruling of the three task ledgers (`.superpowers/sdd/2026-10-16-prose-app-{A-library,B-bindings,C-app}/progress.md`),
+which are git-ignored and will be deleted. Wording follows the ledgers; each entry gives **what** was
+decided, **why**, and the **cost if wrong** as the ledger recorded it.
+
+Identifiers: **A-R*n***, **B-R*n***, **C-R*n*** = "Ruling *n*" of that ledger. Ruling 30 is recorded in
+the C ledger but continues the B numbering (the B ledger has none). Entries the ledgers record as
+"Note" or "Parked" are listed where they carry a decision.
+
+---
+
+## 1. Process and workflow
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C-R2 | Execution order across the three plans, one implementer at a time: A1–A5, C1, C2, C3, C5, B1–B7, C4, C6–C12. | C1–C3 and C5 need no engine. | None. |
+| Global (from C1, in all three ledgers) | Commit trailers name the model that wrote the commit (each subagent's harness attribution, e.g. Claude Sonnet 5.5); the plans' `Co-Authored-By: Claude Opus 5.5` line applies to commits the controller's own model writes. | Accurate authorship beats uniformity. | Mixed trailers in the history. |
+| A-R1 | Plan A runs in a new worktree `/scratch/sachsenb/openms-merged` (branch `claude/prose-merged-in-library` from `origin/claude/prose-percolator-in-library` 8bd10f7c62), build dir `OpenMS-build`, configured by `/scratch/sachsenb/wasm-logs/native-merged.sh` (reuses the vcpkg checkout and `vcpkg_installed` of `openms-develop-prose`; ONNX on; class tests on). | Keeps #10578's checkout untouched (the plan named that worktree, which conflicts with isolation). | None beyond paths. |
+| B-R1 | B1 merges the local branch `claude/prose-merged-in-library` (same repository via the worktree) instead of `origin/…`. | Works whether or not A5 pushed. | None. |
+| B-R3 | B7 copies the package into `prose-pages/app/public/openms/` without committing there; C4's implementer commits it with the engine task. | Keeps B's commits in the OpenMS repo. | One extra commit later. |
+| B-R21 | The node exit abort (mt-onnx) gets a dedicated systematic-debugging investigation **after B6** and before B7; the B6 implementer is told to record, not fix. | B6 adds ONNX predictions in the same threaded module; the shared build dirs must not be rebuilt concurrently. | B6 tests may also see the flake. |
+| B-R24 | B7's carried items are collected in `task-7-carried-items.md`; the implementer does steps 1–3 (docs, package copy, full tests) and commits; the controller pushes and opens the draft PR (step 4) only after the task review is clean; the spec link points to the `prose-app` branch of timosachsenberg/prose-web (pushed by the controller, a non-deploying branch). | Review before publishing. | PR opened slightly later. |
+| B-R26 | B7 fix round 1 changes docs and tests only (no module change), so the package stays `3.7.0-pre.d2a798a00d`, named after the module build commit: both Importants, minors 1–7, the writeFile-close note in the README (not in `wasmfs_node.js`, avoids a relink), CHANGELOG suffix "(working around emscripten#27825)". | No relink needed. | The package version names the module commit, not HEAD. |
+| B-R27 (plan amendment) | The spec's success criterion (6–12 × 1 GB in the browser) is not met by the plan's file model — a plan defect, not a guess: add **Task B8** (PeptDeep heap retention: root cause + fix, on this branch) and **Task B9** (inputs outside the heap: Chromium spike OPFS vs per-file streaming with a measured decision rule, then implement + browser test + README; includes the `FS.writeFile`/`FS.write` malloc guard). Each gets a controller-written brief, a task review and fix rounds. The final fix wave (Important 3 collisionEnergy, Important 4 protein-less peptides, minors) follows B9, then one final re-review. PR #10604 stays draft meanwhile. | The B final review found the inputs in the heap (2 × 733 MB → 3173 MB) and ~1 GB of heap kept per PeptDeep-rescored file. | Two more tasks of work on B. |
+| B order note | B8 → B9 → final fix wave → final re-review, sequential (shared build dirs). C4's fix round runs in parallel (other repo). | Shared build directories. | — |
+| C12 pre-flight | C12 Step 6 publishes (push `main`, switch Pages, release): gated on user approval — stop and ask there. | Publishing is the user's decision. | — |
+| User request (2026-10-17) | "When done also store the full spec so it is easy to recreate": an as-built spec in timosachsenberg/prose-web (branch `prose-app`, `docs/prose-app-spec.md`) folding in the design, every ruling, the final engine API, UX decisions and mockups, memory/storage design, build and recreate instructions, and PR links; written before the SDD workspaces are deleted. "Commit first" (same day): commit a snapshot now and update it at the end. | User request. | — |
+
+---
+
+## 2. Library (part A, PR #10602)
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| A-R2 | Task 3's test copies the mzML to temp files named `ProSE_12_a.mzML` / `ProSE_12_b.mzML` (Task 2's tests may use any names). **Renamed by A-R3** to `ProSE_13_*`. | The label assertions need exact basenames. | A renamed fixture. |
+| A-R3 | The new TOPP tests are numbered 13 (`TOPP_ProSE_13_merged*`, reference `src/tests/topp/ProSE_13_merged_out.idXML`, temp files `ProSE_13_a.mzML`/`ProSE_13_b.mzML`; Task 3 labels "Searching ProSE_13_a.mzML (1 of 2)..."). | `TOPP_ProSE_12_*` already exists (pin tests). | Renames only. |
+| A-R4 | The committed test becomes portable: the FileInfo `-out_tsv` summary of the merged idXML compared with calibrated `-absdiff` tolerances like the TOPP_ProSE_6/12 count tests, plus structural assertions (protein score type q-value, 0 decoy PSMs); the exact golden is kept only locally (`ProSE_13_merged_golden.idXML` in the A workspace) for Task 2's byte-for-byte refactor check (FuzzyDiff, Linux). | A 6.7 MB golden with tight FuzzyDiff is not portable to macOS/Windows CI (HyperScore near-tie flips #9640, Percolator ~1 % on Windows); the spec requires identical tool behaviour, which the local exact check still proves; CI gets the portable test. | CI catches less than an exact golden would. |
+| A-R5 | `id_merge_index` is the **input position** (the interface/spec wins over "move unchanged"): remap in both pooling paths + a class test with `per_file[0]` failed expecting {1}. Tool output changes only in runs where a file failed (which already exit INTERNAL_ERROR). | Per-PSM provenance is a spec requirement for the app; the struct doc and method doc contradicted each other. | A behaviour change in a failing tool run. |
+| A-R6 | The per-file progress contract is **label-based**: one "Searching <basename> (<i+1> of <n>)..." start per file, in input order, every start balanced by an end; nesting depth is guaranteed only single-threaded (pre-existing ProgressLogger race, out of scope; B identifies the file by label, B-R5); the header doc must say so; tests assert labels/order/balance at default threads and depth at 1 thread. | `ProgressLogger::recursion_depth_` is an unsynchronized static; the async mzML reader changes it with > 1 OpenMP thread. | A consumer relying on depth sees garbage with threads. |
+| A-R7 | Chunk-major searches (`database:chunk_size` > 0 with a larger database) emit no per-file step (documented); B reports file −1 there. | They search all files per chunk, so a per-file step has no meaning. | Less informative progress for chunked browser searches. |
+| A-R8 | `mergeFileResults` gets `bool remove_decoys = true` (tool unchanged); with false it applies inference + picked-protein FDR + the protein filter but keeps decoy PSMs/proteins that pass, only removing dangling evidences and updating groups. (Implementation finding: needs `add_decoy_proteins = true` in that path, else `applyPickedProteinFDR` drops all decoy proteins.) | The spec keeps decoys visible in the app (A final review, Important 1). | An unused option. |
+| A-R9 | The fix wave also does the cheap pre-merge items: append `e.what()` to the InvalidValue catch (ProSE.cpp); scope the header's "balanced" claim to the per-file step; relative depth assertions in the progress test; check `in_spectra_files.size() == per_file.size()` (IllegalArgument); public `PeptDeepRescoring` constant for "peptdeep_nce" (`NCE_META_VALUE`); CHANGELOG sentence "output does not change" corrected; the wrong T2 test comment; "input position" docs say "(inputs with distinct paths)"; keep the per-file runs intact in the fallback (copy runs, move only PSMs) + a single-file `mergeFileResults` test. Not done: Minor 8 (no file when all failed), Minor 9 (DRY with `applyCompleteSetProteinFDR`) — post-merge. | Cheap before merge. | Small. |
+| Parked (from B2) | `mergeFileResults()` throws "Graph empty" (BasicProteinInferenceAlgorithm) when no file has a PSM; the tool's `-out_merged` failed the same way before the move. Ruling: pre-existing, follow-up for #10602 (return an empty MergedResult); the binding works around it. | Pre-existing. | Tool error on all-empty input. |
+
+A ledger deferred minors (kept for the follow-ups): CMakeLists comments "±6"/"±1" ignore FuzzyDiff ratio
+1.01 (effective ~1 %); `PASS_REGULAR_EXPRESSION` on the TSV-writing FileInfo test makes ctest ignore its
+exit code; tolerances from Test 6 (no Percolator) not verified on macOS/Windows; tests mix hits and
+identifications (valid only with one hit per ID); ProSEAlgorithm_test 85–96 s (+20–30 s); the same path
+given twice in `-in` shares one `id_merge_index`; the threaded test part runs before the parts asserting
+`nesting_errors == 0`; an exception inside a nested step leaves the outer step open (pre-existing); the
+early index build is a 28-line single-use lambda and the log order changed; the "runs disagree → omit"
+NCE fallback is untested; `nce_by_run` copies `used_nce_` and compares doubles exactly; PR body long;
+with `remove_decoys = false` a decoy without its target pair gets the nearest picked q-value
+(documented `add_decoy_proteins` behaviour); the fallback comment near ProSEAlgorithm.cpp:~5792 omits
+the single-file reason.
+
+---
+
+## 3. Engine API (part B, PR #10604)
+
+### 3.1 Search, pooling, progress
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| B-R4 | Part A's reference is `src/tests/topp/ProSE_13_merged_out.idXML` (not `ProSE_12_…`, A-R3). **Superseded by B-R7.** | Renumbering. | A path. |
+| B-R5 (from A3) | B2 derives the progress event's `file` index from the depth-0 label pattern "Searching <name> (<i> of <n>)..." matched **by label, not by depth**. | ProgressLogger's recursion depth is a static unsynchronized int, unreliable with several threads. | File index shown late/early in the UI. |
+| A-review note | Read `peptdeep_nce` from the per-file runs (`MultiFileSearchResult::per_file[i].protein_ids`) **before** `mergeFileResults()` moves identifications out; the merged run does not carry per-file values. Missing value → use the default NCE. | A4 omits it when runs disagree. | — |
+| B-R6 (from A final review) | B2 extends #10575's `JSProgressLogger` to keep a stack of open (begin, end) ranges and report the innermost open step's range; a JS test asserts value/range monotone per step label. Refined by the A re-review note: it must track **its own** stack of open steps (push on start, pop on end), never read absolute depths. | The per-file step shifts every search step one level deeper; the old logger took begin/end only from depth-0 starts and the bar would jump to 100 %. | Wrong progress bar. |
+| B-R7 (supersedes B-R4) | There is no golden idXML; B2's comparison uses `src/tests/topp/ProSE_13_merged_info.tsv` (1 run, 47 proteins, 1790 PSMs, 895 distinct peptides) with the TOPP tolerances (±1 protein, ±6 PSMs, ratio 1.01), and `searchFiles` is called with `removeDecoys = true` for that test; default for the app: false = keep decoys (A-R8); `ProSEFilesOptions` gains `removeDecoys?: boolean /* default false */`. | A-R4 removed the golden. | Test calibration. |
+| B-R8 | The per-file `percolator` becomes `{ applied: boolean; skipped: string \| null; warning: string \| null } \| null` — no `seconds`; `warning` passes `PercolatorRescoring::warning` through. | The library rescores inside the search and does not time it. | No Percolator timing in the app. |
+| B-R9 | The heap growth of threaded searches (~30 MB/file/search) is pre-existing and not fixed in B; the app's engine client restarts its worker before each new search (C4), so repeated searches start from a fresh heap. | Fixing mimalloc behaviour is out of scope. | The idXML export of the previous search is gone after a new search starts (already planned: in-session only). |
+| B2 review rulings | Fix now: the progress logger reset per search (stale step stack after a throwing search) and a multi-file open-search test ("the app's open-search view uses it"). Deferred: TS status literal union / options alias incl. null\|undefined (recorded for C4); the "rescored only some" inference on InvalidValue; weak heap test; rarely exercised progress branch; no per-file step in chunked searches (documented in B7); `reset()` without `isOwner_` check. | — | — |
+| B2 deviations accepted | `build_pooled_aggregate = false` (one PSM copy; `mergeFileResults` pools by moving; identical results); heap test 1 thread × 4 searches; repeated paths rejected; no PSMs → empty result. | Memory, determinism, provenance by path. | — |
+| B-R15 | Accept the new public library API `ProSEAlgorithm::pinEnzymeName()` (895c103ac0) in the bindings PR; the B7 CHANGELOG names it. | Avoids copying the enzyme mapping (OpenMS CLAUDE.md: prefer existing APIs). | The library change moves to the library PR. |
+
+### 3.2 `tables()`
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| B-R10 | The semantics calls stand: `proteins.score` = best `psms.score`; `psms.score` = Percolator SVM score when rescored, else ln(hyperscore); `isotopeError` 0 when absent; `modUnimod` −1 unknown. | The review confirms they serve the score plot and q-values stay separate. | One column's meaning changes in C. |
+| B-R11 | Add the standard PIN features (mass, peplen, charge2..5, enzN/C, enzInt, dm, absdm) now, with the public `PercolatorInfile::stampPinFeaturesOnHits` on a copy of the best hits. | Spec goal 4: all PSM features; no duplication of the PIN rules. | A few ms per table build. |
+| B-R12 | The unlocalized open-search shift stays a per-PSM value (peptides keyed by the OpenMS string); document in the `proforma`/`deltaMass` d.ts comments that the app composes `[+Δ]?SEQ` from `psms.deltaMass`; an open-search test asserts it. Note carried to plan C (C7/C8). | A peptide row has no per-PSM data. | C builds the string itself. |
+| B-R13 | Keep the copy of ProSE's decoy rule (no private-to-public library change in the bindings PR), add a "keep in sync with ProSEAlgorithm::buildDecoyAugmentedDB_" comment and an unspecific-search (reverseProtein path) slice test. | Decoy coverage display only. | A silent drift in decoy sequences in untested configs. |
+| B-R14 | Minors fixed in the same round: `modName` from `getFullName()`; −100 sentinel documented (q = 1, filtered at any FDR); start/end doc wording; ln(hyperscore) finite check; `proteins.score` = max PSM score check. Isotope sign flip and the transient copy deferred. | — | — |
+| B3 deferred to B7 | ASCII only in `register_type` strings (the d.ts generator double-encodes Δ and ×); `pin_not_features` copies Percolator.cpp's 6-name exclusion list; multi-chunk (> 4096 PSMs) stamping untested; the open-search test's bracket strip would trip on a C-term mod; isotope sign flip; transient feature copy. | — | — |
+| B-R28 | Important 4 of the final review (peptides whose proteins all failed protein FDR lose all protein refs but keep their PSMs, 19/967): document (`proteinOffsets[k] === proteinOffsets[k+1]` = all proteins below the protein FDR), and C shows such peptides/PSMs with "below protein FDR" in the protein column, excluded from protein counts; no extra column. | Undocumented behaviour; keeps the table simple. | Users cannot see which protein failed. |
+
+### 3.3 `spectra()`
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| B-R2 | The test hook is an always-compiled, documented `ProSEResultSet._debugSetNativeId(row, nativeId)` (leading underscore, "for tests") instead of a compile-time option. | The JS tests run on the normal build (the plan's `OPENMS_WASM_TEST_HOOKS` contradicted that). | One tiny extra method in the API. |
+| B-R16 | Spectra collected eagerly at the end of `searchFiles` (files guaranteed present); `_debugSetNativeId` re-runs the collection from the stored paths (documented "for tests", kept out of the app contract); `keepSpectra` false → empty arrays, `psmSpectrum` all −1; dedupe by (file, nativeId); `collisionEnergy` NaN when no precursor or energy ≤ 0; peaks as read (MS2, m/z sorted); selection `qValue <= psmFdr` incl. decoys, NaN q → kept. | — | A re-read in tests only / an extra spectrum or two. |
+| B-R17 | Accept `FDR:PSM` 0 → keep all rows. | 0 disables the filter in ProSE; the spec says "every spectrum with a PSM passing the search's FDR". | More peaks kept with FDR off. |
+| B-R18 | Fix (1) as a depth-0 progress step "Reading the spectra of the PSMs..." (file −1, range = MS2 spectra of files with wanted rows, `setProgress` every ~256 spectra; absent when `keepSpectra` false or nothing wanted; progress tests updated) and (2) with distinct files (marker CE 33 in file 1, same-basename layout); minors: duplicate native IDs disambiguated by RT else −1, read-failure test, size guard in `spectra()`, full suite on the final tree. Keep the heap copy (no implicit release); C4's worker deletes the set when done (**that last part superseded by C-R13**). | No progress during collection (~20–50 s per GB); a two-file test with identical files cannot catch a swap. | One more progress step in the UI. |
+| B4 deferred | No RAII guard around the collection step (the per-search reset covers it); the every-256 `setProgress` path untested (OpenMS throttles to 1/s); partial-read + repeated-ID edge; the `q > psmFdr` branch untested; `_debugSetNativeId` test-only note → B7 README/CHANGELOG. | — | — |
+| Follow-up | OpenMS library bug: `MzMLHandler.cpp:160` takes `skip_chromatogram_` from `PeakFileOptions::getSkipChromatograms()` at `setOptions`, so `setSkipChromatograms(true)` returns every spectrum empty (since d49ba5f392a, 2025-05-06); class tests miss it (`MzMLFile_test.cpp:1910`, `FileHandler_test.cpp:930`). Out of scope, for the user. | — | — |
+
+### 3.4 `annotatePeaks()`
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| Pre-B5 notes | `peak` = index into the caller's arrays (`annotateSpectrum` sorts a copy → map back); TSG ion names → contract `ion` without "+" for charge 1, "++" for 2, loss suffix "-H2O"/"-NH3"; type "a".."z" or "precursor" (ordinal 0); options as `AnnotationOptions` incl. `maxCharge` (default precursor charge − 1, ≥ 1) and `precursor`; theoretical entries carry type/ordinal/charge/mz; refactor shared internals with `annotateSpectrum`, no copy. | — | — |
+| B-R19 | `peak` = index into the caller's arrays; ion "b3"/"y5++"/"y7-H2O" (no "+" at charge 1); type a..z or "precursor" (ordinal 0); loss "" or formula; theoretical = all generated peaks as `{ion,type,ordinal,charge,mz}`; `errorPpm` always ppm; options/defaults as `annotateSpectrum` via a shared helper; charge < 1 → InvalidValue. | One contract for C8/C9. | Label format change in C8. |
+| B-R20 | Document per-unit matching (ppm: each ion → closest peak, a peak may carry several ions; Da: one-to-one DP alignment), pin both with tests; loss names table H3O4P→H3PO4, HO3P→HPO3; `static_cast<double>` for peak; duplicate-m/z tie test. `annotateSpectrum` unchanged. Note for C8: group matches by peak (several labels per peak possible). | The d.ts promised one-to-one matching, false in ppm (MatchedIterator). | Docs only. |
+| B5 fix round 2 | Da tie of equal-m/z peaks is **unspecified** (tests assert one-among-equal), with a d.ts caveat; 'H3PO4' in the loss examples. | "The second" was false in general (reviewer repro y3). | — |
+| B5 deferred | HO3P→HPO3 entry untested; precursor peak only at `maxCharge` (inherited); `fromString` throws ParseError for syntax errors (InvalidValue only for unknown residues) — propagated. | — | — |
+
+### 3.5 `predictMS2()`
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| Pre-B6 ruling | Rescale the returned b/y ions so their max is exactly 1 (documented "relative to the most intense predicted b/y ion"), drop ≤ 0.01 after rescaling. | The brief said intensities "as the model returns them (0–1, max 1)" but drops modloss channels. | — |
+| B-R22 | Rescale returned b/y to max exactly 1, drop ≤ 0.01; drop z2 fragments for 1+ precursors; ion names as annotatePeaks; mz from TSG; static session cache per model path under a mutex, failures not cached; always exported, throws "without ONNX Runtime" without `WITH_ONNX`; instrument via `ML::instrumentIndex` (unknown → catch-all); channel mapping/NCE scale mirrored from PeptDeepRescoring. | — | Intensity scale in the mirror plot. |
+| B-R23 | Fix the proline pin (orientation from chemistry), the `8*(n-1)` channel check, undefined/null `modelPath` → default, and the "returned ion" wording; drop the NCE 60 → [] pin; rest deferred. | Base-peak pins are circular; the NCE 60 pin is a model artifact that breaks on model update. | One test less. |
+| B6 deferred | Test comment "predicted" (fixed in B7); mapping helper in the library (follow-up); non-MS2 model cached; static destruction order (harmless, `EXIT_RUNTIME=0`); README items (cache, catch-all instrument, ascending m/z, [] for one residue, ~0.6 s first call) → B7. | — | — |
+
+### 3.6 WasmFS and the test-process abort
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| Investigation result | Root cause: Emscripten WasmFS Node backend bug (emscripten#27825): a failed open of a deleted host file returns ENOENT (44) as an fd; a later `close(44)` closes a Node Worker's epoll fd → libuv assertion at exit. Trigger: B4's read-failure test. Fix: `src/openms_wasm/wasmfs_node.js` (`--js-library` override returning −errno). Review confirmed (Emscripten 6.0.12 `libwasmfs_node.js:19-27/170-173` + `node_backend.cpp:61/84`; strace). Polish → B7 (version guard + removal note, stricter-behaviour comment, close sign, `SHELL:` link option, `ENVIRONMENT_MAY_BE_NODE` guard, test cleanup). | — | — |
+| B-R25 | The WasmFS override stays in **product code**. | A defect in shipped glue that affects every Node user of `mountHostDirectory`. | One JS file to drop after an Emscripten fix. |
+
+### 3.7 Memory, storage, final wave
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| B final review | NOT ready. Critical: (1) browser inputs sit in the 4 GB heap for the whole `searchFiles` (2 × 733 MB → 3173 MB); (2) PeptDeep keeps ~1 GB heap per rescored 75 MB file. Important: (3) `collisionEnergy` NaN for typical mzML (MS:1000045 stored as precursor meta value "collision energy"); (4) protein-less peptides undocumented. Minors and a recommendation to serve annotate/predict from a separate small worker (→ C-R14). Rulings were held until the C4 reviewer's OPFS opinion. | — | — |
+| C4 reviewer's OPFS opinion | Feasible (`libwasmfs_opfs.js` already in WasmFS's default libs; needs a `mountOPFS` binding; reserve the backend thread in threads.js; read-only opens use slow Blob mode — measure, or hold O_RDWR/read-only access handles; close JS handles before search; quota/persist; private windows fall back to memory; Node must throw, not hang). Also: `FS.writeFile`/`FS.write` malloc unchecked with `ABORTING_MALLOC=0` → OOM corrupts memory from address 0 (`libwasmfs.js:494-505`); idXML read via `_wasmfs_read_file` keeps a full-size thread_local buffer (`js_api.cpp:41-42`). | Input to B-R27. | — |
+| B-R27 | See §1 (plan amendment: B8, B9, final wave). | — | — |
+| B-R29 | Minors in the final fix wave: annotate PSM q-values when `FDR:PSM` is 0 and decoys exist (no filtering, as the old demo did); `predictMS2` rejects charge/NCE outside the model's documented range (InvalidValue; ranges from the library/peptdeep, else charge 1–6, NCE 10–60 documented as the binding's choice); `search()` passes `percolator.warning`; `ProSEMultiSummary` gains the search statistics `search()` exposes (index size, seconds, decoy mode, recommended tolerances) — C may use them; document the annotatePeaks `maxCharge` default vs predictMS2's 2+ fragments (C passes `maxCharge` 2 for the mirror). The partial-rescore throw stays (library rule); C maps its message. | — | — |
+| Ruling 30 (C ledger) | B9 gains fast chunk write/read bindings (≥ 200 MB/s); C6 shows "Reading the files..." indeterminate while staging; C4b (after B9) switches staging to OPFS or the fast binding. | C4's bounded `FS.write` staging copies byte by byte (~25 MB/s). | Slow staging until C4b. |
+| B-R31 | B8 fix round 1: `peptdeep:batch_size` default 128 under `__EMSCRIPTEN__` in ProSEAlgorithm's defaults (visible in `getDefaults`; native stays 500); remove measurement numbers from code comments; rename the test (no "keep no memory"), 2 searches, bound the PeptDeep-specific growth; correct the report. Baseline per-search growth (mimalloc) is irrelevant across searches in the app (fresh worker per search, B-R9) but matters per file inside one multi-file search → the B9 brief gains "evaluate `-sMALLOC=dlmalloc`/emmalloc for the threaded module if per-file growth limits 4 × big733". | 500-row batches of one length still grew +1.6 GB; batch 50–200 held the heap at 810 MB at no time cost; "no retention" overstated (the baseline does not plateau). | One more build variant measured in B9. |
+| B8 deferred (→ final wave) | Shared constant `ML::PEPTDEEP_DEFAULT_BATCH_SIZE` (128 wasm / 500 native) used by ProSEAlgorithm, PeptDeepRescoring and the inference constructors; `bind_prose.cpp:1070-1071` batch-size comment; test/commit title wording ("beyond the search's own"); report Concerns 1 superseded. Follow-ups for the user: the emscripten mimalloc large-allocation/never-release issue; 8 MB stacks × all cores in Node. | — | — |
+| B9 spike outcome (2026-10-19) | O2 (OPFS access handles) search 2.58 × M on big733 (1.41 × erwinia) → fails the 1.3 × rule; heap rule held (+160 MB); **S (per-file streaming) chosen** per the rule. | The brief's measured decision rule. | — |
+| B7 deferred | `package.json` files/exports list `openms.data` and `README.md` that the app copy does not ship (inherited from the build). | — | — |
+
+---
+
+## 4. App (part C)
+
+### 4.1 Design model
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C-R1 | The design summary omits "· fractions …" when no file has a fraction and uses singular "1 sample"/"1 condition"; fractions as a range "1–n". | Matches both tests (C2 "6 files → 3 samples · 2 conditions · fractions 1–2", C6 "2 files → 2 samples · 1 condition"). | Wording only. |
+| C-R4 | design.tsv reader: without `MSstats_BioReplicate` and `Sample`, `Fraction_Group` defines the biological unit (OpenMS default); fix the test. | A minimal OpenMS design was misread. | — |
+| C-R5 | Files without condition but with fractions form samples by the same replicate rule as within a condition (one implicit group), labels "Replicate n"; files with neither condition nor fraction stay one sample per file. Replicates by order of appearance = the *n*-th occurrence of each fraction number is replicate *n* (fixes fraction-major order). | Spec: incomplete input must not be punished. | — |
+| C-R6 | `Notice.kind` gains "duplicateFile" (two rows with the same fileName; the message tells to rename or remove); `writeDesignTsv` throws an Error naming the duplicates; the search keeps such files apart anyway (distinct `/input/<i>/` paths). | OpenMS needs unique (Spectra_Filepath, Label). | The user must rename a file to export the design. |
+| C-R7 | Also fix the literal U+FEFF (use an escape). Reload renumbering stays (minor, documented later in UI copy). | — | — |
+| C2 deferred | Stale doc comments; duplicateFile notice keys raw `fileName` vs the writer's cleaned name; condition-less SDRF files with only fraction 1 lose their stems; no `unevenFractions` notice for condition-less groups; "run and run" for different extensions; explicit rep 1 + blank F1 land in the same sample. Note for C6: catch `writeDesignTsv`'s throw / disable Save while a duplicateFile notice exists; 0-based `Sample.index`/`ResolvedRow.sample` vs 1-based `fractionGroup`. | — | — |
+
+### 4.2 Types, formats, contaminants
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C-R3 | `public/fasta/crap.fasta` is OpenMS's own copy of cRAP (116 entries). | ftp.thegpm.org serves a certificate for other hostnames, so the plan's download URL failed TLS verification. | Provenance note only. |
+| C-R8 | Until part B's `openms.d.ts` exists, the app declares B's TS shapes in `app/src/lib/engine/openms-types.ts`, verbatim from the B plan; C4 replaces them with imports from `public/openms/openms.d.ts`. (Done in C4: re-exports.) | Keeps C3/C5 unblocked. | A type mismatch caught at C4. |
+| C3 deferred | `modificationAnalysis` typed unknown (folded in at C4); the fixed-mod regex `[A-Z]` missed multi-residue sites (fixed in C6); two mods on one residue overwrite (theoretical); FdrInput "0" flicker, hint, a11y; PeptideSequence screen-reader reading; `formatQ` 3 vs `percentNumber` 6 significant digits; `peptideView` re-parses fixedMods per call; ProForma mode shows fixed mods (legend must say so). | — | — |
+
+### 4.3 Results model
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C-R9 | Peptide-level psms/perSample/foundIn are counted at `min(peptide maxQ, psmFdr)` (recount when tighter); protein-level counts stay at the search PSM FDR (the protein filter is the protein q-value; Task 7 labels the count headers "at search PSM FDR"). | Peptide counts contradicted the PSM tab when the peptide cutoff was tightened. | — |
+| C-R10 | `foundIn` always counts biological samples (Condition + Replicate); splitting technical replicates only changes the count columns. | Spec: "Found in" counts biological samples. | — |
+| C-R11 | Protein "Peptides" and `minPeptides` count distinct plain sequences (MaxQuant convention); the peptide table rows stay peptidoforms. | — | — |
+| C-R12 | Also fix: `buildModel`'s psmFdr/proteinFdr required (no silent "no cap"); negative `peptideFilter` → no rows; CSV: UTF-8 BOM, final newline, text cells starting with `= + - @ \t \r` prefixed with `'` (numeric columns untouched); `buildModel` checks `tables.files[i]` basename == `design.rows[i].fileName` and length equality (throws with a clear message). | Review findings. | — |
+| C5 notes for C7 (ruled requirements) | One FilterState per level; protein FDR filter shown unavailable when protein q-values are NaN; count headers "at search PSM FDR"; wire `loadDebugResult(?debug=large\|small)`; make `maxQ` a required parameter of `sortRows`/`toCsv` (or pass the level's FilterState) so cells, sort and CSV read one cutoff; BOM as escape; PSM CSV "File" = basename; validate psmFdr/proteinFdr > 0 before `buildModel`; no second BOM; don't use the CSV string for the clipboard. | — | — |
+| C5 deferred | PSM text filter does not search nativeId/file; +Infinity ties with NaN in sort; the apostrophe prefix hits condition-derived labels like "-EGF 1" (accepted); counts-cache memory at extreme sizes. | — | — |
+
+### 4.4 Engine client
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| Notes from B (C ledger) | `ProSEFileSummary.percolator` without seconds (B-R8); ProSE's `rescore` parameter: the Percolator switch must set it and the All-parameters list must not show a second control; Percolator (~10 s per file) has no progress events → indeterminate bar; `peptides.proforma` never carries the open-search shift, compose `[+Δ]?` from `psms.deltaMass`, shown only above 0.05 Da, `toFixed(4)`, NaN on closed searches; `psms.score`/`proteins.score` semantics and the −100 sentinel; `featureNames` include the PIN features; annotatePeaks can repeat a `peak` index in ppm → group labels per peak, never key a Map by peak alone; loss labels H2O, NH3, H3PO4, HPO3, CH4OS; annotatePeaks options arity not checked at runtime, pass null for defaults. | — | — |
+| C-R13 (supersedes the earlier "worker calls `set.delete()`" note) | Fresh worker per search; the worker keeps the ProSEResultSet until replaced (`idXML()` stores lazily; `delete()` pointless since memory never shrinks and the worker is discarded); `CON__` prefix in core.ts, no dedup; progress per-file steps → [0, 0.95], "Reading the spectra of the PSMs..." → [0.95, 1], monotone, label passed through; transfer all typed arrays once; rescore → ProSE `rescore`; peptdeep → `peptdeep:enable` + `/models`; traps reject with `/out of memory\|trap/` + `database:chunk_size` and restart; `cancel()` terminates + restarts; `core.test.ts` may use 1 thread under vitest if needed. Started in parallel with B's final review. | B-R9; memory never shrinks. | C4 rework if the final B fixes change the API. |
+| Scale issue (controller) | Inputs live in WasmFS's memory backend = inside the 4 GB heap until `spectra()` re-reads them → 6–12 × 1 GB cannot fit; Emscripten 6.0.12 ships a WasmFS OPFS backend the module does not expose. To be ruled after B's final review (→ B-R27). | — | — |
+| C-R14 | C4 fix round (in parallel with B8/B9): stage one file at a time (Blob input, read+write+drop; chunked `FS.open`/`FS.write` instead of `FS.writeFile`, no full temp copy); refuse before writing when total input > heap budget (`getMemoryInfo().heapMax` minus a reserve) with a plain message naming sizes; stage-aware trap messages (reading files / searching / exporting idXML / annotate / predict) — chunk_size advice only while searching; restart verified with a timeout and a "Reload the page" fallback; idXML read in bounded chunks; typed FakeWorker (EngineResponse) + the 3 race tests; a committed Playwright smoke test of the real worker (init, one-file search, annotate, idXML) in `e2e/`; `cancel()` is a no-op unless a search is pending; map the partial-rescore error to "switch Percolator off or leave out <files>"; a separate long-lived **viewer** worker (lazy, small thread count) serves annotate/predict so they never wait behind a search and keep heap headroom (idXML stays with the search worker); peptdeep implies rescore (UI-level: C6 disables PeptDeep when Percolator is off); spectra step recognised as file = −1 after the last file, not by label; structuredClone transfer check in the test. Storage via OPFS waits for B9 (C4b later; **B9 then chose per-file streaming**). | C4 review: unchecked mallocs, blanket chunk_size advice, idXML doubling, annotate/predict waiting behind a search. | The viewer worker costs one more module instance (~45 MB compile + its heap). |
+| C4 deferred (→ C4b) | Cleanup in catch/finally can mask the original trap (wrap `remove()` in try/catch); OpenMS OutOfMemory/bad_alloc errors get no stage advice; the 30 s start timeout also on the first init (C6 passes 180 s meanwhile); cancel during a restart waits; test nits. Note C6/C7: expose the app's EngineClient on `?debug=engine` instead of a second client. | — | — |
+| Notes for C6 | The PeptDeep switch requires Percolator; the memory estimate must use the B9 storage mode; protein-less peptides show "below protein FDR" (B-R28); mirror plot: annotatePeaks with `maxCharge` 2 (B-R29). | — | — |
+
+### 4.5 New search
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C-R15 | C6 fix round 1: Importants 1–3 (assumed design cells must look editable and meet contrast; Cancel must work while OpenMS loads; engine errors with file and stage, not raw C++ text); minors 1 (warn for chunked semi/none), 3, 4 (keep an invalid entry visible with an error until corrected), 5 (sticky thead), 6 (MaxQuant Name/Experiment mapping), 7 (only known mods once OpenMS is loaded; before that, mark as unverified and verify at start), 8, 9, 10, 11, 12 (one polite live region for the notice summary), 13 (split SearchFooter into plan/estimate, progress, error, preset dialog), 14 (compact progress indicator in the TopBar on other views, click → New search). Accepted: 2 (Start enabled over budget: the engine budget may exceed the estimate), 15 (Start a11y name), 16 (mockup deviations). | Review in the real UI. | One more round. |
+| C6 fix round 2 (ledger) | Percolator-stage error attribution (no longer the last file), a bounded scroll box with fixed widths for the Advanced table, stale invalid drafts dropped, minors. | Re-review findings. | — |
+| C6 accepted deviations (report) | PeptDeep off by default; decoys labels "Use the database's, else generate" / "Generate" / "None (no FDR)" for auto/generate/ignore; ppm/Da toggle; "All 72 parameters" (77 minus rescore, peptdeep:enable, two model paths, peptdeep:instrument); no "works offline" until the SW; binary units app-wide. | See the main spec §5.3. | — |
+| C6 deferred | File-column end truncation at 1024–1280 px with Advanced (middle ellipsis would help); an invalid entry stays when an empty paste doesn't change the model; the ">2 s silent step (e.g. Percolator)" suffix may attach to other errors; estimate optimistic for chunked searches (warn only). | — | — |
+
+### 4.6 Results view
+
+| Id | Decision | Why | Cost if wrong |
+|---|---|---|---|
+| C7 carried items | One FilterState per level; protein FDR unavailable with tooltip; count headers; CSV BOM/basename; one `?debug=` parser; open-search `[+Δ]?` above 0.05 Da; score labels from the summary, −100 → "–"; protein-less peptides "below protein FDR"; contaminant marker and "hide contaminants" on by default, decoys hidden by default; `PeptideSequence` with the marked/ProForma setting and its legend; Export menu (CSV, design.tsv, Project disabled with "Available with History (coming next)" and a `TODO(C11)`, idXML only while the search worker holds the result, else "Run the search again to export idXML"); replace C6's placeholder; screenshots against mockup 2. | Controller rulings carried into the task. | — |
+| C-R16 | C7 fix round 1: Important 1 (grid = single tab stop + `aria-activedescendant`, keyed rows), 3 (gene ColumnDef in the CSV), 2(a) example preset protein FDR 5 % marked in the plan line + 2(b) explanatory empty state with "Search again with protein FDR 5 %"; minors: muted contrast for data, sample header aria-labels, proteins filter also matches peptide sequences, nativeId parsing (scan=/spectrum=/index=), negative RT → "–", compute levelRows once, "Exporting…" state, sort follows the column id across the tech-replicate toggle, release the module cache when results close, a 1 % debug variant. Deferred: group counting semantics → C8/C10 decision; TopBar wrap → C12 responsive pass; runes test conditions. The engine-side question (why a decoy protein ranks first) gets a separate read-only investigation (native ProSE `-out_merged` comparison). | C7 review: focus lost after mouse scroll; the example shows 0 proteins (suspicious: a decoy ranking first among 49 targets with 1,790 PSMs at q ≈ 5e-6); a visible column missing from the CSV. | An engine bug hidden behind the 5 % preset. |
+| C1 deferred | Route state was local to App.svelte (moved in C6); `$lib` alias written 4×; `npm run e2e` does not build first and may reuse a stale preview; body font (set to 13px in C6); dead export, untested "Results returns to last id", redundant parse. Notes: crap.fasta headers lack `CON__` (core.ts adds it); mount ModeWatcher `defaultMode="light"` if a Toaster is added. | — | — |
