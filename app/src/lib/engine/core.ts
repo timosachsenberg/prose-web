@@ -1,12 +1,17 @@
 // The engine's work on the OpenMS module, without the worker around it: used by `worker.ts` and run
-// against the real module by `core.test.ts` (Node.js). Follows the ProSE example of the module
-// (`examples/prose/worker.mjs`): the inputs are written to the module's file system (WasmFS, in memory,
-// read directly by every thread), the PeptDeep models to /models.
+// against the real module by `core.test.ts` (Node.js). Follows the README of the module ("Several files
+// and the ProSE app"): the database and the PeptDeep models are written to the module's file system
+// (WasmFS, in memory, read directly by every thread), and the mzML files are searched file by file
+// (`searchFiles` with provideFile/releaseFile): each is written when its turn comes and removed after
+// its search, so that only the file being searched is in the module's memory (at most 4 GB, shared with
+// the search).
 //
-// Memory: WasmFS keeps its files in the module's heap (at most 4 GB, shared with the search). The inputs
-// are therefore checked against a budget first, and every file goes in and out in bounded chunks
-// (`FS.write`/`FS.read`): `FS.writeFile` and `FS.readFile` hold a second, full-size copy in the heap,
-// and the allocation of `writeFile` is not checked.
+// Memory: every file goes in and out in bounded chunks (`allocateFile` at its final size, then
+// `writeFileChunk`; `readFileChunk`), so that JavaScript never holds a whole file next to the module's
+// copy. A file can be at most 2 GiB − 64 MiB (MAX_FILE_BYTES): larger ones are refused before the search.
+//
+// After a fatal error (`isFatal`: a trap, an abort, a C++ exception the module did not catch) the module
+// is not called again, not even to clean up (README "What is not guarded"): the worker is replaced.
 
 import type {
   AnnotationOptions,
@@ -20,8 +25,7 @@ import type {
   ResultTables,
   StoredSpectra,
 } from './openms-types'
-import { formatBytes } from '../format/bytes'
-import type { EngineInfo, SearchProgress } from './protocol'
+import { fileTooLargeMessage, isFatal, isTooLarge, type EngineInfo, type SearchProgress } from './protocol'
 
 /** The accession prefix of the contaminants the app appends (the results model reads it). */
 export const CONTAMINANT_PREFIX = 'CON__'
@@ -39,14 +43,6 @@ export const MODELS = [
 export const MS2_MODEL_FILE = MODELS[0].file
 const MS2_MODEL = `${MODELS_DIR}/${MS2_MODEL_FILE}`
 
-/**
- * What the heap has to keep free beside the inputs: the fragment index, the spectra, the PSMs and their
- * features, Percolator, the result tables and the peaks for the viewer. 1.5 GB is conservative for the
- * searches the README measured (a human tryptic search: 2.0 GB in all with a 78 MB mzML); a larger search
- * needs `database:chunk_size` anyway.
- */
-export const SEARCH_RESERVE = 1.5 * 2 ** 30
-
 /** The size of the pieces in which files go into and out of the module's file system. */
 export const CHUNK_SIZE = 16 * 2 ** 20
 
@@ -57,7 +53,7 @@ export interface CoreInput {
 }
 
 export interface CoreSearchRequest {
-  /** The mzML files, written to `/input/<index>/<name>`. */
+  /** The mzML files, written to `/input/<index>/<name>` one at a time, while each is searched. */
   files: CoreInput[]
   /** The FASTA file, written to `/input/db/<name>`. */
   database: CoreInput
@@ -80,10 +76,22 @@ export interface CoreSearchOutcome {
   results: ProSEResultSet
 }
 
-/** The paths of the staged inputs. */
-export interface StagedInputs {
-  files: string[]
-  database: string
+/**
+ * Reads `length` bytes of `blob` from `offset` (fewer at its end), synchronously: the search asks for
+ * each file from within (`provideFile`), so a worker reads it with FileReaderSync.
+ */
+export type ReadSync = (blob: Blob, offset: number, length: number) => Uint8Array
+
+/** What a search reports and asks while it runs. */
+export interface SearchHooks {
+  onProgress: (p: SearchProgress) => void
+  /**
+   * What the search is doing, for the advice of an error: writing the database or a file (`reading`),
+   * searching (`searching`; again after each file is written).
+   */
+  onStage?: (stage: 'reading' | 'searching') => void
+  /** Reads the mzML files (each when its turn comes). */
+  readSync: ReadSync
 }
 
 /** A progress report of `ProSEAlgorithm.setProgressCallback()`. */
@@ -94,7 +102,7 @@ export interface ModuleProgress {
   begin: number
   end: number
   value: number
-  /** The input file of the step; -1 outside the files (and throughout a chunked search). */
+  /** The input file of the step; -1 outside the files. */
   file: number
 }
 
@@ -104,9 +112,6 @@ type FileSystem = MainModule['FS']
 const DIRECTORY_MODE = 0o777
 
 const encoder = new TextEncoder()
-
-/** Bytes for people: "7.8 GB", "850 MB" (binary units, as everywhere in the app). */
-export const formatSize = formatBytes
 
 /**
  * The database with contaminants: the user's FASTA, then the entries of `crap` with `CON__` before
@@ -144,7 +149,7 @@ function exists(FS: FileSystem, path: string): boolean {
 }
 
 /** Removes a file or a directory with everything in it. */
-function remove(FS: FileSystem, path: string) {
+function remove(FS: FileSystem, path: string): void {
   if (!exists(FS, path)) return
   let entries: string[]
   try {
@@ -158,37 +163,60 @@ function remove(FS: FileSystem, path: string) {
 }
 
 /**
- * Writes `data` to `path` in pieces of CHUNK_SIZE: one piece at a time in JavaScript and in the heap.
- * The file is sized first, so that WasmFS allocates it once (growing it piece by piece would reallocate
- * and copy it, with up to twice its size).
+ * Removes `path` like `remove`, but never throws: cleanup in a `catch` or `finally` must not replace the
+ * error that got there (after a trap the file system may fail as well).
  */
-export async function writeBlob(FS: FileSystem, path: string, data: Blob, chunkSize = CHUNK_SIZE): Promise<void> {
-  const stream = FS.open(path, 'w')
+function tryRemove(FS: FileSystem, path: string): void {
   try {
-    FS.ftruncate(stream.fd, data.size)
-    for (let offset = 0; offset < data.size; offset += chunkSize) {
-      const piece = new Uint8Array(await data.slice(offset, offset + chunkSize).arrayBuffer())
-      const written = FS.write(stream, piece, 0, piece.length, offset, false)
-      if (written !== piece.length) throw new Error(`${path}: wrote ${written} of ${piece.length} bytes.`)
-    }
-  } finally {
-    FS.close(stream)
+    remove(FS, path)
+  } catch {
+    // the error that matters is the one being handled
   }
 }
 
-/** Reads the file at `path` in pieces (CHUNK_SIZE) into one JavaScript array (outside the heap). */
-export function readFile(FS: FileSystem, path: string, chunkSize = CHUNK_SIZE): Uint8Array<ArrayBuffer> {
-  const size = Number(FS.stat(path).size)
-  const out = new Uint8Array(size)
-  const stream = FS.open(path, 'r')
+/** Deletes an object of the module, never throwing (as `tryRemove`). */
+function tryDelete(object: { delete(): void }): void {
   try {
-    for (let offset = 0; offset < size; ) {
-      const read = FS.read(stream, out, offset, Math.min(chunkSize, size - offset), offset)
-      if (read <= 0) throw new Error(`${path}: read ${offset} of ${size} bytes.`)
-      offset += read
-    }
-  } finally {
-    FS.close(stream)
+    object.delete()
+  } catch {
+    // the error that matters is the one being handled
+  }
+}
+
+/**
+ * Writes `data` to `path` (anew) in pieces of CHUNK_SIZE: the file is allocated at its size first, so
+ * that WasmFS holds it in one block (growing it piece by piece would reallocate and copy it), and one
+ * piece at a time is in JavaScript. Asynchronous reads: for what is written before the search (the
+ * database, the PeptDeep models).
+ */
+export async function writeBlob(OpenMS: MainModule, path: string, data: Blob, chunkSize = CHUNK_SIZE): Promise<void> {
+  OpenMS.allocateFile(path, data.size, data.size)
+  for (let offset = 0; offset < data.size; offset += chunkSize) {
+    OpenMS.writeFileChunk(path, new Uint8Array(await data.slice(offset, offset + chunkSize).arrayBuffer()), offset)
+  }
+}
+
+/**
+ * Writes `data` to `path` as `writeBlob`, synchronously (`read`), in a block of `capacity` bytes: files
+ * that come one after the other, each removed before the next, then reuse one block instead of growing
+ * the heap with every larger file (README "Files one after the other").
+ */
+export function writeBlobSync(OpenMS: MainModule, path: string, data: Blob, read: ReadSync, capacity: number, chunkSize = CHUNK_SIZE): void {
+  OpenMS.allocateFile(path, data.size, capacity)
+  for (let offset = 0; offset < data.size; offset += chunkSize) {
+    OpenMS.writeFileChunk(path, read(data, offset, Math.min(chunkSize, data.size - offset)), offset)
+  }
+}
+
+/** Reads the file at `path` in pieces (CHUNK_SIZE, `readFileChunk`) into one JavaScript array (outside the heap). */
+export function readFile(OpenMS: MainModule, path: string, chunkSize = CHUNK_SIZE): Uint8Array<ArrayBuffer> {
+  const size = Number(OpenMS.FS.stat(path).size)
+  const out = new Uint8Array(size)
+  for (let offset = 0; offset < size; ) {
+    const piece = OpenMS.readFileChunk(path, offset, Math.min(chunkSize, size - offset))
+    if (piece.length === 0) throw new Error(`${path}: read ${offset} of ${size} bytes.`)
+    out.set(piece, offset)
+    offset += piece.length
   }
   return out
 }
@@ -206,92 +234,66 @@ export async function loadModels(
   if (!exists(FS, MODELS_DIR)) FS.mkdir(MODELS_DIR, DIRECTORY_MODE)
   for (const file of files) {
     const path = `${MODELS_DIR}/${file}`
-    if (!exists(FS, path)) await writeBlob(FS, path, await fetchModel(file))
-  }
-}
-
-/**
- * How many bytes of input the module can hold beside a search: what the heap can still grow to,
- * less SEARCH_RESERVE. The whole current heap counts as used (conservative; in a fresh module it is
- * the module itself, about 170 MB).
- */
-export function inputBudget(OpenMS: MainModule): number {
-  const { heapSize, heapMax } = OpenMS.getMemoryInfo()
-  return Math.max(0, heapMax - heapSize - SEARCH_RESERVE)
-}
-
-/**
- * Writes the inputs to /input (replacing earlier ones), one file at a time and in pieces: the mzML
- * files to `/input/<index>/<name>`, the database (with the contaminants) to `/input/db/<name>`. Refuses
- * before writing anything if they exceed `inputBudget()`.
- */
-export async function stageInputs(
-  OpenMS: MainModule,
-  req: Pick<CoreSearchRequest, 'files' | 'database' | 'contaminants'>,
-): Promise<StagedInputs> {
-  const { FS } = OpenMS
-  const database =
-    req.contaminants === null ? req.database.data : await withContaminants(req.database.data, req.contaminants)
-  const total = req.files.reduce((sum, f) => sum + f.data.size, database.size)
-  const budget = inputBudget(OpenMS)
-  if (total > budget) {
-    throw new Error(
-      `The files total ${formatSize(total)}; this browser engine can hold about ${formatSize(budget)} at once: ` +
-        'search fewer files at a time.',
-    )
-  }
-
-  remove(FS, '/input')
-  const staged: StagedInputs = {
-    files: req.files.map((f, i) => `/input/${i}/${f.name}`),
-    database: `/input/db/${req.database.name}`,
-  }
-  try {
-    for (const [i, f] of req.files.entries()) {
-      FS.mkdirTree(`/input/${i}`, DIRECTORY_MODE)
-      await writeBlob(FS, staged.files[i], f.data)
+    if (exists(FS, path)) continue
+    const model = await fetchModel(file)
+    try {
+      await writeBlob(OpenMS, path, model)
+    } catch (e) {
+      if (!isFatal(e)) tryRemove(FS, path) // not half a model, which would count as loaded
+      throw e
     }
-    FS.mkdirTree('/input/db', DIRECTORY_MODE)
-    await writeBlob(FS, staged.database, database)
-  } catch (e) {
-    remove(FS, '/input')
-    throw e
   }
-  return staged
+}
+
+/** Refuses a file the module's file system cannot hold (MAX_FILE_BYTES), before anything is written. */
+function checkSizes(files: { name: string; size: number }[]): void {
+  const tooLarge = files.find((f) => isTooLarge(f.size))
+  if (tooLarge) throw new Error(fileTooLargeMessage(tooLarge.name, tooLarge.size))
 }
 
 const FILES_SHARE = 0.95
 
+/** The step of a database chunk ("  file 1 chunk 3": each file is searched on its own, so always file 1). */
+const CHUNK_STEP = /^\s*file \d+ chunk (\d+)\s*$/
+
+/** The step of a file of a search of several: "Searching run.mzML (2 of 3)...". */
+const FILE_STEP = /^Searching .* \(\d+ of \d+\)\.\.\.$/
+
+/** The label once the last file's step has ended (the pooling of the files reports nothing). */
+export const POOLING = 'Pooling the files...'
+
 /**
- * Maps ProSE's progress reports of a search of `fileCount` files to one monotone fraction:
+ * Maps ProSE's progress reports of a search of `fileCount` files, searched file by file, to one
+ * monotone fraction:
  *
- * - The steps of file i ("Searching <name> (i + 1 of n)...", `file` = i, and the steps nested in it)
- *   take [i, i + 1] / n of [0, 0.95]. Within it, the file's own step and the progress events of the
- *   nested steps (value within begin..end) advance the fraction; the start and end of a nested step
- *   change the label only (how many steps a file has is not known in advance).
- * - The step that follows the last file's (`file` -1: "Reading the spectra of the PSMs...") takes
- *   [0.95, 1].
- * - Steps outside the files before that (a chunked search has no per-file steps at all) change the
- *   label only.
+ * - The steps of file i ("Searching <name> (i + 1 of n)...", `file` = i, and the steps nested in it,
+ *   writing the file and reading the spectra of its PSMs included) take [i, i + 1] / n of [0, 0.95].
+ *   Within it, the file's own step and the progress events of the nested steps (value within
+ *   begin..end) advance the fraction; the start and end of a nested step change the label only (how
+ *   many steps a file has is not known in advance).
+ * - When the last file's step ends (of several files), the label becomes "Pooling the files..." (file
+ *   -1): the pooling reports nothing, and the fraction holds at 0.95 until the result.
+ * - Steps outside the files change the label only.
+ * - The chunks of a chunked search within a file's step ("  file 1 chunk 3": the file is searched on its
+ *   own) are named by the database: "Searching database chunk 3...".
  *
  * The fraction never goes back, and between reports (Percolator sends none) it holds.
  */
 export function progressMapper(fileCount: number): (p: ModuleProgress) => SearchProgress {
   let fraction = 0
-  let lastFileSeen = false
   const share = FILES_SHARE / Math.max(1, fileCount)
   return (p) => {
-    const label = p.label.trim()
+    // within a file's step (file by file) the chunk's "file 1" is the file on its own
+    const chunk = p.file >= 0 ? CHUNK_STEP.exec(p.label) : null
+    const label = chunk ? `Searching database chunk ${chunk[1]}...` : p.label.trim()
     const range = p.end - p.begin
     const within = range > 0 ? Math.min(1, Math.max(0, (p.value - p.begin) / range)) : p.event === 'end' ? 1 : 0
-    let next = fraction
-    if (p.file >= 0 && p.file < fileCount) {
-      if (p.file === fileCount - 1) lastFileSeen = true
-      if (p.depth === 0 || p.event === 'progress') next = (p.file + within) * share
-    } else if (p.file === -1 && lastFileSeen) {
-      next = FILES_SHARE + (1 - FILES_SHARE) * within
+    if (p.file >= 0 && p.file < fileCount && (p.depth === 0 || p.event === 'progress')) {
+      fraction = Math.min(1, Math.max(fraction, (p.file + within) * share))
     }
-    fraction = Math.min(1, Math.max(fraction, next))
+    if (fileCount > 1 && p.event === 'end' && p.file === fileCount - 1 && FILE_STEP.test(label)) {
+      return { label: POOLING, file: -1, fraction }
+    }
     return { label, file: p.file, fraction }
   }
 }
@@ -313,61 +315,96 @@ export function searchError(e: unknown): unknown {
 }
 
 /**
- * Searches staged inputs with ProSE (`searchFiles`) and removes them afterwards (the results hold what
- * they need, the peaks included). The result set stays in the module for idXML; the caller deletes it.
+ * Searches the files of `req` against its database with ProSE, file by file:
+ *
+ * 1. refuses a file larger than MAX_FILE_BYTES (the database too) before anything is written;
+ * 2. writes the database (with the contaminants) to `/input/db/<name>` (`reading`);
+ * 3. searches (`searching`) with `searchFiles(…, { provideFile, releaseFile })`: provideFile(i) writes
+ *    file i to `/input/<i>/<name>` (`reading` while it does: `allocateFile` with the size of the largest
+ *    file as capacity, then `writeFileChunk` of pieces read by `hooks.readSync`), releaseFile(i) removes it.
+ *
+ * `/input` is cleaned before and removed after, unless the module failed fatally (`isFatal`: then it is
+ * not called again). The result set stays in the module for idXML (it holds the peaks already); the
+ * caller deletes it.
  */
-export function searchStaged(
-  OpenMS: MainModule,
-  staged: StagedInputs,
-  req: Pick<CoreSearchRequest, 'parameters' | 'rescore' | 'peptdeep'>,
-  onProgress: (p: SearchProgress) => void,
-): CoreSearchOutcome {
+export async function runSearch(OpenMS: MainModule, req: CoreSearchRequest, hooks: SearchHooks): Promise<CoreSearchOutcome> {
+  const { FS } = OpenMS
+  if (req.peptdeep) {
+    if (!OpenMS.hasONNXRuntime()) throw new Error('PeptDeep needs an OpenMS module with ONNX Runtime.')
+    for (const m of MODELS) {
+      if (!exists(FS, `${MODELS_DIR}/${m.file}`)) throw new Error(`The PeptDeep model ${m.file} is not loaded.`)
+    }
+  }
+  const database =
+    req.contaminants === null ? req.database.data : await withContaminants(req.database.data, req.contaminants)
+  checkSizes([...req.files.map((f) => ({ name: f.name, size: f.data.size })), { name: req.database.name, size: database.size }])
+
+  const paths = req.files.map((f, i) => `/input/${i}/${f.name}`)
+  const databasePath = `/input/db/${req.database.name}`
+  // one block of the largest file's size for every file (computed once)
+  const capacity = Math.max(0, ...req.files.map((f) => f.data.size))
   const { parameters, options } = searchSettings(req)
+  /** The module failed fatally: it is not called again, not even to clean up. */
+  let fatal = false
+  /** What provideFile threw, if fatal: searchFiles() rethrows only its message, which may not say so. */
+  let fatalInFile: unknown = null
+  const failed = (e: unknown) => {
+    if (isFatal(e)) fatal = true
+    return e
+  }
   const prose = new OpenMS.ProSEAlgorithm()
   try {
+    hooks.onStage?.('reading')
+    remove(FS, '/input')
+    FS.mkdirTree('/input/db', DIRECTORY_MODE)
+    await writeBlob(OpenMS, databasePath, database)
+
     prose.setParameterValues(parameters as Record<string, ParamValue>)
-    const map = progressMapper(staged.files.length)
-    prose.setProgressCallback((p) => onProgress(map(p)))
+    const map = progressMapper(paths.length)
+    prose.setProgressCallback((p) => hooks.onProgress(map(p)))
+    hooks.onStage?.('searching')
     const started = performance.now()
     let results: ProSEResultSet
     try {
-      results = prose.searchFiles(staged.files, staged.database, options)
+      results = prose.searchFiles(paths, databasePath, {
+        ...options,
+        provideFile: (i, path) => {
+          hooks.onStage?.('reading')
+          try {
+            FS.mkdirTree(path.slice(0, path.lastIndexOf('/')), DIRECTORY_MODE)
+            writeBlobSync(OpenMS, path, req.files[i].data, hooks.readSync, capacity)
+          } catch (e) {
+            if (isFatal(failed(e))) fatalInFile = e
+            throw e
+          }
+          hooks.onStage?.('searching')
+        },
+        // also called for a file whose writing or search failed: it may not be there
+        releaseFile: (_i, path) => {
+          if (!fatal) tryRemove(FS, path)
+        },
+      })
     } catch (e) {
-      throw searchError(e)
+      // what provideFile threw comes back wrapped ("searchFiles(): provideFile(1, …) threw: <its message>")
+      if (fatalInFile !== null) throw fatalInFile
+      throw searchError(failed(e))
     }
     const seconds = (performance.now() - started) / 1000
     try {
       return { summary: results.summary(), tables: results.tables(), spectra: results.spectra(), seconds, results }
     } catch (e) {
-      results.delete()
+      failed(e)
+      if (!fatal) tryDelete(results)
       throw e
     }
+  } catch (e) {
+    throw failed(e)
   } finally {
-    prose.delete()
-    remove(OpenMS.FS, '/input')
-  }
-}
-
-/**
- * Searches the files of `req` against its database: stages them (`stageInputs`), then searches
- * (`searchStaged`). `onStage` hears when the reading ends and the search begins.
- */
-export async function runSearch(
-  OpenMS: MainModule,
-  req: CoreSearchRequest,
-  onProgress: (p: SearchProgress) => void,
-  onStage: (stage: 'reading' | 'searching') => void = () => {},
-): Promise<CoreSearchOutcome> {
-  if (req.peptdeep) {
-    if (!OpenMS.hasONNXRuntime()) throw new Error('PeptDeep needs an OpenMS module with ONNX Runtime.')
-    for (const m of MODELS) {
-      if (!exists(OpenMS.FS, `${MODELS_DIR}/${m.file}`)) throw new Error(`The PeptDeep model ${m.file} is not loaded.`)
+    if (!fatal) {
+      tryDelete(prose)
+      tryRemove(FS, '/input')
     }
   }
-  onStage('reading')
-  const staged = await stageInputs(OpenMS, req)
-  onStage('searching')
-  return searchStaged(OpenMS, staged, req, onProgress)
 }
 
 /**
@@ -411,8 +448,8 @@ export function engineInfo(OpenMS: MainModule, isolated: boolean): EngineInfo {
       parameters: defaults.getEntries(),
     }
   } finally {
-    defaults.delete()
-    prose.delete()
+    tryDelete(defaults)
+    tryDelete(prose)
   }
 }
 
@@ -433,15 +470,23 @@ export function predict(OpenMS: MainModule, peptide: string, charge: number, nce
   return OpenMS.predictMS2(peptide, charge, nce, instrument, MS2_MODEL)
 }
 
-/** The results as idXML, read back in pieces (`readFile`). */
+/**
+ * The results as idXML, read back in pieces (`readFile`, `readFileChunk`). Not guarded (README "What is
+ * not guarded"): `storeIdXML` writes into the memory file system through C++ streams, where the file
+ * grows by doubling and briefly takes up to three times its size; where the heap cannot hold that, the
+ * module aborts (a trap: the worker is restarted, the idXML is lost).
+ */
 export function idXML(OpenMS: MainModule, results: ProSEResultSet): Uint8Array<ArrayBuffer> {
   const { FS } = OpenMS
   const path = '/output/results.idXML'
   if (!exists(FS, '/output')) FS.mkdir('/output', DIRECTORY_MODE)
-  results.storeIdXML(path)
   try {
-    return readFile(FS, path)
-  } finally {
-    FS.unlink(path)
+    results.storeIdXML(path)
+    const bytes = readFile(OpenMS, path)
+    tryRemove(FS, path)
+    return bytes
+  } catch (e) {
+    if (!isFatal(e)) tryRemove(FS, path) // after a fatal error the module is not called again
+    throw e
   }
 }

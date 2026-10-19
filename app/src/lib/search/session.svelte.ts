@@ -4,8 +4,15 @@
 
 import type { DesignResolution } from '../design/model'
 import { engineClient, startEngine } from '../engine/app-engine.svelte'
-import { EngineError, type EngineInfo, type SearchOutcome, type SearchProgress, type SearchRequest } from '../engine/client'
-import { RELOAD } from '../engine/protocol'
+import {
+  EngineError,
+  type EngineInfo,
+  type SearchOutcome,
+  type SearchProgress,
+  type SearchRequest,
+  type SearchThreads,
+} from '../engine/client'
+import { RELOAD, threadsLabel } from '../engine/protocol'
 import { releaseResultsView } from '../results/view.svelte'
 import { describeFailure, type Failure } from './failure'
 
@@ -47,6 +54,8 @@ export const searchRun = $state<{
   files: string[]
   /** 0–1 overall, as the engine reports it. */
   fraction: number
+  /** The threads the search runs with (once OpenMS is loaded): fewer for many files, for the memory. */
+  threads: SearchThreads | null
   /** When the fraction last moved, when the search started, and now (performance.now(); ticks while running). */
   movedAt: number
   startedAt: number
@@ -61,6 +70,7 @@ export const searchRun = $state<{
   file: -1,
   files: [],
   fraction: 0,
+  threads: null,
   movedAt: 0,
   startedAt: 0,
   now: 0,
@@ -90,6 +100,8 @@ class ProgressView {
     if (n > 1 && file >= 0 && file < n && !label.includes(`of ${n})`)) return `File ${file + 1} of ${n} · ${label}`
     return label
   })
+  /** "16 threads", "4 threads (memory)"; null until OpenMS is loaded. */
+  threads = $derived(searchRun.threads ? threadsLabel(searchRun.threads) : null)
 }
 
 export const searchProgress = new ProgressView()
@@ -169,6 +181,7 @@ export async function runSearch(
     file: -1,
     files: request.files.map((f) => f.file.name),
     fraction: 0,
+    threads: null,
     movedAt: now,
     startedAt: now,
     failure: null,
@@ -196,6 +209,7 @@ export async function runSearch(
       return null
     }
     searchRun.label = 'Reading the files...'
+    searchRun.threads = engineClient().threadsFor(request)
     sent = true
     const outcome = await engineClient().search(request, onProgress)
     if (id !== runId) return null

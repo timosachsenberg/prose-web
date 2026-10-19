@@ -3,6 +3,7 @@
 
 import type {
   AnnotationOptions,
+  MemoryInfo,
   ParamEntry,
   PeakAnnotationResult,
   PredictedIon,
@@ -41,6 +42,11 @@ export interface SearchRequest {
   rescore: boolean
   /** PeptDeep features for Percolator (`peptdeep:enable`, with the models of the package). */
   peptdeep: boolean
+  /**
+   * The memory estimate cannot bound the search (a chunked semi- or non-specific search, `uncertain`):
+   * it runs with fewer threads (`threadsForSearch`).
+   */
+  uncertainMemory?: boolean
 }
 
 export interface SearchProgress {
@@ -48,7 +54,11 @@ export interface SearchProgress {
   label: string
   /** The input file of the step (its index in `SearchRequest.files`); -1 outside the files. */
   file: number
-  /** 0–1 overall, monotone: the files take [0, 0.95], reading the spectra [0.95, 1]. */
+  /**
+   * 0–1 overall, monotone: the files take [0, 0.95] (each file with the reading of the spectra of its
+   * PSMs); the pooling of the files after them reports nothing, and the fraction holds at 0.95 until
+   * the result.
+   */
   fraction: number
 }
 
@@ -84,17 +94,89 @@ export type EngineRequest = { [K in EngineCall]: { id: number; type: K } & Engin
 export type EngineResponse =
   | { id: number; type: 'result'; result: unknown }
   | { id: number; type: 'error'; error: string; trap: boolean; stage: EngineStage }
-  | { id: number; type: 'progress'; progress: SearchProgress }
+  /** `memory`: the module's heap at the report (for the watchdog). */
+  | { id: number; type: 'progress'; progress: SearchProgress; memory?: MemoryInfo }
   | { id: number; type: 'stage'; stage: EngineStage }
 
 /**
  * Whether an error message is that of a WebAssembly trap or an Emscripten abort, after which the module
  * cannot go on: `RuntimeError: unreachable`, `RuntimeError: memory access out of bounds`,
- * `Aborted(OOM)`, "out of memory". OpenMS' own exceptions (`InvalidValue: …`, also `OutOfMemory: …`,
+ * `Aborted(OOM)`, "out of memory", a `WebAssembly.Exception` (`thrownMessage`). OpenMS' own exceptions (`InvalidValue: …`, also `OutOfMemory: …`,
  * after which the module lives on) are not.
  */
 export function isTrapMessage(message: string): boolean {
-  return /RuntimeError|unreachable|out of memory|Aborted\(/i.test(message)
+  return /RuntimeError|unreachable|out of memory|Aborted\(|WebAssembly\.Exception/i.test(message)
+}
+
+/**
+ * Whether a thrown value ends the module (README "What is not guarded": its state is undefined, a lock
+ * of the file system may be held): anything that is not an Error, e.g. a raw `WebAssembly.Exception`
+ * (a C++ exception the module did not catch, such as `std::bad_alloc` from inside WasmFS), a
+ * `RuntimeError` (a trap, an abort), or an Error with a trap's message.
+ */
+export function isFatal(e: unknown): boolean {
+  return !(e instanceof Error) || e instanceof WebAssembly.RuntimeError || isTrapMessage(e.message)
+}
+
+/** The text of a thrown value: an Error's message; a WebAssembly.Exception says what it is. */
+export function thrownMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception) {
+    return 'WebAssembly.Exception: a C++ exception the module did not catch (e.g. std::bad_alloc)'
+  }
+  return String(e)
+}
+
+/**
+ * OpenMS' own out-of-memory errors, after which the module lives on: `OutOfMemory: unable to allocate
+ * enough memory …` (also from `allocateFile()` in provideFile), `std::bad_alloc` caught by OpenMS.
+ */
+export function isOutOfMemoryMessage(message: string): boolean {
+  return /\bOutOfMemory\b|bad_alloc/.test(message)
+}
+
+/** The largest file the module's file system holds (2 GiB − 64 MiB, README "Files in parts"). */
+export const MAX_FILE_BYTES = 2080374784
+
+/** Whether a file of `bytes` is larger than the module's file system holds (MAX_FILE_BYTES). */
+export function isTooLarge(bytes: number): boolean {
+  return bytes > MAX_FILE_BYTES
+}
+
+/** "big.mzML is too large (2.5 GiB); a file can be at most 1.93 GiB." (for sizes above MAX_FILE_BYTES). */
+export function fileTooLargeMessage(name: string, bytes: number): string {
+  const gib = bytes / 2 ** 30
+  // two decimals near the limit: "1.94 GiB", not "1.9 GiB", for a file that is too large; the limit
+  // rounded down (1.9375 GiB)
+  const limit = Math.floor((MAX_FILE_BYTES / 2 ** 30) * 100) / 100
+  return `${name} is too large (${gib.toFixed(gib < 2.05 ? 2 : 1)} GiB); a file can be at most ${limit.toFixed(2)} GiB.`
+}
+
+/** The threads a search of many files (or a chunked semi- or non-specific one) uses at most: the heap grows with each file, the more, the more threads. */
+export const MULTI_FILE_THREADS = 4
+
+/** The threads of a search; `capped`: fewer than the engine has, for the memory. */
+export interface SearchThreads {
+  threads: number
+  capped: boolean
+}
+
+/**
+ * The threads of a search of `files` files when `available` are there: at most 4 for more than 4 files,
+ * for more than 2 with PeptDeep, and for a search the memory estimate cannot bound (`uncertainMemory`:
+ * chunked semi- or non-specific, whose heap grows by 0.05–0.75 GB per file); else all. Part B measured
+ * 12 files of 75 MB, file by file: 2.9 GB at 4 threads, 3.0 GB at 8 and 4.0 GB at 16; with PeptDeep
+ * 3.3 GB at 4, 4.1 GB at 8, the 4 GB limit at 16.
+ */
+export function threadsForSearch(available: number, files: number, peptdeep: boolean, uncertainMemory = false): SearchThreads {
+  const capped = files > 4 || (peptdeep && files > 2) || uncertainMemory
+  const threads = capped ? Math.min(available, MULTI_FILE_THREADS) : available
+  return { threads, capped: threads < available }
+}
+
+/** "16 threads", "1 thread", "4 threads (memory)" (capped). */
+export function threadsLabel({ threads, capped }: SearchThreads): string {
+  return `${threads} ${threads === 1 ? 'thread' : 'threads'}${capped ? ' (memory)' : ''}`
 }
 
 const interrupted: Record<EngineStage, string> = {
@@ -106,17 +188,39 @@ const interrupted: Record<EngineStage, string> = {
   predict: 'while predicting the spectrum',
 }
 
+const SEARCH_MEMORY =
+  'a search can use at most the 4 GB a WebAssembly module can address. Search fewer files at a time, or set ' +
+  'database:chunk_size (e.g. 2000) under All parameters to build and search the index in parts, or use fewer ' +
+  'variable modifications or a narrower enzyme specificity.'
+
 const advice: Record<EngineStage, string> = {
   loading: '.',
   reading: ', most likely out of memory: search fewer or smaller files at a time.',
-  searching:
-    ', most likely out of memory: a search can use at most the 4 GB a WebAssembly module can address. Set ' +
-    'database:chunk_size (e.g. 2000) under All parameters to build and search the index in parts, or use fewer ' +
-    'variable modifications or a narrower enzyme specificity.',
+  searching: `, most likely out of memory: ${SEARCH_MEMORY}`,
   idXML: ', most likely out of memory. The idXML of this search is no longer available.',
   annotate: '.',
   predict: '.',
 }
+
+const outOfMemoryAdvice: Record<EngineStage, string> = {
+  loading: '',
+  reading: ' Search fewer or smaller files at a time.',
+  searching: ` ${SEARCH_MEMORY[0].toUpperCase()}${SEARCH_MEMORY.slice(1)}`,
+  idXML: ' The idXML of this search is too large for the memory that is left.',
+  annotate: '',
+  predict: '',
+}
+
+/**
+ * The message of an OpenMS out-of-memory error (`isOutOfMemoryMessage`; the module lives on, no restart),
+ * with what to do about it at the stage it happened.
+ */
+export function outOfMemoryMessage(stage: EngineStage, detail: string): string {
+  return `OpenMS ran out of memory ${interrupted[stage]} (${detail.trim()}).${outOfMemoryAdvice[stage]}`
+}
+
+/** What the watchdog says when it ends a search that stopped reporting (an abort on a pthread can hang the module). */
+export const UNRESPONSIVE = 'OpenMS stopped responding (likely out of memory); search fewer files at a time.'
 
 /** The advice to reload when OpenMS cannot be started again. */
 export const RELOAD = 'Reload the page to start OpenMS again.'

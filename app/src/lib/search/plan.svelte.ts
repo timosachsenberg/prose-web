@@ -1,12 +1,19 @@
 // What the New search form amounts to: the one-line plan, the memory estimate and its advice, why the
 // search cannot start yet, and starting it.
 
-import { engineState } from '../engine/app-engine.svelte'
+import { engineState, searchThreads } from '../engine/app-engine.svelte'
 import type { EngineInfo, SearchRequest } from '../engine/client'
-import { formatBytes } from '../format/bytes'
+import { fileTooLargeMessage, isTooLarge, threadsForSearch } from '../engine/protocol'
 import { formatPercent } from '../format/fdr'
 import { navigate } from '../route.svelte'
-import { estimateMemory, formatMemory, INPUT_BUDGET, type Specificity } from '../settings/memory'
+import {
+  estimateMemory,
+  formatMemory,
+  isUncertain,
+  UNCERTAIN_MEASURED,
+  UNCERTAIN_OVER_FILES,
+  type Specificity,
+} from '../settings/memory'
 import { unknownModifications } from '../settings/modifications'
 import { copyValues, requestParameters } from '../settings/parameters'
 import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
@@ -23,21 +30,47 @@ class SearchPlan {
   /** PeptDeep features need Percolator and ONNX Runtime (the app's package has it; unknown while OpenMS loads). */
   peptdeep = $derived(form.rescore && form.peptdeep && (engineState.info?.onnx ?? true))
 
+  /** What the size of the search's index depends on: the proteins, the specificity, the chunks. */
+  index = $derived.by(() => {
+    const enzyme = String(form.value('enzyme'))
+    const specificity: Specificity =
+      enzyme === 'unspecific cleavage' ? 'none' : ((form.value('peptide:enzyme_specificity') ?? 'full') as Specificity)
+    return {
+      proteins: (form.database?.proteins ?? 0) + (form.contaminants ? CRAP_PROTEINS : 0),
+      specificity,
+      chunkSize: Number(form.value('database:chunk_size') ?? 0),
+    }
+  })
+
+  /**
+   * A chunked semi- or non-specific search: the memory estimate cannot bound it, and it runs with fewer
+   * threads. While the proteins are being counted, a chunk size counts as chunking (a search started
+   * then gets the cap too).
+   */
+  uncertainMemory = $derived(
+    isUncertain({ ...this.index, proteins: form.database?.proteins == null ? null : this.index.proteins }),
+  )
+
+  /**
+   * The threads the search will use: all of the engine's, at most 4 for many files or an uncertain
+   * memory estimate (the memory grows per file).
+   */
+  threads = $derived(
+    threadsForSearch(engineState.info?.threads ?? searchThreads(), form.files.length, this.peptdeep, this.uncertainMemory),
+  )
+
   estimate = $derived.by(() => {
     if (form.files.length === 0) return null
     const sizes = form.files.map((r) => r.file.size)
-    const enzyme = String(form.value('enzyme'))
-    const specificity =
-      enzyme === 'unspecific cleavage' ? 'none' : ((form.value('peptide:enzyme_specificity') ?? 'full') as Specificity)
     return estimateMemory({
+      ...this.index,
       largestMzmlBytes: Math.max(...sizes),
-      inputBytes: sizes.reduce((a, b) => a + b, 0) + (form.database?.file.size ?? 0),
-      proteins: (form.database?.proteins ?? 0) + (form.contaminants ? CRAP_PROTEINS : 0),
-      specificity,
+      files: sizes.length,
+      mzmlBytes: sizes.reduce((a, b) => a + b, 0),
+      databaseBytes: form.database?.file.size ?? 0,
+      threads: this.threads.threads,
       variableMods: (form.value<string[]>('modifications:variable') ?? []).length,
       peptdeep: this.peptdeep,
-      storage: 'memory',
-      chunkSize: Number(form.value('database:chunk_size') ?? 0),
     })
   })
 
@@ -52,7 +85,11 @@ class SearchPlan {
       const decoys = form.value('decoys') === 'ignore' ? '' : ' + decoys'
       const crap = form.contaminants ? ` + ${CRAP_PROTEINS} cRAP` : ''
       parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap}${decoys}`)
-      if (this.estimate) parts.push(`estimated memory ${formatMemory(this.estimate.bytes)} of 4 GB`)
+      if (this.estimate?.uncertain) {
+        parts.push(`estimated memory about ${formatMemory(this.estimate.bytes)} of 4 GB (${UNCERTAIN_MEASURED})`)
+      } else if (this.estimate) {
+        parts.push(`estimated memory ${formatMemory(this.estimate.bytes)} of 4 GB`)
+      }
     } else {
       parts.push('no database yet')
     }
@@ -66,11 +103,25 @@ class SearchPlan {
     if (!estimate || !form.database || estimate.level === 'ok') return null
     const over = estimate.level === 'over'
     let text: string
-    if (estimate.inputsOverBudget) {
-      const total = form.files.reduce((a, r) => a + r.file.size, 0) + form.database.file.size
-      text =
-        `The files total ${formatBytes(total)}; the browser engine holds about ${formatBytes(INPUT_BUDGET)} of ` +
-        'input at once: search fewer files at a time.'
+    if (estimate.fileTooLarge) {
+      const file = [...form.files.map((r) => r.file), form.database.file].find((f) => isTooLarge(f.size))!
+      text = fileTooLargeMessage(file.name, file.size)
+    } else if (estimate.uncertain) {
+      // the chunk index is built again for every file: the chunk size does not bound the memory
+      const needs = 'A chunked semi- or non-specific search needs about 3.8 GB of the 4 GB'
+      const files = form.files.length
+      if (over && files >= UNCERTAIN_OVER_FILES) {
+        text =
+          `${needs}, more with every file (a human semi-tryptic search in chunks of 2000 measured 2.3–3.7 GB ` +
+          `for one file, 3.8 GB for three): with ${files} files it will likely stop for lack of memory. ` +
+          'Search fewer files at a time.'
+      } else if (over) {
+        text =
+          'More than the 4 GB a browser search can use: use smaller chunks (database:chunk_size), fewer ' +
+          'variable modifications or a narrower specificity.'
+      } else {
+        text = `${needs} (a human semi-tryptic search in chunks of 2000 ${UNCERTAIN_MEASURED}): it may stop for lack of memory.`
+      }
     } else if (estimate.cause === 'inputs') {
       const limit = over ? 'More than the 4 GB a browser search can use' : 'Close to the 4 GB limit'
       text = `${limit}, mostly for the files: search fewer files at once.`
@@ -78,10 +129,6 @@ class SearchPlan {
       text =
         'More than the 4 GB a browser search can use: set database:chunk_size (e.g. 2000) under All parameters, ' +
         'or use fewer variable modifications or a narrower specificity.'
-    } else if (estimate.uncertain) {
-      text =
-        'A chunked semi- or non-specific search can need much more than the estimate (a human semi-tryptic ' +
-        'search in chunks of 2000 needed 3.8 GB): it may stop for lack of memory.'
     } else {
       text = 'Close to the 4 GB limit: consider database:chunk_size (e.g. 2000) under All parameters.'
     }
@@ -122,6 +169,7 @@ export async function startSearch(): Promise<void> {
     parameters,
     rescore: form.rescore,
     peptdeep,
+    uncertainMemory: searchPlan.uncertainMemory,
   }
   // typed before OpenMS was loaded, modification names are checked once it is
   const check = (info: EngineInfo) => {

@@ -2,13 +2,19 @@
 // the page never waits for it. `EngineClient` (client.ts) starts two kinds: a search worker (a new one
 // for every search; it keeps the results for idXML) and a viewer worker (annotate, predict). The page
 // sends requests {id, type, ...arguments}; the worker answers {id, type: "result" | "error"}, and during
-// a search sends {id, type: "progress"} and {id, type: "stage"} (reading the files, searching). Errors
-// say what the worker was doing (`stage`). Requests are handled one after the other.
+// a search sends {id, type: "progress"} (with the module's heap) and {id, type: "stage"} (writing the
+// database or a file: reading; searching). Errors say what the worker was doing (`stage`) and whether
+// the module is done for (`trap`: anything thrown that is not an Error, a RuntimeError). Requests are
+// handled one after the other. A cancelled search ends with the worker (the page terminates it).
+//
+// The search reads the user's files from within (file by file, `provideFile`), synchronously: with
+// FileReaderSync, which only a worker has.
 
 import { annotate, engineInfo, idXML, loadModels, MS2_MODEL_FILE, predict, runSearch, transferList } from './core'
 import type { MainModule, OpenMSFactory, ProSEResultSet } from './openms-types'
 import {
-  isTrapMessage,
+  isFatal,
+  thrownMessage,
   type EngineCall,
   type EngineCalls,
   type EngineRequest,
@@ -21,6 +27,8 @@ interface WorkerScope {
   onmessage: ((event: MessageEvent<EngineRequest>) => void) | null
   postMessage(message: EngineResponse, options?: StructuredSerializeOptions): void
   crossOriginIsolated?: boolean
+  /** Workers only (the DOM declarations lack it). */
+  FileReaderSync: new () => { readAsArrayBuffer(blob: Blob): ArrayBuffer }
 }
 
 const scope = self as unknown as WorkerScope
@@ -74,7 +82,8 @@ const handlers: Handlers = {
       stage = s
       scope.postMessage({ id, type: 'stage', stage: s })
     }
-    const progress = (p: SearchProgress) => scope.postMessage({ id, type: 'progress', progress: p })
+    const progress = (p: SearchProgress) =>
+      scope.postMessage({ id, type: 'progress', progress: p, memory: OpenMS.getMemoryInfo() })
     enter('reading')
     results?.delete()
     results = null
@@ -85,6 +94,7 @@ const handlers: Handlers = {
     if (request.contaminants && contaminants === null) contaminants = await (await fetchAsset('fasta/crap.fasta')).text()
     progress({ label: 'Reading the files...', file: -1, fraction: 0 })
 
+    const reader = new scope.FileReaderSync()
     const outcome = await runSearch(
       OpenMS,
       {
@@ -95,8 +105,11 @@ const handlers: Handlers = {
         rescore: request.rescore,
         peptdeep: request.peptdeep,
       },
-      progress,
-      enter,
+      {
+        onProgress: progress,
+        onStage: enter,
+        readSync: (blob, offset, length) => new Uint8Array(reader.readAsArrayBuffer(blob.slice(offset, offset + length))),
+      },
     )
     results = outcome.results
     const { summary, tables, spectra, seconds } = outcome
@@ -130,9 +143,7 @@ async function handle(request: EngineRequest) {
     const { result, transfer = [] } = await handler(request)
     scope.postMessage({ id: request.id, type: 'result', result }, { transfer })
   } catch (e) {
-    const error = String((e as Error)?.message ?? e)
-    const trap = e instanceof WebAssembly.RuntimeError || isTrapMessage(error)
-    scope.postMessage({ id: request.id, type: 'error', error, trap, stage })
+    scope.postMessage({ id: request.id, type: 'error', error: thrownMessage(e), trap: isFatal(e), stage })
   }
 }
 

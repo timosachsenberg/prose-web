@@ -5,15 +5,25 @@
 //
 // Two workers:
 // - The search worker: a new one for every search (the module's memory grows with each search and never
-//   shrinks). It keeps the results of its search for `idXML()` until the next search.
+//   shrinks), with fewer threads for searches of many files (`threadsForSearch`: the heap grows per file,
+//   the more, the more threads). It keeps the results of its search for `idXML()` until the next search.
 // - The viewer worker, for `annotate()` and `predict()`: started on their first call, with 2 threads, and
 //   kept. They never wait behind a search, and they do not take the search's memory.
+//
+// A watchdog ends a search that stops reporting (an abort on one of OpenMS' threads can hang the module
+// instead of trapping; modules of more than one thread only). `cancel()` ends the search's worker at
+// once and starts a new one: a worker is never reused after a search anyway, and it holds nothing that
+// outlives it.
 
-import type { AnnotationOptions, PeakAnnotationResult, PredictedIon } from './openms-types'
+import type { AnnotationOptions, MemoryInfo, PeakAnnotationResult, PredictedIon } from './openms-types'
 import {
+  isOutOfMemoryMessage,
   isTrapMessage,
+  outOfMemoryMessage,
   RELOAD,
+  threadsForSearch,
   trapMessage,
+  UNRESPONSIVE,
   type EngineCall,
   type EngineCalls,
   type EngineInfo,
@@ -23,9 +33,13 @@ import {
   type SearchOutcome,
   type SearchProgress,
   type SearchRequest,
+  type SearchThreads,
 } from './protocol'
 
-export type { EngineInfo, ParamEntry, SearchOutcome, SearchProgress, SearchRequest } from './protocol'
+export type { EngineInfo, ParamEntry, SearchOutcome, SearchProgress, SearchRequest, SearchThreads } from './protocol'
+
+/** The two kinds of worker (see above). */
+export type WorkerRole = 'search' | 'viewer'
 
 /** What the client needs of a Worker (a fake one in the tests). */
 export interface WorkerLike {
@@ -54,13 +68,51 @@ export class EngineError extends Error {
   }
 }
 
+/**
+ * When the watchdog ends a search: from its `searching` stage on, and only when its module runs more
+ * than one thread. Only the thread that runs the search reports; the steps in between (building a
+ * chunk's index, Percolator, PeptDeep, reading an mzML file, writing a file, the final tables) are
+ * silent, for seconds (measured at most 6 s for 733 MB files and for a chunked semi-tryptic human
+ * search, at 4 threads); a non-specific chunk build or Percolator on a large pool are unmeasured, so a
+ * search with an uncertain memory estimate gets longer budgets. Every progress or stage message re-arms it.
+ */
+export interface WatchdogOptions {
+  /** No report for this long; default 120 s. */
+  silentMs: number
+  /** No report for this long while the heap is fully grown (`nearMaxBytes`); default 60 s. */
+  nearMaxSilentMs: number
+  /** `silentMs` for a search with `uncertainMemory` (chunked semi- or non-specific); default 300 s. */
+  uncertainSilentMs: number
+  /** `nearMaxSilentMs` for a search with `uncertainMemory`; default 120 s. */
+  uncertainNearMaxSilentMs: number
+  /**
+   * The heap counts as fully grown when the last report's `heapSize` is within this of `heapMax`; default
+   * 64 MiB. (The heap never shrinks: "close to the maximum" once would hold for the rest of the search.)
+   */
+  nearMaxBytes: number
+}
+
 export interface EngineClientOptions {
-  /** Starts a worker; default: `worker.ts` as a module worker. */
-  createWorker?: () => WorkerLike
+  /** Starts a worker of a role; default: `worker.ts` as a module worker named "openms-<role>". */
+  createWorker?: (role: WorkerRole) => WorkerLike
   /** The base URL of the app's files (`openms/`, `fasta/`); default: Vite's BASE_URL on this page. */
   baseUrl?: string
-  /** How long a worker may take to load OpenMS before it counts as failed; default 30 s. */
+  /**
+   * How long a worker may take to load OpenMS before it counts as failed, until one has loaded (the first
+   * load downloads the module); default 30 s.
+   */
   startTimeoutMs?: number
+  /** The same for the workers after that (the module comes from the cache); default 30 s. */
+  restartTimeoutMs?: number
+  watchdog?: Partial<WatchdogOptions>
+}
+
+const WATCHDOG: WatchdogOptions = {
+  silentMs: 120_000,
+  nearMaxSilentMs: 60_000,
+  uncertainSilentMs: 300_000,
+  uncertainNearMaxSilentMs: 120_000,
+  nearMaxBytes: 64 * 2 ** 20,
 }
 
 /** The threads of the viewer worker. */
@@ -73,12 +125,17 @@ interface Pending {
   onProgress?: (progress: SearchProgress) => void
 }
 
-type Role = 'search' | 'viewer'
-
 /** One worker with its module. */
 interface Session {
-  role: Role
+  role: WorkerRole
   worker: WorkerLike
+  /** The threads of its module. */
+  threads: number
+  /**
+   * Its module runs more than one thread (EngineInfo.threaded and threads > 1, once loaded): only then is
+   * the search watched (the hang the watchdog guards against is that of one of the threads).
+   */
+  multiThreaded: boolean
   ready: Promise<EngineInfo>
   state: 'loading' | 'ready' | 'failed'
   /** It ran a request other than init (a fresh module is needed for a search). */
@@ -91,6 +148,10 @@ interface Session {
   searches: number
   /** A search of this worker went through: it holds the result (for idXML) while it runs. */
   holdsResult: boolean
+  /** The watchdog of the search in flight: its timer and the heap of the last report. */
+  watchdog: { timer: ReturnType<typeof setTimeout> | undefined; memory: MemoryInfo | null } | null
+  /** The search in flight has an uncertain memory estimate: the watchdog's longer budgets. */
+  uncertainSearch: boolean
 }
 
 function cancelled(type: EngineCall): string {
@@ -101,23 +162,31 @@ function loadFailure(detail: string): string {
   return `OpenMS could not be loaded (${detail || 'the worker stopped'}). ${RELOAD}`
 }
 
-function moduleWorker(): WorkerLike {
-  return new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+function moduleWorker(role: WorkerRole): WorkerLike {
+  return new Worker(new URL('./worker.ts', import.meta.url), { type: 'module', name: `openms-${role}` })
 }
 
 export class EngineClient {
-  readonly #createWorker: () => WorkerLike
+  readonly #createWorker: (role: WorkerRole) => WorkerLike
   readonly #baseUrl: string
   readonly #startTimeoutMs: number
+  readonly #restartTimeoutMs: number
+  readonly #watchdog: WatchdogOptions
+  /** A worker has loaded OpenMS (later starts use the restart timeout). */
+  #loadedOnce = false
   #search: Session | null = null
   #viewer: Session | null = null
   #threads = 1
   #nextId = 0
+  /** The calls of a search worker that stopped, waiting until its successor is ready (then rejected as a trap). */
+  readonly #awaitingRestart = new Set<Pending>()
 
   constructor(options: EngineClientOptions = {}) {
     this.#createWorker = options.createWorker ?? moduleWorker
     this.#baseUrl = options.baseUrl ?? new URL(import.meta.env.BASE_URL, document.baseURI).href
     this.#startTimeoutMs = options.startTimeoutMs ?? 30_000
+    this.#restartTimeoutMs = options.restartTimeoutMs ?? 30_000
+    this.#watchdog = { ...WATCHDOG, ...options.watchdog }
   }
 
   /** Loads OpenMS for the searches with `threads` threads (again, in a new worker, if it runs already). */
@@ -126,13 +195,26 @@ export class EngineClient {
     return this.#start('search').ready
   }
 
-  /** Searches the files in a fresh module: a new worker, or that of init() if it has run nothing else. */
+  /**
+   * The threads a search of these files runs with: all of init()'s, at most 4 for many files or an
+   * uncertain memory estimate (`threadsForSearch`).
+   */
+  threadsFor(req: Pick<SearchRequest, 'files' | 'peptdeep' | 'uncertainMemory'>): SearchThreads {
+    return threadsForSearch(this.#threads, req.files.length, req.peptdeep, req.uncertainMemory)
+  }
+
+  /**
+   * Searches the files in a fresh module with the threads of `threadsFor()`: a new worker, or that of
+   * init() if it has run nothing else and has those threads.
+   */
   async search(req: SearchRequest, onProgress: (p: SearchProgress) => void): Promise<SearchOutcome> {
     if (!this.#search) throw new Error('EngineClient: call init() first.')
+    const { threads } = this.threadsFor(req)
     let session = this.#search
-    if (session.used || session.state === 'failed') session = this.#start('search')
+    if (session.used || session.state === 'failed' || session.threads !== threads) session = this.#start('search', threads)
     session.used = true
     session.searchStage = 'reading'
+    session.uncertainSearch = req.uncertainMemory === true
     session.searches++
     try {
       const outcome = await this.#call(session, 'search', { request: req }, onProgress)
@@ -140,6 +222,7 @@ export class EngineClient {
       return outcome
     } finally {
       session.searches--
+      this.#unwatch(session)
     }
   }
 
@@ -181,11 +264,17 @@ export class EngineClient {
   }
 
   /**
-   * Cancels the search in flight: ends the search worker (its pending calls are rejected as cancelled)
-   * and starts a new one. Nothing happens without a search in flight; the viewer goes on.
+   * Cancels the search in flight: its calls are rejected as cancelled at once, and its worker is ended
+   * and replaced by a new one with the same threads (ready for the same search again). The calls of a
+   * search whose worker stopped and is being restarted are cancelled too. Without a search in flight
+   * nothing happens; the viewer goes on.
    */
   cancel(): void {
-    if (this.#search && this.#search.searches > 0) this.#start('search')
+    for (const p of this.#awaitingRestart) p.reject(new EngineError('cancelled', cancelled(p.type)))
+    this.#awaitingRestart.clear()
+    const session = this.#search
+    if (!session || session.searches === 0) return
+    this.#start('search', session.threads)
   }
 
   #viewerSession(): Session {
@@ -193,30 +282,33 @@ export class EngineClient {
     return this.#viewer!
   }
 
-  #current(role: Role): Session | null {
+  #current(role: WorkerRole): Session | null {
     return role === 'search' ? this.#search : this.#viewer
   }
 
   /**
-   * Ends the worker of `role`, if any (its pending calls are rejected as cancelled), and starts a new one.
-   * Its module counts as failed if it is not loaded within the start timeout.
+   * Ends the worker of `role`, if any (its pending calls are rejected as cancelled), and starts a new one
+   * (a search worker with `threads`, default init()'s). Its module counts as failed if it is not loaded
+   * within the start timeout (the restart timeout once a module has loaded).
    */
-  #start(role: Role): Session {
+  #start(role: WorkerRole, threads = role === 'search' ? this.#threads : VIEWER_THREADS): Session {
     const old = this.#current(role)
     if (old) for (const p of this.#stop(old)) p.reject(new EngineError('cancelled', cancelled(p.type)))
 
-    const worker = this.#createWorker()
+    const worker = this.#createWorker(role)
     const pending = new Map<number, Pending>()
-    const threads = role === 'search' ? this.#threads : VIEWER_THREADS
     const init = this.#post(worker, pending, 'init', { threads, baseUrl: this.#baseUrl })
+    const timeoutMs = this.#loadedOnce ? this.#restartTimeoutMs : this.#startTimeoutMs
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_, reject) => {
-      const message = `OpenMS did not start within ${this.#startTimeoutMs / 1000} s. ${RELOAD}`
-      timer = setTimeout(() => reject(new EngineError('failed', message)), this.#startTimeoutMs)
+      const message = `OpenMS did not start within ${timeoutMs / 1000} s. ${RELOAD}`
+      timer = setTimeout(() => reject(new EngineError('failed', message)), timeoutMs)
     })
     const session: Session = {
       role,
       worker,
+      threads,
+      multiThreaded: false,
       ready: Promise.race([init, timeout]).finally(() => clearTimeout(timer)),
       state: 'loading',
       used: false,
@@ -224,6 +316,8 @@ export class EngineClient {
       searchStage: 'reading',
       searches: 0,
       holdsResult: false,
+      watchdog: null,
+      uncertainSearch: false,
     }
     if (role === 'search') this.#search = session
     else this.#viewer = session
@@ -233,7 +327,9 @@ export class EngineClient {
       void this.#crashed(session, event.message, this.#stage(session))
     }
     session.ready.then(
-      () => {
+      (info) => {
+        this.#loadedOnce = true
+        session.multiThreaded = info.threaded && info.threads > 1
         if (session.state === 'loading') session.state = 'ready'
       },
       (e: unknown) => {
@@ -249,9 +345,38 @@ export class EngineClient {
   #stop(session: Session): Pending[] {
     session.state = 'failed'
     session.worker.terminate()
+    this.#unwatch(session)
     const pending = [...session.pending.values()]
     session.pending.clear()
     return pending
+  }
+
+  /**
+   * (Re)arms the watchdog of the search of `session` after a report: it ends the search after
+   * `silentMs` without a report, or `nearMaxSilentMs` once the reported heap is fully grown (the
+   * `uncertain…` budgets for a search with `uncertainMemory`). Not for a module of one thread: the hang
+   * it guards against is that of one of the threads, and on one thread a long silent step (building the
+   * index of a non-specific search) would count as one.
+   */
+  #watch(session: Session, memory?: MemoryInfo) {
+    if (!session.multiThreaded) return
+    const watch = (session.watchdog ??= { timer: undefined, memory: null })
+    clearTimeout(watch.timer)
+    if (memory) watch.memory = memory
+    const w = this.#watchdog
+    const near = watch.memory !== null && watch.memory.heapSize >= watch.memory.heapMax - w.nearMaxBytes
+    const ms = session.uncertainSearch
+      ? near ? w.uncertainNearMaxSilentMs : w.uncertainSilentMs
+      : near ? w.nearMaxSilentMs : w.silentMs
+    watch.timer = setTimeout(() => {
+      const restart = (restarted: boolean) => `${UNRESPONSIVE} ${restarted ? 'OpenMS was restarted.' : RELOAD}`
+      void this.#crashed(session, '', session.searchStage, restart)
+    }, ms)
+  }
+
+  #unwatch(session: Session) {
+    if (session.watchdog) clearTimeout(session.watchdog.timer)
+    session.watchdog = null
   }
 
   /** A request, once the module is loaded (the load error otherwise). */
@@ -299,13 +424,17 @@ export class EngineClient {
     const pending = session.pending.get(data.id)
     if (!pending) return
     if (data.type === 'progress') {
+      if (session.watchdog) this.#watch(session, data.memory)
       pending.onProgress?.(data.progress)
       return
     }
     if (data.type === 'stage') {
       session.searchStage = data.stage
+      // armed when the search begins; writing a file in between (reading) re-arms it like any report
+      if (pending.type === 'search' && (data.stage === 'searching' || session.watchdog)) this.#watch(session)
       return
     }
+    if (pending.type === 'search') this.#unwatch(session)
     if (data.type === 'result') {
       session.pending.delete(data.id)
       pending.resolve(data.result as never)
@@ -313,7 +442,13 @@ export class EngineClient {
       void this.#crashed(session, data.error, data.stage)
     } else {
       session.pending.delete(data.id)
-      pending.reject(new EngineError('failed', pending.type === 'init' ? loadFailure(data.error) : data.error))
+      const message =
+        pending.type === 'init'
+          ? loadFailure(data.error)
+          : isOutOfMemoryMessage(data.error)
+            ? outOfMemoryMessage(data.stage, data.error)
+            : data.error
+      pending.reject(new EngineError('failed', message))
     }
   }
 
@@ -326,11 +461,17 @@ export class EngineClient {
   }
 
   /**
-   * OpenMS stopped: starts a new worker of the same role, waits until it is ready (at most the start
-   * timeout), then rejects the pending calls with a message that says what was interrupted and whether
-   * OpenMS was restarted. A module that did not even load is not restarted (the next call tries again).
+   * OpenMS stopped (or stopped responding: `message`): starts a new worker of the same role and threads, waits until
+   * it is ready (at most the restart timeout), then rejects the pending calls with a message that says
+   * what was interrupted and whether OpenMS was restarted. `cancel()` meanwhile cancels those of the
+   * search worker at once. A module that did not even load is not restarted (the next call tries again).
    */
-  async #crashed(session: Session, detail: string, stage: EngineStage) {
+  async #crashed(
+    session: Session,
+    detail: string,
+    stage: EngineStage,
+    message: (restarted: boolean) => string = (restarted) => trapMessage(stage, detail, restarted),
+  ) {
     if (this.#current(session.role) !== session || session.state === 'failed') return
     const loaded = session.state === 'ready'
     const pending = this.#stop(session)
@@ -338,11 +479,17 @@ export class EngineClient {
       for (const p of pending) p.reject(new EngineError('failed', loadFailure(detail)))
       return
     }
-    const next = this.#start(session.role)
+    const waiting = session.role === 'search' ? this.#awaitingRestart : new Set<Pending>()
+    for (const p of pending) waiting.add(p)
+    const next = this.#start(session.role, session.threads)
+    // a successor replaced by a newer worker meanwhile (e.g. a new search) did not fail to load
     const restarted = await next.ready.then(
       () => true,
-      () => false,
+      () => this.#current(next.role) !== next,
     )
-    for (const p of pending) p.reject(new EngineError('trap', trapMessage(stage, detail, restarted)))
+    for (const p of pending) {
+      if (!waiting.delete(p)) continue // cancelled meanwhile
+      p.reject(new EngineError('trap', message(restarted)))
+    }
   }
 }
