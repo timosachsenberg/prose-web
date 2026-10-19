@@ -6,10 +6,11 @@
 //   under it. Where that does not help (service workers blocked or unsupported, storage blocked, a
 //   hard reload), the app runs on one thread and says so. It never waits forever: a worker that does
 //   not become active within `timeoutMs` is not waited for.
-// - watchServiceWorker(): whether a worker serves the page (its shell is stored: the app works offline).
+// - watchStatus(): what the worker serving the page has stored ("works offline" = this build's shell
+//   and module, verified); answerBuildQueries(): tells the worker this page's build.
 // - storeOfflineData(): asks the worker to store the example and the cRAP database as well.
-// - watchUpdate() / applyUpdate(): a new version's worker waits; the app offers "Reload", which lets
-//   it take over and reloads the page.
+// - watchUpdate() / applyUpdate(): a new version's worker installs completely and waits; the app
+//   offers "Reload", which lets it take over and reloads the page.
 
 /** What the page and the browser offer (injectable for the tests). */
 export interface ServiceWorkerEnv {
@@ -116,29 +117,55 @@ function container(): ServiceWorkerContainer | null {
   return 'serviceWorker' in navigator && !import.meta.env.DEV ? navigator.serviceWorker : null
 }
 
-/** Whether a service worker serves the page (its shell is stored: the app works offline); follows changes. */
-export function watchServiceWorker(onChange: (controlled: boolean) => void): () => void {
-  const c = container()
-  if (!c) {
-    onChange(false)
-    return () => {}
-  }
-  const update = () => onChange(c.controller !== null)
-  update()
-  c.addEventListener('controllerchange', update)
-  return () => c.removeEventListener('controllerchange', update)
+/** This page's build (index.html's <meta name="prose-build">, stamped by the build). */
+export function pageBuild(): string | null {
+  const content = document.querySelector('meta[name="prose-build"]')?.getAttribute('content') ?? null
+  return content && /^[0-9a-f]{12}$/.test(content) ? content : null
+}
+
+/** What the service worker serving the page has stored (its STATUS report, public/sw.js). */
+export interface StoreStatus {
+  /** the worker's build and module */
+  build: string
+  module: string
+  /** this build's shell and module are stored and verified: the app works offline */
+  offline: boolean
+  shell: boolean
+  moduleStored: boolean
+  /** the PeptDeep models by file name: stored or not (they are stored on first use) */
+  models: Record<string, boolean>
+  /** the example and the cRAP database */
+  data: boolean
+  /** the previous generation the worker keeps (for pages of that build still open), or null */
+  kept: string | null
 }
 
 /**
- * Asks the worker serving the page (now, or when one takes over) to store the example and the cRAP
- * database for offline use; `onStored(complete)` hears the answer.
+ * Answers the worker's question which build this page is (BUILD?): it keeps the previous generation's
+ * files while a page of that build is open. Call once, early.
  */
-export function storeOfflineData(onStored: (complete: boolean) => void = () => {}): () => void {
+export function answerBuildQueries(): void {
   const c = container()
-  if (!c) return () => {}
-  const ask = () => c.controller?.postMessage({ type: 'STORE_DATA' })
+  if (!c) return
+  c.addEventListener('message', (event: MessageEvent) => {
+    if (event.data?.type === 'BUILD?') event.ports[0]?.postMessage({ build: pageBuild() })
+  })
+  c.startMessages()
+}
+
+/** Follows what the worker serving the page has stored (asks now and whenever another worker takes over). */
+export function watchStatus(onStatus: (status: StoreStatus | null) => void): () => void {
+  const c = container()
+  if (!c) {
+    onStatus(null)
+    return () => {}
+  }
+  const ask = () => {
+    if (!c.controller) onStatus(null)
+    c.controller?.postMessage({ type: 'STATUS', build: pageBuild() })
+  }
   const answer = (event: MessageEvent) => {
-    if (event.data?.type === 'DATA_STORED') onStored(event.data.complete === true)
+    if (event.data?.type === 'STATUS') onStatus(event.data as StoreStatus)
   }
   c.addEventListener('message', answer)
   c.addEventListener('controllerchange', ask)
@@ -149,9 +176,19 @@ export function storeOfflineData(onStored: (complete: boolean) => void = () => {
   }
 }
 
+/** Asks the worker serving the page (now, or when one takes over) to store the example and the cRAP database. */
+export function storeOfflineData(): () => void {
+  const c = container()
+  if (!c) return () => {}
+  const ask = () => c.controller?.postMessage({ type: 'STORE_DATA' })
+  c.addEventListener('controllerchange', ask)
+  ask()
+  return () => c.removeEventListener('controllerchange', ask)
+}
+
 /**
- * Calls `onReady` when a new version's worker is installed and waits (there is a worker serving the
- * page already, of the previous version).
+ * Calls `onReady` when a new version's worker is installed (complete) and waits, while a worker
+ * serves the page.
  */
 export function watchUpdate(onReady: () => void): () => void {
   const c = container()
@@ -175,7 +212,7 @@ export function watchUpdate(onReady: () => void): () => void {
   }
 }
 
-/** Lets the waiting worker of the new version take over, then reloads the page. */
+/** Lets a waiting worker of the new version take over and reloads the page (or just reloads it). */
 export async function applyUpdate(): Promise<void> {
   const c = container()
   const registration = await c?.getRegistration()

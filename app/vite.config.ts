@@ -28,11 +28,27 @@ function serviceWorker(): Plugin {
   }
 }
 
+/**
+ * The desktop build (PROSE_DESKTOP=1, desktop/build.sh): the page loads Neutralino's client library,
+ * only to hold the connection whose end (the window closed) stops the program. Added at build time, so
+ * the service worker's manifest has the page as it is served.
+ */
+function desktopPage(): Plugin {
+  return {
+    name: 'prose-desktop-page',
+    apply: 'build',
+    transformIndexHtml: (html) =>
+      process.env.PROSE_DESKTOP === '1'
+        ? html.replace('</head>', '  <script src="/neutralino.js"></script>\n    <script>Neutralino.init()</script>\n  </head>')
+        : html,
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   // GitHub Pages serves the app at /prose-web/; the desktop build sets VITE_BASE=./
   base: process.env.VITE_BASE ?? '/prose-web/',
-  plugins: [tailwindcss(), svelte(), serviceWorker()],
+  plugins: [tailwindcss(), svelte(), desktopPage(), serviceWorker()],
   define: { __OPENMS_ID__: JSON.stringify(openmsId) },
   resolve: {
     alias: { $lib: fileURLToPath(new URL('./src/lib', import.meta.url)) },

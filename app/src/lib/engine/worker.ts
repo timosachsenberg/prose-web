@@ -64,6 +64,10 @@ function moduleFile(path: string): string {
 /** A PeptDeep model of the package (`openms/models/`). */
 async function fetchModel(file: string): Promise<Blob> {
   const response = await fetch(moduleFile(`models/${file}`))
+  // 409: the service worker found another version's bytes on the server (public/sw.js)
+  if (response.status === 409) {
+    throw new Error(`The PeptDeep model ${file} of this version of ProSE is no longer on the server: a newer version was deployed. Reload the page.`)
+  }
   if (!response.ok) throw new Error(`openms/models/${file} could not be loaded (${response.status} ${response.statusText}).`)
   return response.blob()
 }

@@ -26,15 +26,15 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 cp "$DESKTOP/neutralino.config.json" "$WORK/"
 [ -d "$REPO/app/node_modules" ] || (cd "$REPO/app" && npm ci --no-audit --no-fund)
-(cd "$REPO/app" && VITE_BASE=./ npx vite build --outDir "$WORK/resources" --emptyOutDir --logLevel warn)
+# (PROSE_DESKTOP=1: the page loads /neutralino.js; added at build time, so the service worker's
+# manifest has the page as it is served)
+(cd "$REPO/app" && PROSE_DESKTOP=1 VITE_BASE=./ npx vite build --outDir "$WORK/resources" --emptyOutDir --logLevel warn)
 grep -q 'src="./assets/' "$WORK/resources/index.html"
+grep -q 'Neutralino.init' "$WORK/resources/index.html"
 
 # Neutralino's client library (the server prepends the connection token to any *neutralino.js)
 curl -fsSL -o "$WORK/resources/neutralino.js" \
   "https://github.com/neutralinojs/neutralino.js/releases/download/v$NEUTRALINO_VERSION/neutralino.js"
-sed -i 's|</head>|  <script src="/neutralino.js"></script>\n    <script>Neutralino.init();</script>\n  </head>|' \
-  "$WORK/resources/index.html"
-grep -q 'Neutralino.init' "$WORK/resources/index.html"
 
 # the Neutralino programs
 curl -fsSL -o "$WORK/neutralino.zip" \

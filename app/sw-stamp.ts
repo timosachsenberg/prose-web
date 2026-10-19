@@ -1,13 +1,15 @@
-// The build's part of the service worker (public/sw.js): it names the worker's stores and lists the
-// files it stores on installation.
+// The build's part of the service worker (public/sw.js): it names the worker's stores, lists the files
+// it stores, and gives it a manifest to prove that what it stores is of its own build.
 // - MODULE_ID: the content of public/openms (the module package). The worker imports the module as
-//   openms/openms.mjs?v=<MODULE_ID> (a new module never meets an old one from the HTTP cache) and the
-//   worker stores it in openms-module-<MODULE_ID>, which a build of the app alone leaves in place.
+//   openms/openms.mjs?v=<MODULE_ID> (its wasm and models likewise) and the worker stores it in
+//   openms-module-<MODULE_ID>, which a build of the app alone leaves in place.
 // - BUILD_ID: the content of the whole build; the app's files are stored in prose-app-<BUILD_ID>.
-//   index.html carries it too (<meta name="prose-build">): the worker stores only a page of its build.
+//   index.html carries it too (<meta name="prose-build">): the page tells the worker its build.
 // - SHELL: index.html and assets/, stored on installation; DATA: the example and fasta/, stored once
-//   the app asks for them. Not the module (stored when the page loads it) nor the PeptDeep models
-//   (stored on first use).
+//   the app asks for them. The module (openms.mjs, openms.wasm) is stored when the page loads it, or on
+//   the installation of an update; the PeptDeep models on first use.
+// - MANIFEST: path → [size, SHA-256] of every file of the build (but sw.js): the worker stores a
+//   response only if its bytes are those of the manifest.
 
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -45,27 +47,53 @@ export function moduleId(openmsDir: string): string {
 /** The placeholder of the build id in index.html. */
 export const BUILD_META = '<meta name="prose-build" content="__BUILD_ID__" />'
 
+export type Manifest = Record<string, [number, string]>
+
 /**
- * Stamps `<outDir>/sw.js` (its ids and lists) and `<outDir>/index.html` (the build id). The build id
- * is taken over the build with the placeholder still in index.html, so it is the same for the same
- * sources.
+ * Writes the ids, the lists and the manifest of the build in `outDir` into its sw.js (the template's
+ * placeholders or an earlier stamp: each is one line `const NAME = …`).
  */
-export function stampServiceWorker(outDir: string, module: string): { buildId: string; shell: string[]; data: string[] } {
+export function writeStamp(outDir: string, ids: { build: string; module: string }): { shell: string[]; data: string[]; manifest: Manifest } {
   const swPath = join(outDir, 'sw.js')
-  const pagePath = join(outDir, 'index.html')
   const files = filesBelow(outDir).filter((f) => f !== 'sw.js')
-  const buildId = contentId(outDir, files)
   const data = files.filter((f) => /^(example|fasta)\//.test(f))
   const shell = files.filter((f) => !/^(openms|example|fasta)\//.test(f))
-  const stamped = readFileSync(swPath, 'utf8')
-    .replace("const BUILD_ID = '__BUILD_ID__'", `const BUILD_ID = '${buildId}'`)
-    .replace("const MODULE_ID = '__MODULE_ID__'", `const MODULE_ID = '${module}'`)
-    .replace('const SHELL = /* __SHELL__ */ []', `const SHELL = ${JSON.stringify(shell)}`)
-    .replace('const DATA = /* __DATA__ */ []', `const DATA = ${JSON.stringify(data)}`)
-  if (/__(BUILD_ID|MODULE_ID|SHELL|DATA)__/.test(stamped)) throw new Error(`${swPath}: a placeholder was not replaced`)
+  const manifest: Manifest = {}
+  for (const f of files) {
+    const bytes = readFileSync(join(outDir, f))
+    manifest[f] = [bytes.length, createHash('sha256').update(bytes).digest('hex')]
+  }
+  const values: Record<string, string> = {
+    BUILD_ID: `'${ids.build}'`,
+    MODULE_ID: `'${ids.module}'`,
+    SHELL: JSON.stringify(shell),
+    DATA: JSON.stringify(data),
+    MANIFEST: JSON.stringify(manifest),
+  }
+  let sw = readFileSync(swPath, 'utf8')
+  for (const [name, value] of Object.entries(values)) {
+    const line = new RegExp(`^const ${name} = .*$`, 'm')
+    if (!line.test(sw)) throw new Error(`${swPath}: no line "const ${name} = …"`)
+    sw = sw.replace(line, () => `const ${name} = ${value}`)
+  }
+  if (/__(BUILD_ID|MODULE_ID|SHELL|DATA|MANIFEST)__/.test(sw)) throw new Error(`${swPath}: a placeholder was not replaced`)
+  writeFileSync(swPath, sw)
+  return { shell, data, manifest }
+}
+
+/**
+ * Stamps the build in `outDir` (a fresh one: sw.js still the template): index.html gets the build id,
+ * sw.js the ids, lists and manifest. The build id is taken over the build, sw.js's template included,
+ * with the placeholder still in index.html, so it is the same for the same sources; the manifest over
+ * the stamped files.
+ */
+export function stampServiceWorker(outDir: string, module: string): { buildId: string; shell: string[]; data: string[] } {
+  const pagePath = join(outDir, 'index.html')
+  // (sw.js is still the template here: a new worker logic is a new build, with stores of its own)
+  const buildId = contentId(outDir, filesBelow(outDir))
   const page = readFileSync(pagePath, 'utf8')
   if (!page.includes(BUILD_META)) throw new Error(`${pagePath}: no ${BUILD_META}`)
-  writeFileSync(swPath, stamped)
   writeFileSync(pagePath, page.replace(BUILD_META, BUILD_META.replace('__BUILD_ID__', buildId)))
+  const { shell, data } = writeStamp(outDir, { build: buildId, module })
   return { buildId, shell, data }
 }

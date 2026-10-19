@@ -1,38 +1,43 @@
 // ProSE's service worker, registered by src/lib/sw-client.ts with the app's directory as its scope
 // (/prose-web/ on GitHub Pages, / in the desktop app). Derived from examples/sw.js (OpenMS PR #10575,
-// with the HTTP-cache fix of 80a3b501c4). It does three things a static web server cannot:
+// with the HTTP-cache fix of 80a3b501c4).
 //
 //  1. Threads. The threaded module needs a cross-origin isolated page: the response headers
 //     Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy on the page and on every worker
 //     script, which GitHub Pages does not send. The worker adds them to every response it gives,
 //     except openms.wasm (see 2), and to every page and worker script within its scope (also the
 //     other pages of the site, which it otherwise leaves alone). On the first visit the page reloads
-//     once, so that the worker serves it (sw-client.ts). The engine worker's script comes through
-//     here with the headers; the module's own threads are started from a Blob (Chromium does not send
-//     the script requests of a worker started inside a worker through a service worker) and inherit
-//     the engine worker's isolation.
-//  2. The module (openms/: openms.mjs, openms.wasm, the PeptDeep models) comes from the Cache API,
-//     cache-first. On the first request the worker stores the file and answers from the store at
-//     once, so Chrome keeps the compiled code of openms.wasm and the module starts faster from the
-//     second visit on. Chrome keeps it only for the stored response itself: a response the worker
-//     wraps with new headers is never code-cached, so openms.wasm is passed on untouched.
-//     The app asks for every module file with ?v=<the module's id> (engine/worker.ts). Only files of
-//     this worker's module are stored; another version's (a page of a newer deployment under this
-//     worker, or a tab of an older one) comes from a store that has exactly that URL, else from the
-//     network, and is not stored: a module and its wasm must always be of the same version.
-//  3. Offline. The app's files are fetched from the network (network-first) and stored; offline they
-//     come from the store. The app's shell (index.html, assets/) is stored on installation, all of it
-//     or the installation fails; the example and the cRAP database (DATA) are stored when the app
-//     asks for them (STORE_DATA, once OpenMS has loaded), so the first visit does not wait for them.
+//     once, so that the worker serves it (sw-client.ts). The module's own threads are started from a
+//     Blob inside the engine worker and inherit its isolation.
+//  2. Only bytes of its own build. The build gives the worker a MANIFEST (path → size, SHA-256) of its
+//     files; it stores a response only if its bytes are those (verified on a copy), else it stores
+//     nothing. Files of its own module version (?v=MODULE_ID: openms.mjs, openms.wasm, the PeptDeep
+//     models) come from its store, cache-first, and on the first request are stored and answered from
+//     the store, so Chrome keeps the compiled code of openms.wasm (the stored response itself is
+//     given: a response the worker wraps with new headers is never code-cached, so openms.wasm is
+//     passed on untouched). If the server has other bytes under such a URL (a newer version was
+//     deployed), the answer is an error (409), never the other bytes. Files of another version
+//     (another ?v=, other hashed asset names) come from a kept store that has exactly that URL, else
+//     from the network, unstored.
+//  3. Offline. The hashed assets (assets/) come from a store if there (their names change with their
+//     content), else from the network; the page, the example and fasta/ from the network
+//     (network-first). Either is stored if it is of this build; offline, or if the server has a file no
+//     more (an older tab after a deployment), it comes from a store. Installation stores the shell (index.html, assets/), all of it or the
+//     installation fails, and only if the server's index.html is of this build; the installation of
+//     an update stores the module (openms.mjs, openms.wasm) as well, so that the new version is
+//     complete before it waits. The example and the cRAP database (DATA) are stored when the app asks.
+//     The worker reports what is stored (STATUS): "works offline" = this build's shell and module.
+//  4. Generations. A generation = this build's app store prose-app-<BUILD_ID> and its module store
+//     openms-module-<MODULE_ID>; a marker in the app store records when it was installed and
+//     activated. A new version's worker waits until the app tells it to take over (SKIP_WAITING: the
+//     user chose "Reload"; or no tab of the old version is left). Once active and complete, it keeps
+//     the previous generation while pages of that build are open (it asks them), so they can still
+//     start workers and load their module; then, or at the next activation, it is dropped. Never more
+//     than one previous generation is kept.
 //
-// Updates: a new worker waits until the app tells it to take over (SKIP_WAITING: the user chose
-// "Reload" in the app's update notice), so tabs of the previous version keep the worker of their
-// version. The worker's own requests go past the browser's HTTP cache (cache: "no-cache", i.e.
-// revalidated): GitHub Pages sends max-age=600, and the HTTP cache would otherwise fill a new
-// version's stores with the files of the previous one. The build stamps the ids and lists below
-// (sw-stamp.ts): the module's store is named after the module package, the app's store after the
-// whole build; when a new worker takes over, it drops the stores of other ids and what the earlier
-// site (examples/, the module in the site's root) left in its stores. Shift+Reload bypasses the worker.
+// The worker's own requests go past the browser's HTTP cache (cache: "no-cache", i.e. revalidated):
+// GitHub Pages sends max-age=600. On activation it also drops what the earlier site (examples/, the
+// module in the site's root) left in the demos' stores. Shift+Reload bypasses the worker.
 
 const BUILD_ID = '__BUILD_ID__'
 const MODULE_ID = '__MODULE_ID__'
@@ -40,25 +45,33 @@ const MODULE_ID = '__MODULE_ID__'
 const SHELL = /* __SHELL__ */ []
 /** The example and the cRAP database, relative to the scope, stored when the app asks (STORE_DATA). */
 const DATA = /* __DATA__ */ []
+/** path → [size, SHA-256 hex] of the build's files (relative to the scope). */
+const MANIFEST = /* __MANIFEST__ */ {}
+
+/** The module's files the app cannot start without (stored with ?v=MODULE_ID). */
+const MODULE = ['openms/openms.mjs', 'openms/openms.wasm']
+const MODELS = Object.keys(MANIFEST).filter((path) => path.startsWith('openms/models/'))
 
 const MODULE_STORE = `openms-module-${MODULE_ID}`
 const APP_STORE = `prose-app-${BUILD_ID}`
-/** This worker's stores (of any build); not those of the site's other pages (openms-demo/). */
-const OWN_STORE = /^(openms-module|prose-app)-[0-9a-f]{12}$/
+const APP_STORE_NAME = /^prose-app-([0-9a-f]{12})$/
+const MODULE_STORE_NAME = /^openms-module-([0-9a-f]{12})$/
 /** The stores of the earlier site's demos, named after the module version (openms-demo/ uses them too). */
 const DEMO_STORE = /^openms-(module|app)-\d+\.\d+\.\d+/
-/** Marks a complete DATA in the app's store. */
-const DATA_MARK = '__data-stored__'
 
 const SCOPE = new URL(self.registration.scope)
+const at = (path) => new URL(path, SCOPE).href
+const GENERATION_KEY = at('__generation__')
+const DATA_MARK = at('__data-stored__')
 
-/**
- * What a path of this origin is to the worker: the module ("module"), one of the app's files
- * ("app"), or something else (null: the other pages of the site, data/, ...).
- */
-function kindOf(pathname) {
-  if (!pathname.startsWith(SCOPE.pathname)) return null
-  const rest = pathname.slice(SCOPE.pathname.length)
+/** A path of the scope, relative to it; null outside. */
+function relative(url) {
+  return url.pathname.startsWith(SCOPE.pathname) ? url.pathname.slice(SCOPE.pathname.length) : null
+}
+
+/** What a path is to the worker: "module", "app", or null (the site's other pages, data/, ...). */
+function kindOf(rest) {
+  if (rest === null) return null
   if (rest.startsWith('openms/')) return 'module'
   if (rest === '' || rest === 'index.html' || /^(assets|example|fasta)\//.test(rest)) return 'app'
   return null
@@ -66,47 +79,129 @@ function kindOf(pathname) {
 
 /** What the earlier site stored under this scope: its module in the root, its models, examples/. */
 function earlierSiteFile(url) {
-  if (!url.pathname.startsWith(SCOPE.pathname)) return false
-  const rest = url.pathname.slice(SCOPE.pathname.length)
-  return /^(openms\.(wasm|mjs|data)|index\.mjs|package\.json|models\/[^/]+|examples\/.*)$/.test(rest)
+  const rest = relative(url)
+  return rest !== null && /^(openms\.(wasm|mjs|data)|index\.mjs|package\.json|models\/[^/]+|examples\/.*)$/.test(rest)
 }
 
 /** The store's key of an app file: the page under one name, without a query. */
 function appKey(url) {
-  const path = url.pathname === SCOPE.pathname ? `${SCOPE.pathname}index.html` : url.pathname
-  return new URL(path, url.origin).href
+  return at(url.pathname === SCOPE.pathname ? 'index.html' : relative(url))
 }
+
+/** The key of a file of this module version. */
+const moduleKey = (path) => `${at(path)}?v=${MODULE_ID}`
 
 /** From the server, past the browser's HTTP cache (revalidated: a 304 where nothing changed). */
 const fromServer = (request) => fetch(request, { cache: 'no-cache' })
 
+async function sha256(buffer) {
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Whether `response` (consumed: give a copy) has the bytes of `path` in `manifest` (default: this build's). */
+async function isOwn(response, path, manifest = MANIFEST) {
+  const expected = manifest[path]
+  if (!expected || !response.ok) return false
+  const bytes = await response.arrayBuffer()
+  return bytes.byteLength === expected[0] && (await sha256(bytes)) === expected[1]
+}
+
+/** The stores of this worker's kind (any build): app and module stores. */
+async function ownStores() {
+  return (await caches.keys()).filter((name) => APP_STORE_NAME.test(name) || MODULE_STORE_NAME.test(name))
+}
+
+/** `request` (exact URL) from any of the kept stores. */
+async function fromKept(request) {
+  for (const name of await ownStores()) {
+    const hit = await (await caches.open(name)).match(request)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/** The manifest of the generation (of any kept build) with module version `module`, if one is stored. */
+async function manifestOfModule(module) {
+  for (const name of await caches.keys()) {
+    if (!APP_STORE_NAME.test(name)) continue
+    const marker = await (await (await caches.open(name)).match(GENERATION_KEY))?.json().catch(() => null)
+    if (marker?.module === module && marker.manifest) return marker.manifest
+  }
+  return null
+}
+
 /**
- * A module file: this worker's version from its store (the first time from the network, stored and
- * answered from the store); another version's from a store that has it, else from the network.
+ * A file of another module version (a page of a newer deployment under this worker, an older tab):
+ * from a store that has exactly that URL; else from the network, unstored, and verified against that
+ * version's manifest where a generation of it is stored (else as the server has it).
  */
-async function moduleFile(request, url) {
-  if (url.searchParams.get('v') !== MODULE_ID) return (await caches.match(request)) ?? fromServer(request)
+async function otherModuleFile(request, path, version) {
+  const hit = await fromKept(request)
+  if (hit) return hit
+  const response = await fromServer(request)
+  const manifest = response.ok ? await manifestOfModule(version) : null
+  if (manifest && !(await isOwn(response.clone(), path, manifest))) return conflict(path)
+  return response
+}
+
+function conflict(path) {
+  return new Response(`${path}: the server has another version of this file (a newer ProSE was deployed). Reload the page.`, {
+    status: 409,
+    statusText: 'Another version was deployed; reload the page',
+    headers: { 'content-type': 'text/plain' },
+  })
+}
+
+/**
+ * A file of this module version: from the store; the first time from the network, verified, stored
+ * and answered from the store (the stored response: Chrome code-caches openms.wasm only for it).
+ */
+async function ownModuleFile(request, path) {
   const cache = await caches.open(MODULE_STORE)
-  const hit = await cache.match(request)
+  const key = moduleKey(path)
+  const hit = await cache.match(key)
   if (hit) return hit
   const response = await fromServer(request)
   if (!response.ok) return response
-  await cache.put(request, response)
-  return (await cache.match(request)) ?? fromServer(request)
+  if (!(await isOwn(response.clone(), path))) return conflict(path)
+  await cache.put(key, response)
+  void reportStatus()
+  return (await cache.match(key)) ?? fromServer(request)
 }
 
-/** From the network, stored; from the store when the network fails. */
-async function networkFirst(request, key) {
-  const cache = await caches.open(APP_STORE)
+/**
+ * A hashed asset (assets/: its name changes with its content, so a URL always means the same bytes):
+ * from a store (this generation's, else a kept one); else from the network, stored if it is this
+ * build's. An old tab thus keeps its own chunks whatever the server has now.
+ */
+async function asset(request, url) {
+  const key = appKey(url)
+  const hit = (await (await caches.open(APP_STORE)).match(key)) ?? (await fromKept(key))
+  if (hit) return hit
+  const response = await fromServer(request)
+  const path = key.slice(SCOPE.href.length)
+  if (MANIFEST[path] && (await isOwn(response.clone(), path))) await (await caches.open(APP_STORE)).put(key, response.clone())
+  return response
+}
+
+/** An app file (the page, the example, fasta/): from the network (stored if it is of this build); else from a store. */
+async function networkFirst(request, url) {
+  const key = appKey(url)
+  const path = key.slice(SCOPE.href.length)
+  const stored = async () => (await (await caches.open(APP_STORE)).match(key)) ?? (await fromKept(key))
+  let response
   try {
-    const response = await fromServer(request)
-    if (response.ok) await cache.put(key, response.clone())
-    return response
+    response = await fromServer(request)
   } catch (error) {
-    const hit = await cache.match(key)
+    const hit = await stored()
     if (hit) return hit
     throw error
   }
+  if (!response.ok) return (await stored()) ?? response
+  if (MANIFEST[path] && (await isOwn(response.clone(), path))) {
+    await (await caches.open(APP_STORE)).put(key, response.clone())
+  }
+  return response
 }
 
 function withIsolationHeaders(response) {
@@ -117,65 +212,194 @@ function withIsolationHeaders(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
-/**
- * Stores the shell, all of it or nothing (a failure fails the installation; the browser tries again
- * on a later visit). The page must be of this worker's build: a deployment landing during the
- * installation would otherwise pair this worker with another build's page.
- */
-async function storeShell() {
-  const responses = await Promise.all(
-    SHELL.map(async (path) => {
-      const key = new URL(path, SCOPE).href
-      const response = await fromServer(key)
-      if (!response.ok) throw new Error(`${path}: ${response.status}`)
-      return [key, response]
-    }),
-  )
-  const page = responses.find(([key]) => key.endsWith('/index.html'))
-  if (page) {
-    const build = /<meta name="prose-build" content="([0-9a-f]+)"/.exec(await page[1].clone().text())?.[1]
-    if (build !== BUILD_ID) throw new Error(`index.html is of build ${build}, this worker of ${BUILD_ID}`)
-  }
-  const cache = await caches.open(APP_STORE)
-  await Promise.all(responses.map(([key, response]) => cache.put(key, response)))
+/** Fetches `path` (at `url`), verifies it, and stores it under `key` in `cache`; throws if it is not this build's. */
+async function storeVerified(cache, path, url, key) {
+  if (await cache.match(key)) return
+  const response = await fromServer(url)
+  if (!(await isOwn(response.clone(), path))) throw new Error(`${path}: not the file of build ${BUILD_ID}`)
+  await cache.put(key, response)
 }
 
-/** Stores DATA (what is not stored yet); true when all of it is. */
-async function storeData() {
-  const cache = await caches.open(APP_STORE)
-  if (await cache.match(new URL(DATA_MARK, SCOPE).href)) return true
-  const stored = await Promise.all(
-    DATA.map(async (path) => {
-      const key = new URL(path, SCOPE).href
-      try {
-        if (await cache.match(key)) return true
-        const response = await fromServer(key)
-        if (!response.ok) return false
-        await cache.put(key, response)
-        return true
-      } catch {
-        return false // offline: the next STORE_DATA tries again
-      }
+/**
+ * The installation: the shell, all of it or nothing (a failure fails the installation; the browser
+ * tries again later), verified against the manifest, so also only with an index.html of this build (a
+ * deployment landing during the installation aborts it). An update (a worker of another version is
+ * active) also stores the module, so it is complete before it waits.
+ */
+async function install() {
+  const app = await caches.open(APP_STORE)
+  await app.put(GENERATION_KEY, Response.json({ build: BUILD_ID, module: MODULE_ID, installed: Date.now(), activated: null, manifest: MANIFEST }))
+  const responses = await Promise.all(
+    SHELL.map(async (path) => {
+      const response = await fromServer(at(path))
+      if (!(await isOwn(response.clone(), path))) throw new Error(`${path}: not the file of build ${BUILD_ID}`)
+      return [at(path), response]
     }),
   )
+  await Promise.all(responses.map(([key, response]) => app.put(key, response)))
+  if (self.registration.active) {
+    const module = await caches.open(MODULE_STORE)
+    for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path))
+    await carryOver(app, module)
+  }
+}
+
+/**
+ * An update takes over what the previous generations stored of DATA and the models, where the bytes
+ * are those of this build (no download; what differs is fetched when used).
+ */
+async function carryOver(app, module) {
+  const others = (await ownStores()).filter((name) => name !== APP_STORE && name !== MODULE_STORE)
+  const find = async (matches) => {
+    for (const name of others) {
+      const cache = await caches.open(name)
+      for (const request of await cache.keys()) if (matches(new URL(request.url))) return cache.match(request)
+    }
+    return undefined
+  }
+  const take = async (cache, path, key, matches) => {
+    if (await cache.match(key)) return true
+    const response = await find(matches)
+    if (!response || !(await isOwn(response.clone(), path))) return false
+    await cache.put(key, response)
+    return true
+  }
+  let data = true
+  for (const path of DATA) data = (await take(app, path, at(path), (url) => url.href === at(path))) && data
+  if (data) await app.put(DATA_MARK, new Response(new Date().toISOString()))
+  for (const path of MODELS) await take(module, path, moduleKey(path), (url) => url.origin + url.pathname === at(path))
+}
+
+/**
+ * Stores DATA (what is not stored yet); true when all of it is. Also the module, if a page loaded it
+ * before this worker served it (a page isolated by its server, as in the desktop app, starts at once).
+ */
+async function storeData() {
+  const module = await caches.open(MODULE_STORE)
+  for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path)).catch(() => {})
+  const cache = await caches.open(APP_STORE)
+  if (await cache.match(DATA_MARK)) return true
+  const stored = await Promise.all(
+    DATA.map((path) =>
+      storeVerified(cache, path, at(path), at(path)).then(
+        () => true,
+        () => false, // offline, or another build on the server: the next STORE_DATA tries again
+      ),
+    ),
+  )
   const complete = stored.every(Boolean)
-  if (complete) await cache.put(new URL(DATA_MARK, SCOPE).href, new Response(new Date().toISOString()))
+  if (complete) await cache.put(DATA_MARK, new Response(new Date().toISOString()))
   return complete
 }
 
-/** Drops this worker's stores of other ids and what the earlier site left in the demos' stores. */
-async function dropOldStores() {
+/** What this worker has stored: the shell and the module (= works offline), the models, the data. */
+async function status() {
+  const app = await caches.open(APP_STORE)
+  const module = await caches.open(MODULE_STORE)
+  const all = async (cache, keys) => (await Promise.all(keys.map((key) => cache.match(key)))).every(Boolean)
+  const shell = await all(app, SHELL.map(at))
+  const moduleStored = await all(module, MODULE.map(moduleKey))
+  const models = {}
+  for (const path of MODELS) models[path.split('/').pop()] = Boolean(await module.match(moduleKey(path)))
+  const previous = (await generations()).find((g) => g.kept)
+  return {
+    type: 'STATUS',
+    build: BUILD_ID,
+    module: MODULE_ID,
+    shell,
+    moduleStored,
+    offline: shell && moduleStored,
+    models,
+    data: Boolean(await app.match(DATA_MARK)),
+    kept: previous?.build ?? null,
+  }
+}
+
+async function reportStatus(client) {
+  const report = await status()
+  const clients = client ? [client] : await self.clients.matchAll({ type: 'window' })
+  for (const c of clients) c.postMessage(report)
+}
+
+/** The other generations: their builds, module ids and markers (null: no marker, an older kind of store). */
+async function generations() {
+  const own = await (await (await caches.open(APP_STORE)).match(GENERATION_KEY))?.json()
+  const out = []
   for (const name of await caches.keys()) {
-    if (OWN_STORE.test(name)) {
-      if (name !== MODULE_STORE && name !== APP_STORE) await caches.delete(name)
-    } else if (DEMO_STORE.test(name)) {
-      // the earlier site's files only: the entries of openms-demo/ stay
-      const cache = await caches.open(name)
-      const keys = await cache.keys()
-      const old = keys.filter((request) => earlierSiteFile(new URL(request.url)))
-      for (const request of old) await cache.delete(request)
-      if (old.length > 0 && old.length === keys.length) await caches.delete(name)
+    const build = APP_STORE_NAME.exec(name)?.[1]
+    if (!build || build === BUILD_ID) continue
+    const marker = await (await (await caches.open(name)).match(GENERATION_KEY))?.json().catch(() => null)
+    out.push({ build, store: name, module: marker?.module ?? null, marker, kept: false })
+  }
+  // previous = activated before this one; newer = installed after it (installing or waiting: not ours to drop)
+  const previous = out.filter((g) => g.marker?.activated && (!own?.activated || g.marker.activated < own.activated))
+  previous.sort((a, b) => b.marker.activated - a.marker.activated)
+  if (previous[0]) previous[0].kept = true
+  for (const g of out) g.newer = Boolean(g.marker && own && g.marker.installed > own.installed && !g.marker.activated)
+  return out
+}
+
+/** The builds of the open pages (they answer BUILD?); null for a page that does not answer in time. */
+async function openBuilds() {
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  return Promise.all(
+    clients.map(
+      (client) =>
+        new Promise((resolve) => {
+          const channel = new MessageChannel()
+          const timer = setTimeout(() => resolve(null), 1000)
+          channel.port1.onmessage = (event) => {
+            clearTimeout(timer)
+            resolve(event.data?.build ?? null)
+          }
+          client.postMessage({ type: 'BUILD?' }, [channel.port2])
+        }),
+    ),
+  )
+}
+
+/**
+ * Drops the generations this worker no longer needs: all but the previous one; the previous one when
+ * this generation is complete (shell and module) and no page of its build is open. Never one that is
+ * newer (installing or waiting). Only the active worker cleans.
+ */
+let cleaning = null
+function cleanGenerations() {
+  cleaning ??= (async () => {
+    try {
+      // (a waiting worker of a newer version must not drop the generation that is in use)
+      if (self.serviceWorker && self.registration.active !== self.serviceWorker) return
+      const own = await status()
+      const builds = own.offline ? await openBuilds() : null
+      const keepModules = new Set([MODULE_ID])
+      for (const g of await generations()) {
+        const keep = g.newer || (g.kept && (!own.offline || builds.includes(g.build) || builds.includes(null)))
+        if (keep) {
+          if (g.module) keepModules.add(g.module)
+          continue
+        }
+        await caches.delete(g.store)
+      }
+      for (const name of await caches.keys()) {
+        const module = MODULE_STORE_NAME.exec(name)?.[1]
+        if (module && !keepModules.has(module)) await caches.delete(name)
+      }
+    } finally {
+      cleaning = null
     }
+  })()
+  return cleaning
+}
+
+/** What the earlier site left in the demos' stores (the entries of openms-demo/ stay). */
+async function dropEarlierSite() {
+  for (const name of await caches.keys()) {
+    if (!DEMO_STORE.test(name)) continue
+    const cache = await caches.open(name)
+    const keys = await cache.keys()
+    const old = keys.filter((request) => earlierSiteFile(new URL(request.url)))
+    for (const request of old) await cache.delete(request)
+    if (old.length > 0 && old.length === keys.length) await caches.delete(name)
   }
   // openms-meta records the version of the demos' stores; without any of them it is the earlier site's
   const names = await caches.keys()
@@ -183,14 +407,19 @@ async function dropOldStores() {
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(storeShell())
+  event.waitUntil(install())
 })
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      await dropOldStores()
+      const app = await caches.open(APP_STORE)
+      const marker = (await (await app.match(GENERATION_KEY))?.json().catch(() => null)) ?? { build: BUILD_ID, module: MODULE_ID, installed: Date.now() }
+      await app.put(GENERATION_KEY, Response.json({ ...marker, activated: Date.now() }))
+      await dropEarlierSite()
       await self.clients.claim()
+      await cleanGenerations()
+      await reportStatus()
     })(),
   )
 })
@@ -200,9 +429,10 @@ self.addEventListener('message', (event) => {
   if (type === 'SKIP_WAITING') {
     event.waitUntil(self.skipWaiting())
   } else if (type === 'STORE_DATA') {
-    event.waitUntil(
-      storeData().then((complete) => event.source?.postMessage({ type: 'DATA_STORED', complete, build: BUILD_ID })),
-    )
+    event.waitUntil(storeData().then(() => reportStatus(event.source)))
+  } else if (type === 'STATUS') {
+    // a page says hello: its status, and a chance to drop a generation no page needs any more
+    event.waitUntil(Promise.all([reportStatus(event.source), cleanGenerations()]))
   }
 })
 
@@ -211,11 +441,19 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || request.headers.has('range')) return
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
-  const kind = kindOf(url.pathname)
+  const rest = relative(url)
+  const kind = kindOf(rest)
   const isolate = request.mode === 'navigate' || request.destination === 'worker' || request.destination === 'sharedworker'
   if (kind === null && !isolate) return
-  const response =
-    kind === 'module' ? moduleFile(request, url) : kind === 'app' ? networkFirst(request, appKey(url)) : fetch(request)
+  let response
+  if (kind === 'module') {
+    const version = url.searchParams.get('v')
+    response = version === MODULE_ID ? ownModuleFile(request, rest) : otherModuleFile(request, rest, version)
+  } else if (kind === 'app') {
+    response = rest.startsWith('assets/') ? asset(request, url) : networkFirst(request, url)
+  } else {
+    response = fetch(request)
+  }
   // (Chrome keeps the compiled code of openms.wasm only if its response is the stored one)
   const pristine = kind === 'module' && url.pathname.endsWith('/openms.wasm')
   event.respondWith(pristine ? response : response.then(withIsolationHeaders))

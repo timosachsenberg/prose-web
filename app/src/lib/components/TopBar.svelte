@@ -9,7 +9,7 @@
   import ExportMenu from './results/ExportMenu.svelte'
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
-  import { applyUpdate, watchServiceWorker, watchUpdate } from '$lib/sw-client'
+  import { applyUpdate, pageBuild, watchStatus, watchUpdate, type StoreStatus } from '$lib/sw-client'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
 
@@ -47,13 +47,27 @@
     return { state: save.state, text: 'Not saved to History', title: save.message }
   })
 
-  // a service worker serves the page: the app works offline (lib/sw-client.ts)
-  let offline = $state(false)
-  $effect(() => watchServiceWorker((controlled) => (offline = controlled)))
-  // a new version is installed and waits: offered as "Reload", never in the middle of a search
-  let updateReady = $state(false)
+  // what the service worker has stored: "works offline" once this build's shell and module are (lib/sw-client.ts)
+  let stored = $state<StoreStatus | null>(null)
+  $effect(() => watchStatus((s) => (stored = s)))
+  const offlineNote = $derived.by(() => {
+    if (!stored?.offline) return ''
+    const models = Object.values(stored.models)
+    const parts = [
+      'Stored on this computer: the app and OpenMS.',
+      models.length > 0 && models.every(Boolean) ? 'The PeptDeep models too.' : 'PeptDeep models not stored yet (stored when first used).',
+      stored.data ? 'The example too.' : 'The example not stored yet.',
+    ]
+    return parts.join(' ')
+  })
+  // a new version is installed and waits, or has taken over while this page is of the previous one:
+  // offered as "Reload", never in the middle of a search
+  let updateWaiting = $state(false)
   let updating = $state(false)
-  $effect(() => watchUpdate(() => (updateReady = true)))
+  $effect(() => watchUpdate(() => (updateWaiting = true)))
+  const updateReady = $derived(
+    updateWaiting || (stored !== null && pageBuild() !== null && stored.build !== pageBuild() && stored.kept === pageBuild()),
+  )
 
   // "OpenMS 3.7 · 16 threads · works offline"; the full version in the title
   const status = $derived.by(() => {
@@ -74,17 +88,20 @@
           '(e.g. in a private window) – or use the desktop app.',
       }
     }
-    const works = offline ? ' · works offline' : ''
-    return { text: `OpenMS ${version} · ${threads}${works}`, dot: 'bg-green-700', title: `OpenMS ${info.version}` }
+    const works = offlineNote ? ' · works offline' : ''
+    return { text: `OpenMS ${version} · ${threads}${works}`, dot: 'bg-green-700', title: `OpenMS ${info.version}. ${offlineNote}`.trim() }
   })
 </script>
 
-<!-- One row of 52 px: the result's chip shrinks (and truncates) before anything wraps. On windows of
-     900 px or less (max-[901px]: width < 901px) the chip and the save state take a second row. -->
+<!-- One row of 52 px: the result's chip (flex basis 0) shrinks and truncates before anything wraps; at
+     1100 px or less the subtitle hides and the gaps narrow; on windows of 900 px or less (max-[901px]:
+     width < 901px) the chip and the save state take a second row. Should the fixed items still not fit
+     (a running search's progress, the update notice, a narrow window), the right-hand group wraps to a
+     row of its own instead of overflowing. -->
 <header
-  class="flex min-h-[52px] items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 *:shrink-0 max-[901px]:flex-wrap max-[901px]:gap-x-4">
+  class="flex min-h-[52px] flex-wrap items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 *:shrink-0 max-[1101px]:gap-x-4">
   <div class="text-[15px] font-semibold tracking-tight whitespace-nowrap">
-    ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[901px]:hidden">OpenMS search engine</small>
+    ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[1101px]:hidden">OpenMS search engine</small>
   </div>
   <nav aria-label="Main" class="flex gap-1">
     {#each items as item (item.view)}
@@ -118,7 +135,7 @@
     </div>
   {/if}
   <!-- the right-hand side -->
-  <div class="ml-auto flex items-center gap-x-6 max-[901px]:gap-x-4">
+  <div class="ml-auto flex items-center gap-x-6 max-[1101px]:gap-x-4">
     {#if searchProgress.running && route.view !== 'search'}
       <!-- a search runs on while the user is elsewhere: its progress, and the way back to it -->
       <a
@@ -135,7 +152,7 @@
     {/if}
     {#if updateReady}
       <span class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground" data-testid="update-notice" role="status">
-        A new version is ready ·
+        Update ready ·
         <button
           type="button"
           class="font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:text-muted-foreground disabled:no-underline"

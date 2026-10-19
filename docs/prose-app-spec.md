@@ -204,52 +204,70 @@ repository root). It:
   Pages' `max-age=600` otherwise filled the stores with stale files);
 - Shift+Reload bypasses it.
 
-The app's own service worker (**C12, built**, fix round 1 done, awaiting re-review before deploy):
-`app/public/sw.js`, derived from `examples/sw.js` with the same lessons, registered by
+The app's own service worker (**C12, built**, fix rounds 1 and 2 done, awaiting re-review before
+deploy): `app/public/sw.js`, derived from `examples/sw.js` with the same lessons, registered by
 `app/src/lib/sw-client.ts` with the app's directory as scope (`/prose-web/`; `/` in the desktop app).
 
 - **Isolation**: COOP/COEP on every response it gives except `openms.wasm`, and on every navigation and
   worker script in its scope (also the site's other pages). The engine worker's script comes through it
   with the headers; the module's pthread workers are Blob workers (`threads.js`,
-  `mainScriptUrlOrBlob`), which Chromium does not route through a service worker, and inherit the
-  engine worker's isolation (e2e: the chip shows the threads without "not cross-origin isolated").
+  `mainScriptUrlOrBlob`) and inherit the engine worker's isolation (their re-import of `openms.mjs`
+  does not reach the network: checked with the HTTP cache cleared).
+- **Only its own bytes (fix round 2).** The build writes a **manifest** into `sw.js` (path → size,
+  SHA-256 of every file but `sw.js`; `app/sw-stamp.ts`). The worker stores a response only if its
+  bytes match (verified on a copy, before `put`); otherwise it stores nothing.
 - **Module** (`openms/`): every file is requested with `?v=<MODULE_ID>` (SHA-256 of `public/openms/`,
-  `__OPENMS_ID__`): `openms.mjs`, `openms.wasm` (through `locateFile`; the module alone would ask for
-  `openms.wasm` without the query) and the PeptDeep models. The worker stores only its own version
-  (`openms-module-<MODULE_ID>`), cache-first and answered from the store already on the first request,
-  so Chrome's code cache applies from the second visit; `openms.wasm` is passed on unwrapped (a
-  re-wrapped response is never code-cached). Another version's file (a page of a newer deployment
-  under the previous worker, a tab of an older one) comes from a store that has exactly that URL, else
-  from the network, and is never stored: a module and its wasm are always of one version (fix round
-  1, C1; e2e `a module update pairs the new module with its own wasm…`). The `?v=` also keeps the
-  threads, which re-import the module past the worker, from meeting another version in the HTTP cache.
-- **App files** (`index.html`, `assets/`, `example/`, `fasta/`): network-first, stored in
-  `prose-app-<BUILD_ID>` (SHA-256 of the build; also in `index.html` as `<meta name="prose-build">`).
-  On installation the worker stores the **shell** (`index.html`, `assets/`, about 1 MB), all of it or
-  the installation fails, and only if the fetched `index.html` is of its own build (a deployment
-  landing mid-installation aborts it). The example and `fasta/` (**DATA**) are stored when the app
-  asks (`STORE_DATA`, once OpenMS has loaded), with a completion mark; offline without them "Try the
-  example" says "The example is not stored on this computer, and there is no connection…".
-- **Updates**: a new worker installs and **waits**; the app shows "A new version is ready · Reload" in
-  the top bar (disabled during a search: reloading would end it); Reload posts `SKIP_WAITING` and
-  reloads on `controllerchange`. Tabs of the previous version keep their worker meanwhile.
-- **Cleanup** when a worker takes over: its own stores of other ids
-  (`^(openms-module|prose-app)-[0-9a-f]{12}$`), and in the demos' stores (`openms-(module|app)-<semver>`)
+  `__OPENMS_ID__`): `openms.mjs`, `openms.wasm` (through `locateFile`) and the PeptDeep models. Files of
+  its own version: cache-first from `openms-module-<MODULE_ID>`; on the first request fetched, verified,
+  stored and answered from the store (the stored response itself, so Chrome's code cache applies:
+  1.34 MB of compiled code beside the 44.8 MB wasm, engine start ≈ 1 s from the second visit, also for
+  a wasm stored by an update's installation); `openms.wasm` is never re-wrapped. If the server has
+  other bytes under such a URL (a newer version was deployed), the answer is **409**, never the other
+  bytes: an old tab's lazily loaded model fails cleanly ("…of this version of ProSE is no longer on the
+  server: a newer version was deployed. Reload the page."). Files of another version (another `?v=`)
+  come from a kept store that has exactly that URL; else from the network, unstored, verified against
+  that version's manifest where its generation is stored (each generation's marker carries its
+  manifest), else as the server has it.
+- **App files** (`index.html`, `assets/`, `example/`, `fasta/`): network-first; stored only if they are
+  this build's (another build's page or chunks pass through unstored, so the worker's store never gets
+  a page it cannot run); offline, or when the server answers not-OK (an old tab's hashed chunk after a
+  deployment), from this generation's store, else by exact URL from the kept previous one. Installation
+  stores the **shell** (`index.html` + `assets/`), all of it verified or the installation fails (a
+  deployment landing mid-installation fails the `index.html` check). The example and `fasta/`
+  (**DATA**) are stored when the app asks (`STORE_DATA`, once OpenMS has loaded); offline without them
+  "Try the example" says "The example is not stored on this computer, and there is no connection…".
+- **Updates (fix rounds 1–2).** A new version's worker installs **completely before it waits**: the
+  shell and, because a previous version is active, the module (`openms.mjs`, `openms.wasm`), verified;
+  DATA and the models the previous generation stored are carried over where the bytes are the new
+  build's. A first visit installs the shell only (the isolating reload stays fast). The new worker
+  then waits; the top bar shows "Update ready · Reload" (disabled during a search); Reload posts
+  `SKIP_WAITING` and reloads on `controllerchange`. Closing every tab of the old version also lets it
+  take over (with its complete stores: offline works the next day).
+- **Generations (fix round 2).** A generation = `prose-app-<BUILD_ID>` + `openms-module-<MODULE_ID>`;
+  a marker in the app store records build, module, manifest, installation and activation times. Only
+  the active worker cleans (on activation and whenever a page says hello): it keeps the **previous**
+  generation (the one activated before it) while its own is incomplete or a page of that build is open
+  (it asks the pages for their build: `BUILD?`, answered by `sw-client`), and drops it otherwise; it
+  drops every other generation, but never a newer one (installing or waiting). So an old tab keeps
+  starting engine workers and loading its module after another tab took the update, and is told
+  ("Update ready · Reload" also shows in a page of the kept previous build).
+- **"Works offline"** comes from the worker's **STATUS** report: this build's shell and module stored
+  and verified. The chip's title adds the PeptDeep models and the example ("PeptDeep models not stored
+  yet (stored when first used)").
+- **Cleanup of the earlier site** on activation: in the demos' stores (`openms-(module|app)-<semver>`)
   the entries the earlier site left (the module and models in the scope's root, `examples/`); a store
   left empty goes, and `openms-meta` when no such store remains. The entries of `openms-demo/` stay.
-  The app unregisters the earlier demos' workers (any scope within `examples/` of its directory: their
-  client resolved `scope: "./"` against the page, so `examples/prose/`, `examples/browser/`, and the
-  desktop 0.2.0's `/examples/prose/`); so do the redirect pages.
+  The app and the redirect pages unregister the earlier demos' workers (any scope within `examples/`:
+  `examples/prose/`, `examples/browser/`, the desktop 0.2.0's `/examples/prose/`).
 - The worker's own fetches use `cache: "no-cache"`; the build stamps `BUILD_ID`, `MODULE_ID`, `SHELL`,
-  `DATA` and the page's build meta (`app/sw-stamp.ts`, a `closeBundle` plugin).
+  `DATA`, `MANIFEST` and the page's build meta.
 - **First visit**: `index.html` shows "Loading ProSE…"; `main.ts` mounts at once on an isolated page;
   otherwise it waits for the worker (shell only) and the page reloads once per tab (`sessionStorage`
   marker), at most 30 s, then runs on one thread. Where the session storage is blocked, the page does
-  not reload (it could not remember having reloaded) and starts on one thread;
-  `registerServiceWorker()` never rejects and `main.ts` starts the app on any outcome. Where the
-  worker cannot help (blocked, unsupported, private window, Shift+Reload) the module runs on **one
-  thread** (it loads and searches without isolation): chip "OpenMS 3.7 · 1 thread · not cross-origin
-  isolated" (amber, with an explanatory title) and a dismissible notice on New search.
+  not reload and starts on one thread; `registerServiceWorker()` never rejects. Where the worker cannot
+  help (blocked, unsupported, private window, Shift+Reload) the module runs on **one thread**: chip
+  "OpenMS 3.7 · 1 thread · not cross-origin isolated" (amber, explanatory title) and a dismissible
+  notice on New search.
 
 `vite dev`/`vite preview` (their `server.headers`/`preview.headers`) and the desktop app (Neutralino
 `serverHeaders`) send the headers themselves; the worker is not registered under `vite dev`.
@@ -1048,12 +1066,14 @@ time." Start stays enabled over budget (C-R15 accepted).
 - A search keeps running when the user leaves New search; the app navigates to Results when it ends.
 - **TopBar indicator**: on any view but New search, a compact link (small bar + "Searching 48 %" or
   "Searching…", with an aria-label) returns to New search. Status chip: "Loading OpenMS…", then
-  "OpenMS 3.7 · 16 threads", plus "· works offline" while a service worker serves the page (C12), or
+  "OpenMS 3.7 · 16 threads", plus "· works offline" once the service worker reports this build's shell
+  and module stored and verified (C12; its title lists the PeptDeep models and the example), or
   "· not cross-origin isolated" (amber dot, explanatory title; New search adds a dismissible notice).
-  The bar stays one row above 900 px, the result chip shrinking and truncating first; at ≤ 900 px
-  (C12) the subtitle hides and the result chip with its save state takes a second row; the Results
-  tab list scrolls sideways where it does not fit. "A new version is ready · Reload" appears when an
-  update waits (C12 fix round 1).
+  The bar stays one row above 900 px, the result chip shrinking and truncating first (at ≤ 1100 px the
+  subtitle hides and the gaps narrow); at ≤ 900 px (C12) the result chip with its save state takes a
+  second row; should the fixed items not fit, the right-hand group wraps whole, never overflowing. The
+  Results tab list scrolls sideways where it does not fit. "Update ready · Reload" appears when an
+  update waits, or in a page of the previous build after another tab took it (C12 fix rounds 1–2).
 
 ### 5.4 Display formats (C3, done)
 
@@ -1192,7 +1212,7 @@ cache when results close; a 1 % debug variant. A read-only investigation compare
 | **C9** PSM view | `PsmView`, `FragmentLadder`, `SpectrumMirror`, `IonTable`, `MassErrorPlot`, `PsmFeatures`, `psm/svg-export.ts` (mockup 3): breadcrumb Proteins › protein › Peptides › peptide › PSM; sequence with fragment ladder and modified-residue labels; mirror spectrum with ion/charge/loss toggles, observed (top) against the **PeptDeep prediction** when `info.onnx` (NCE = `peptdeepNce` of the PSM's file, else the spectrum's `collisionEnergy`, else 30; instrument from the search) or the **theoretical** spectrum (`annotate(...).theoretical`, uniform height); annotation with `maxCharge` 2 for the mirror (B-R29), labels grouped per peak ("y1-NH3++ / z1++", B-R20); b/y ion table with matched cells highlighted; **fragment mass error plot**: m/z against ppm, tolerance band, dot size = intensity, one dot per match; cosine and spectral angle from the `ms2_cosine`/`ms2_spectral_angle` features when present; all PSM features; Prev/Next in the current sort; "Export spectrum (SVG)" (`exportSpectrumSvg`: standalone, inline styles, no external references). Peaks come from the stored spectra, so the view works for History and project files without the mzML. Ion colours b `#2a78d6`, y `#eb6834`, unmatched grey; direct labels, so colour is never the only cue |
 | **C10** Overview, Samples, QC, open search | `OverviewTab`, `SamplesTab`, `QcTab`, `DeltaMassPanel`: Overview = key figures and a per-file table (spectra, PSMs, Percolator applied/skipped, seconds); with `summary.openSearch` a delta-mass histogram and the mapped-PTM table; Samples = samples × (PSMs, peptides, proteins) grouped by condition; QC = target vs decoy score distribution, precursor-error histogram, PSMs per file. Hand-written SVG charts with direct labels or legends |
 | **C11** History and `.prose` | `persist/record.ts` (the record, pack/unpack, checks), `history.ts` (storage), `history.svelte.ts` (page state and actions), `backend.ts` (idb-keyval + OPFS; `memory-backend.ts` for tests), `project.ts` + `crc32.ts` (the `.prose` zip), `views/History.svelte`, `components/history/SaveNotice.svelte`. `SCHEMA_VERSION = 1`; `SearchRecord = { schema: 1; id; name; createdAt; appVersion; moduleVersion; design: DesignResolution; settings: { parameters; rescore; peptdeep; contaminants; presetId?; fixedMods; database }; psmFdr; proteinFdr; seconds; summary; tables; spectra }` (beyond the plan: `settings.fixedMods`, `settings.database`, `psmFdr`, `proteinFdr`, `seconds`, which a reopened result needs). Metadata (the manifest = the record without its arrays, the byte layout, the list fields) in IndexedDB via idb-keyval, the arrays as one OPFS file per search (`prose-history/<key>.bin`, written through `createWritable` in 8 MB pieces); a save over an existing id writes a new file and removes the old one after, so a failed save keeps the old entry. Saved automatically after each completed search only (a failed or cancelled search leaves History unchanged); `navigator.storage.estimate()` is checked first and a search that does not fit is not written ("Not saved to History: needs …, … free", amber notice on Results and History, "Not saved to History" in the top bar; the results stay usable); after the first save the browser is asked once to persist storage. Saves, deletes, renames and the cleanup of orphan files and `.crswap` leftovers (only files older than 5 min) take turns under the Web Lock `prose-history` (fallback: a queue in the tab); other tabs hear of changes over `BroadcastChannel("prose-history")` and History reads the list again when shown. History view: name, finished, files, PSMs (targets within the search PSM FDR), size; open, rename (inline; the open result takes the new name for Export › Project), delete (with confirmation); "Open project…" with its progress; storage use and the persistence answer. A reload of `#/results/<id>` reopens the search from History. Opening from History reuses `openStoredResult()` (keeping id and createdAt); a stored search has no engine result (no idXML). `.prose` = zip of `manifest.json` (marker `format: "prose-project"`, `byteOrder: "little"`, non-finite numbers as `{"$num": …}`) + one `.bin` per typed array or text column (UTF-8 with u32 lengths), written by ProSE's own zip writer (decisions "C11 zip container"); an array that deflate shrinks to no more than 85 % is deflated, else stored (decisions "C11 stored entries"); written and read in slices with pauses and progress ("Saving project n %", "Opening project… n %"). `readProject` of an unknown schema throws `ProjectVersionError("This project was saved by a newer version of ProSE (schema 2) …")` ("This search …" for a History entry); anything else wrong (not a zip, no manifest, missing/mis-sized/damaged entry by CRC, columns of the wrong length, offsets or references out of range, settings or design the views cannot read, summary of other files) is a `ProjectError` that says what, never a crash. Spectra are stored with the results (decided by the user; float32 is 0.06 ppm at m/z 2,000; spectra of PSMs outside the FDR are not kept, which the engine's `spectra()` already does); raw mzML is not. The Export menu's Project item is active (disabled during a CSV export). |
-| **C12** SW, Pages, desktop (built; screenshots approved; fix round 1 done, awaiting re-review before deploy; §2.4, §8.8) | `app/public/sw.js` (from `examples/sw.js` with the `no-cache` fix; module files under `openms/`, cache-first, `openms.wasm` unwrapped; app files network-first, the shell stored on installation, the example and cRAP on request; COOP/COEP on navigations and worker scripts), `app/src/lib/sw-client.ts` (reload once when not isolated, 30 s cap, decision on `crossOriginIsolated`), `app/sw-stamp.ts` (stores `openms-module-<MODULE_ID>` and `prose-app-<BUILD_ID>` instead of both after `__BUILD_ID__`; `openms.mjs?v=<MODULE_ID>`; decisions "C12 store ids", "C12 `?v=`", "C12 precache"); `.github/workflows/pages.yml` running `.github/assemble-site.sh` → `_site/`: the app at `/prose-web/`, `/prose-web/examples/prose/` → redirect page to `../../` (also `examples/browser/` → `../../openms-demo/`; both unregister the old `examples/` worker), `/prose-web/openms-demo/` = the old `examples/browser/` with the root's module, `sw.js` and `sw-client.mjs` in one directory (paths and two races patched, "C12 site"), `data/`, `prose-single-file.html` and `README.md` unchanged. Pages source switches to "GitHub Actions" (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`). Root `index.html`: a pointer page without automatic redirect ("C12 root index"). Desktop: `desktop/build.sh` builds the app with `VITE_BASE=./` into the package's resources (not into `app/dist`), `neutralino.config.json` `url` `/`, version 0.3.0, README.txt for the app. The C7-deferred TopBar wrap at ≤ 900 px. Chip "· works offline"; without isolation the chip plus a notice on New search. e2e `deploy.spec.ts`: the SW isolates and caches (one reload, `crossOriginIsolated`, `openms-module-<MODULE_ID>` holds `openms.wasm`, the shell and the example stored), works offline after the first visit (its own `vite preview`, closed; reload, "Try the example" and a search), runs single-threaded without isolation ("1 thread" + "not cross-origin isolated", the notice, a search finishes). Fix round 1 (review of 0fbde6b): C1 module/wasm pairing across an update (`?v=` on wasm and models via `locateFile`, the worker stores only its own version), I1 blocked session storage, I2 shell-only installation + DATA on request + "Loading ProSE…", I3 deploy order, M1 waiting update with a Reload notice, M2 old stores and registrations, M3 all-or-nothing shell with a build check, M4 top bar (one row above 900 px, no overflow at 560 px or 900×540), M5 workflow (Node 24.19.0/npm 11.17.0, check + vitest before the build, deploy only from `main`), M6 e2e (refused/unsupported registration, PeptDeep under the worker, env restored). Deploy (live e2e, desktop `0.3.0` with `gh release create`) **only after the re-review**; order: first switch Pages to GitHub Actions (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`), then push `main`. The switch keeps the site deployed before live until the workflow deploys; the push runs the workflow, which deploys the app. In the other order, Pages in branch mode would publish `main`'s root (the pointer `index.html` and the repository's files, no app) until the switch |
+| **C12** SW, Pages, desktop (built; screenshots approved; fix rounds 1 and 2 done, awaiting re-review before deploy; §2.4, §8.8) | `app/public/sw.js` (from `examples/sw.js` with the `no-cache` fix; module files under `openms/`, cache-first, `openms.wasm` unwrapped; app files network-first, the shell stored on installation, the example and cRAP on request; COOP/COEP on navigations and worker scripts), `app/src/lib/sw-client.ts` (reload once when not isolated, 30 s cap, decision on `crossOriginIsolated`), `app/sw-stamp.ts` (stores `openms-module-<MODULE_ID>` and `prose-app-<BUILD_ID>` instead of both after `__BUILD_ID__`; `openms.mjs?v=<MODULE_ID>`; decisions "C12 store ids", "C12 `?v=`", "C12 precache"); `.github/workflows/pages.yml` running `.github/assemble-site.sh` → `_site/`: the app at `/prose-web/`, `/prose-web/examples/prose/` → redirect page to `../../` (also `examples/browser/` → `../../openms-demo/`; both unregister the old `examples/` worker), `/prose-web/openms-demo/` = the old `examples/browser/` with the root's module, `sw.js` and `sw-client.mjs` in one directory (paths and two races patched, "C12 site"), `data/`, `prose-single-file.html` and `README.md` unchanged. Pages source switches to "GitHub Actions" (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`). Root `index.html`: a pointer page without automatic redirect ("C12 root index"). Desktop: `desktop/build.sh` builds the app with `VITE_BASE=./` into the package's resources (not into `app/dist`), `neutralino.config.json` `url` `/`, version 0.3.0, README.txt for the app. The C7-deferred TopBar wrap at ≤ 900 px. Chip "· works offline"; without isolation the chip plus a notice on New search. e2e `deploy.spec.ts`: the SW isolates and caches (one reload, `crossOriginIsolated`, `openms-module-<MODULE_ID>` holds `openms.wasm`, the shell and the example stored), works offline after the first visit (its own `vite preview`, closed; reload, "Try the example" and a search), runs single-threaded without isolation ("1 thread" + "not cross-origin isolated", the notice, a search finishes). Fix round 1 (review of 0fbde6b): C1 module/wasm pairing across an update (`?v=` on wasm and models via `locateFile`, the worker stores only its own version), I1 blocked session storage, I2 shell-only installation + DATA on request + "Loading ProSE…", I3 deploy order, M1 waiting update with a Reload notice, M2 old stores and registrations, M3 all-or-nothing shell with a build check, M4 top bar (one row above 900 px, no overflow at 560 px or 900×540), M5 workflow (Node 24.19.0/npm 11.17.0, check + vitest before the build, deploy only from `main`), M6 e2e (refused/unsupported registration, PeptDeep under the worker, env restored). Fix round 2 (re-review of f576241: C-1 an unapplied update left offline broken, I-1 network-first stored another build's files, I-2 a lazily fetched model stored under the old version with new bytes, I-3 old tabs could not start workers after a deployment; TopBar overflow with the notice; unrealistic `fakeUpdate`; weak storage test): a build manifest (size + SHA-256) and "only verified bytes are stored", 409 for another version's bytes under this version's URL, complete updates (module stored before waiting, DATA and models carried over), generations with markers (one previous kept while its pages are open), not-OK falls back to the store, "works offline" from the worker's STATUS, the bar wraps instead of overflowing; e2e for C-1, I-1, I-2 and I-3 (they fail on f576241). Deploy (live e2e, desktop `0.3.0` with `gh release create`) **only after the re-review**; order: first switch Pages to GitHub Actions (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`), then push `main`. The switch keeps the site deployed before live until the workflow deploys; the push runs the workflow, which deploys the app. In the other order, Pages in branch mode would publish `main`'s root (the pointer `index.html` and the repository's files, no app) until the switch |
 
 ### 5.7 UX decisions the user made (brainstorming)
 
@@ -1210,11 +1230,13 @@ cache when results close; a 1 % debug variant. A read-only investigation compare
 
 ### 5.8 App tests
 
-At C12 fix round 1: vitest 43 files, 516 tests; `npm run check` 1046 files, 0 errors, 0 warnings; e2e
-82 tests (81 pass, 1 on-demand skipped: `PROSE_BIG_MZML`), with `deploy.spec.ts` ×9 (isolation and
-stores; the A→B module update; offline; offline before the example was stored; PeptDeep under the
-worker; the earlier demos' worker unregistered; blocked session storage; refused and missing
-registration). Outside the suites: the
+At C12 fix round 2: vitest 43 files, 516 tests; `npm run check` 1046 files, 0 errors, 0 warnings; e2e
+87 tests (86 pass, 1 on-demand skipped: `PROSE_BIG_MZML`), with `deploy.spec.ts` ×14 (isolation and
+stores; a server-isolated first start ends up working offline; the A→B module update; an update never
+applied, then offline; an aborted update, then offline; a model fetched after a deployment; old tabs
+starting workers before and after another tab's Reload; offline; offline before the example was
+stored; PeptDeep under the worker; the earlier demos' worker unregistered; blocked session storage;
+refused and missing registration). The four update tests fail on f576241. Outside the suites: the
 local `_site` check (plain static server under `/prose-web/`) and the Linux desktop check (§8.8).
 
 At C7 (e26e083): vitest 28 files, 252 tests (incl. `core.test.ts` against the real threaded module at
@@ -1474,21 +1496,24 @@ xvfb-run -a sh -c './prose-linux_x64 --chrome-browser-binary=/ms-playwright/chro
   --chrome-args="--remote-debugging-port=9333 --no-sandbox --no-first-run" & node desktop-check3.mjs 9333 search'
 ```
 
-Checked on 2026-10-19 after fix round 1, from the commit itself (`git archive`, `npm ci`, build,
-`assemble-site.sh`), under the review's Pages-like server (`/tmp/c12review/probe/server.mjs`: max-age=600,
-no COOP/COEP, phases A/B; B = `fakeUpdate()` of the assembled site): "Loading ProSE…" first; the app
-reloads once, then isolated, 16 threads, "works offline", module and wasm of A paired, the example
-and cRAP stored after OpenMS loaded, the example search 1,790 PSMs; `openms-demo/` isolated by its own
-worker, also after the app, the app's stores survive it; on B's first load B's module with B's wasm
-(nothing of B in A's store), the update notice, Reload: B's worker, B's stores (the stored wasm is B's),
-A's gone, the demo's kept; later loads paired; a fresh browser: the demo isolated, both redirects, an
-`examples/prose/` worker unregistered by the redirect page; `data/`, `prose-single-file.html`,
-`README.md` byte-identical. Desktop linux_x64: 0.2.0 (released zip) then 0.3.0 on the same profile:
-0.2.0's worker (`/examples/prose/`) and stores (`openms-meta`, `openms-*-3.7.0-pre.80a3b501c4.2`) gone,
-isolated, 16 threads, works offline; the example with PeptDeep in 20.7 s (1,790 PSMs), a PSM's spectrum;
-a fresh profile likewise (20.8 s; there the module is stored from the second start: the page is
-isolated by the server, so OpenMS loads before the worker takes over); the program ends about 11 s
-after the window closes.
+Checked on 2026-10-19 after fix round 2, from the commit itself (`git archive`, `npm ci`, build,
+`assemble-site.sh`). Pages check (`_site` A, and B = `fakeUpdate()` of the app build copied over the
+site, under a Pages-like server: max-age=600, no COOP/COEP): 20/20 ("Loading ProSE…"; one reload;
+16 threads; works offline; A paired; example and cRAP stored; the example search 1,790 PSMs; the demo
+isolated by its own worker, the app's stores survive it; B's first load B/B, nothing of B in A's
+stores; "Update ready"; after Reload B paired, B's wasm stored, A's stores gone, the demo's kept;
+both redirects; an `examples/prose/` worker unregistered; `data/`, `prose-single-file.html`,
+`README.md` byte-identical). The review's probes (`/tmp/c12rr/probe`, test builds made with
+`fakeUpdate()`): offline-after-update (B starts offline, the example too), aborted (A's store keeps
+A's page, offline OK), models (the search fails cleanly, nothing stored), tabs with renamed and with
+unrenamed chunks (the old tab starts engine workers with A's module before and after the takeover; its
+model request fails cleanly with 409), pthreads (no network requests), storage (one document
+request, 1 thread), notice layout (one row 1100–901 px, no overflow down to 480 px), code cache
+(1.34 MB beside the wasm, ≈ 1 s start, also for a wasm stored by an update's installation). Desktop
+linux_x64: 0.2.0 (released zip) then 0.3.0 on the same profile: 0.2.0's worker and stores gone, the
+worker active, isolated, 16 threads, works offline; the example with PeptDeep in 20.8 s (1,790 PSMs),
+a PSM's spectrum; a fresh profile likewise, "works offline" already on the first start (20.7 s); the
+program ends about 11 s after the window closes.
 
 ---
 

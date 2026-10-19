@@ -1,4 +1,4 @@
-import { rmSync, statSync } from 'node:fs'
+import { readdirSync, rmSync, statSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 import { preview } from 'vite'
 import { searchSynthetic } from './helpers.js'
@@ -58,6 +58,46 @@ async function loadedModule(page: Page): Promise<{ mjs: string | null; wasm: str
   return { mjs: version('openms.mjs'), wasm: version('openms.wasm') }
 }
 
+/** The build of the page (its <meta name="prose-build">). */
+const pageBuildOf = (page: Page) => page.evaluate(() => document.querySelector('meta[name="prose-build"]')?.getAttribute('content'))
+
+/** The keys (paths with query, relative to /prose-web/) of the store `name`. */
+function storeKeys(page: Page, name: string): Promise<string[]> {
+  return page.evaluate(
+    async (name) => (await (await caches.open(name)).keys()).map((r) => new URL(r.url).pathname.replace('/prose-web/', '') + new URL(r.url).search),
+    name,
+  )
+}
+
+/** The ids of a build; a fake later deployment B of `dist` (see pages-server.ts), removed after the test. */
+const A = () => stampedIds('dist')
+const B_IDS = { module: 'bbbbbbbbbbbb', build: 'bbbbbbbbbb02' }
+
+/**
+ * In `page`, a new engine worker from the page's own worker script (as the app starts one for the
+ * viewer, or after a cancel or a crash), loading OpenMS: "ready" or what went wrong.
+ */
+function startEngineWorker(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const src = performance.getEntriesByType('resource').map((e) => e.name).find((n) => n.includes('/assets/worker-'))!
+    const worker = new Worker(src, { type: 'module' })
+    try {
+      return await new Promise<string>((resolve) => {
+        const timer = setTimeout(() => resolve('timeout'), 90_000)
+        worker.onerror = (e) => (clearTimeout(timer), resolve(`script failed: ${e.message ?? ''}`))
+        worker.onmessage = (e) => {
+          if (e.data?.id !== 1 || (e.data.type !== 'result' && e.data.type !== 'error')) return
+          clearTimeout(timer)
+          resolve(e.data.type === 'result' ? 'ready' : `error: ${JSON.stringify(e.data).slice(0, 300)}`)
+        }
+        worker.postMessage({ id: 1, type: 'init', threads: 1, baseUrl: new URL('/prose-web/', location.href).href })
+      })
+    } finally {
+      worker.terminate()
+    }
+  })
+}
+
 test('the service worker isolates the page and caches the module', async ({ page }) => {
   const loads = await firstVisit(page)
   expect(loads()).toBe(2)
@@ -84,10 +124,21 @@ test('the service worker isolates the page and caches the module', async ({ page
   expect(await page.evaluate(() => crossOriginIsolated)).toBe(true)
 })
 
+test('on a page its server isolates (as the desktop app), the first start also ends up working offline', async ({ page }) => {
+  // vite preview with the isolation headers: the app starts at once, OpenMS loads before the worker serves the page
+  await page.goto('http://127.0.0.1:4173/prose-web/')
+  await engineReady(page)
+  await expect(page.getByTestId('engine-status')).toContainText('works offline', { timeout: 60_000 })
+  const { module } = storeNames()
+  const v = stampedIds('dist').module
+  expect(await stored(page, module, `openms/openms.wasm?v=${v}`)).toBe(true)
+  expect(await stored(page, module, `openms/openms.mjs?v=${v}`)).toBe(true)
+})
+
 test('a module update pairs the new module with its own wasm, and the new worker waits for Reload', async ({ page }) => {
   test.setTimeout(240_000)
-  const a = stampedIds('dist')
-  const b = { module: 'bbbbbbbbbbbb', build: 'bbbbbbbbbb02' }
+  const a = A()
+  const b = B_IDS
   const distB = fakeUpdate('dist', b)
   const server = await pagesServer({ A: 'dist', B: distB })
   try {
@@ -95,21 +146,24 @@ test('a module update pairs the new module with its own wasm, and the new worker
     expect(await loadedModule(page)).toEqual({ mjs: a.module, wasm: a.module })
 
     // B is deployed; the first load of B runs under A's worker: B's module with B's wasm, which A's
-    // worker passes on from the network and does not store
+    // worker passes on and does not store (nor B's page or chunks)
     server.phase('B')
     await page.reload()
     await engineReady(page)
+    expect(await pageBuildOf(page)).toBe(b.build)
     expect(await loadedModule(page)).toEqual({ mjs: b.module, wasm: b.module })
     expect(server.log).toContain(`B /prose-web/openms/openms.wasm?v=${b.module}`)
-    const keys = await page.evaluate(async (name) => (await (await caches.open(name)).keys()).map((r) => r.url), `openms-module-${a.module}`)
-    expect(keys.filter((k) => k.includes(b.module))).toEqual([])
+    expect((await storeKeys(page, `openms-module-${a.module}`)).filter((k) => k.includes(b.module))).toEqual([])
+    expect((await storeKeys(page, `prose-app-${a.build}`)).filter((k) => k.includes(b.build.slice(0, 8)))).toEqual([])
 
-    // B's worker waits; the app offers the new version
+    // B's worker installs completely (its shell and module) and waits; the app offers the new version
     const notice = page.getByTestId('update-notice')
-    await expect(notice).toContainText('A new version is ready', { timeout: 30_000 })
-    expect(await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL)).toMatch(/\/sw\.js$/)
+    await expect(notice).toContainText('Update ready', { timeout: 60_000 })
+    expect(await storeKeys(page, `openms-module-${b.module}`)).toEqual(
+      expect.arrayContaining([`openms/openms.mjs?v=${b.module}`, `openms/openms.wasm?v=${b.module}`]),
+    )
 
-    // Reload: B's worker takes over and stores B's module; A's stores are gone
+    // Reload: B's worker takes over; A's stores go (no page of A is open)
     const reloaded = page.waitForEvent('load')
     await notice.getByRole('button', { name: 'Reload' }).click()
     await reloaded
@@ -125,13 +179,152 @@ test('a module update pairs the new module with its own wasm, and the new worker
     )
     expect(stores.wasm).toBe(wasmBytes)
     expect(stores.names).toContain(`prose-app-${b.build}`)
-    expect(stores.names.filter((n) => n.includes(a.module) || n.includes(a.build))).toEqual([])
+    await expect.poll(async () => (await page.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build))).toEqual([])
     await expect(page.getByTestId('update-notice')).toHaveCount(0)
+    await expect(page.getByTestId('engine-status')).toContainText('works offline')
 
     // and so on later visits
     await page.reload()
     await engineReady(page)
     expect(await loadedModule(page)).toEqual({ mjs: b.module, wasm: b.module })
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('an update the user never applies still works offline', async ({ page, context }) => {
+  test.setTimeout(240_000)
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    await firstVisit(page, server.url)
+    server.phase('B')
+    await page.reload()
+    await engineReady(page)
+    await expect(page.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+    // the user closes the tab without choosing Reload; the next visit is offline
+    await server.close()
+    await page.close()
+    await context.setOffline(true)
+    const next = await context.newPage()
+    await next.goto(server.url)
+    await engineReady(next)
+    expect(await pageBuildOf(next)).toBe(B_IDS.build)
+    expect(await loadedModule(next)).toEqual({ mjs: B_IDS.module, wasm: B_IDS.module })
+    await expect(next.getByTestId('engine-status')).toContainText('works offline')
+    // the example A stored is B's too (same bytes): carried over by B's installation
+    await next.getByRole('button', { name: 'Try the example' }).click()
+    await expect(next.getByText('DatabaseSuitability_database.fasta').first()).toBeVisible({ timeout: 30_000 })
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('an aborted update leaves the previous version working offline', async ({ page, context }) => {
+  test.setTimeout(240_000)
+  const a = A()
+  // B's shell lacks a file on the server: its worker cannot install
+  const font = readdirSync('dist/assets').find((f) => f.endsWith('.woff2'))!
+  const distB = fakeUpdate('dist', B_IDS, { missing: [`assets/${font}`] })
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    await firstVisit(page, server.url)
+    server.phase('B')
+    await page.reload()
+    await engineReady(page)
+    expect(await pageBuildOf(page)).toBe(B_IDS.build)
+    await expect
+      .poll(() => page.evaluate(async () => { const r = await navigator.serviceWorker.getRegistration(); return Boolean(r?.installing || r?.waiting) }), { timeout: 30_000 })
+      .toBe(false)
+    await expect(page.getByTestId('update-notice')).toHaveCount(0)
+    // A's store still has A's page (not the B page the network gave)
+    const storedPage = await page.evaluate(async (name) => (await (await caches.open(name)).match(new URL('index.html', location.href).href))?.text(), `prose-app-${a.build}`)
+    expect(storedPage).toContain(`content="${a.build}"`)
+
+    await server.close()
+    await context.setOffline(true)
+    await page.reload()
+    await engineReady(page)
+    expect(await pageBuildOf(page)).toBe(a.build)
+    expect(await loadedModule(page)).toEqual({ mjs: a.module, wasm: a.module })
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('a PeptDeep model fetched after a deployment is never stored under the old version', async ({ page }) => {
+  test.setTimeout(240_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    await firstVisit(page, server.url)
+    server.phase('B')
+    // the open A page searches with PeptDeep: its models (v=A) are on the server no more (B's bytes there)
+    await page.getByRole('button', { name: 'Try the example' }).click()
+    await expect(page.getByText('DatabaseSuitability_database.fasta').first()).toBeVisible({ timeout: 30_000 })
+    const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
+    if ((await peptdeep.getAttribute('aria-checked')) !== 'true') await peptdeep.click()
+    await page.getByRole('button', { name: /^Start search/ }).click()
+    await expect(page.getByText(/a newer version was deployed\. Reload the page/).first()).toBeVisible({ timeout: 120_000 })
+    expect(page.url()).not.toMatch(/#\/results\//)
+    expect((await storeKeys(page, `openms-module-${a.module}`)).filter((k) => k.includes('/models/'))).toEqual([])
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test("an old tab still starts engine workers after a deployment, before and after another tab's Reload", async ({ context }) => {
+  test.setTimeout(300_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    const old = await context.newPage()
+    await firstVisit(old, `${server.url}?debug=engine`)
+    /** A PeptDeep prediction in the old tab (its MS2 model, never stored, is B's on the server now). */
+    const predict = () =>
+      old.evaluate(() =>
+        (window as unknown as { __engine: { predict: (...a: unknown[]) => Promise<unknown[]> } }).__engine
+          .predict('PEPTIDEK', 2, 30, 'QE')
+          .then((ions) => `ok ${ions.length}`, (e: Error) => `error: ${e.message}`),
+      )
+    const other = await context.newPage()
+    await other.goto(server.url)
+    await engineReady(other)
+
+    server.phase('B')
+    await other.reload()
+    await engineReady(other)
+    await expect(other.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+    // A's worker still in charge: A's worker script is gone from the server, but stored
+    expect(await startEngineWorker(old)).toBe('ready')
+    expect(await predict()).toMatch(/^error: .*a newer version was deployed/)
+
+    // the other tab takes the update: B's worker serves the old tab too, and keeps A's generation for it
+    const reloaded = other.waitForEvent('load')
+    await other.getByTestId('update-notice').getByRole('button', { name: 'Reload' }).click()
+    await reloaded
+    await engineReady(other)
+    await expect.poll(() => old.evaluate(() => navigator.serviceWorker.controller?.scriptURL ?? null)).not.toBeNull()
+    expect(await startEngineWorker(old)).toBe('ready')
+    expect(await old.evaluate(() => caches.keys())).toEqual(expect.arrayContaining([`prose-app-${a.build}`, `openms-module-${a.module}`]))
+    // B's worker knows A's manifest (A's generation): B's bytes under A's URL are refused, not passed on
+    expect(await predict()).toMatch(/^error: .*a newer version was deployed/)
+    // the old tab is told
+    await expect(old.getByTestId('update-notice')).toBeVisible({ timeout: 30_000 })
+
+    // once no page of A is open, A's generation goes
+    await old.close()
+    await other.reload()
+    await engineReady(other)
+    await expect
+      .poll(async () => (await other.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build)), { timeout: 30_000 })
+      .toEqual([])
   } finally {
     await server.close()
     rmSync(distB, { recursive: true, force: true })
@@ -220,22 +413,41 @@ test('a PSM with its PeptDeep prediction, under the service worker', async ({ pa
 })
 
 test("the app unregisters the earlier demos' service worker", async ({ page }) => {
-  // the earlier site's demos registered theirs with scope examples/prose/ (or examples/browser/): resolved
-  // against the page, not the script; the desktop app 0.2.0 at /examples/prose/
-  await page.goto('./')
-  await engineReady(page)
-  const earlier = await page.evaluate(async () => (await navigator.serviceWorker.register('sw.js', { scope: 'examples/prose/' })).scope)
-  expect(earlier).toMatch(/\/prose-web\/examples\/prose\/$/)
-  await page.reload()
-  await engineReady(page)
-  await expect
-    .poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((r) => new URL(r.scope).pathname)))
-    .toEqual(['/prose-web/'])
+  // the earlier site's demos registered theirs (examples/sw.js) with scope examples/prose/ (resolved
+  // against the page, not the script); the desktop app 0.2.0 at /examples/prose/
+  const server = await pagesServer({ A: 'dist' }, 'A', {
+    'examples/sw.js': {
+      type: 'text/javascript',
+      body: "self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', () => {})",
+    },
+  })
+  try {
+    await firstVisit(page, server.url)
+    const scope = await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.register('examples/sw.js', { scope: 'examples/prose/' })
+      const worker = registration.installing ?? registration.waiting ?? registration.active
+      if (worker && worker.state !== 'activated') await new Promise((resolve) => worker.addEventListener('statechange', () => worker.state === 'activated' && resolve(null)))
+      return registration.scope
+    })
+    expect(scope).toMatch(/\/prose-web\/examples\/prose\/$/)
+    expect(await page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length)).toBe(2)
+    await page.reload()
+    await engineReady(page)
+    await expect
+      .poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((r) => new URL(r.scope).pathname)))
+      .toEqual(['/prose-web/'])
+  } finally {
+    await server.close()
+  }
 })
 
-test('the app starts where the browser blocks the session storage', async ({ page }) => {
+test('the app starts where the browser blocks the session storage: no reload, one thread', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
+  let loads = 0
+  page.on('request', (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) loads++
+  })
   await page.addInitScript(() => {
     Object.defineProperty(window, 'sessionStorage', {
       get() {
@@ -247,7 +459,9 @@ test('the app starts where the browser blocks the session storage', async ({ pag
   await page.goto('./')
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible({ timeout: 10_000 })
   expect(Date.now() - t0).toBeLessThan(10_000)
-  await engineReady(page)
+  await expect(page.getByTestId('engine-status')).toContainText('1 thread · not cross-origin isolated', { timeout: 120_000 })
+  await page.waitForTimeout(2000)
+  expect(loads).toBe(1)
   expect(errors).toEqual([])
 })
 
