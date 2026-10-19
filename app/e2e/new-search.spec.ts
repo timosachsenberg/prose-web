@@ -212,7 +212,7 @@ test('Start search waits for a database and a PSM FDR above 0', async ({ page })
 test('Cancel while OpenMS loads ends at once; typed modifications are checked when it is loaded', async ({ page }) => {
   test.setTimeout(120_000)
   // hold the module back, so that the search is started while OpenMS loads
-  await page.route('**/openms.wasm', async (route) => {
+  await page.route(/\/openms\.wasm(\?|$)/, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 8000))
     await route.continue().catch(() => {})
   })

@@ -16,7 +16,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SITE="$(realpath -m "${1:-$REPO/_site}")"
 [ -f "$REPO/app/dist/index.html" ] && [ -f "$REPO/app/dist/sw.js" ] ||
   { echo "app/dist is missing: run npm ci && npm run build in app/ first" >&2; exit 1; }
-if grep -q "__BUILD_ID__" "$REPO/app/dist/sw.js"; then echo "app/dist/sw.js is not stamped" >&2; exit 1; fi
+if grep -q "__BUILD_ID__" "$REPO/app/dist/sw.js" || ! grep -q 'name="prose-build" content="[0-9a-f]\{12\}"' "$REPO/app/dist/index.html"; then
+  echo "app/dist is not stamped (sw.js, index.html)" >&2; exit 1
+fi
 grep -q 'src="/prose-web/assets/' "$REPO/app/dist/index.html" ||
   { echo "app/dist is not built for /prose-web/ (VITE_BASE set?)" >&2; exit 1; }
 
@@ -69,9 +71,11 @@ redirect() { # directory, target (relative), name of the target
   <title>Moved: $3</title>
   <meta http-equiv="refresh" content="3; url=$2">
   <script>
-    // the earlier demos' service worker (scope examples/) is not needed any more
+    // the earlier demos' service workers (scopes within examples/: examples/prose/, examples/browser/)
+    // are not needed any more
+    const earlier = new URL("../", location.href).href;
     Promise.resolve(navigator.serviceWorker?.getRegistrations() ?? [])
-      .then((all) => Promise.all(all.filter((r) => new URL(r.scope).pathname.endsWith("/examples/")).map((r) => r.unregister())))
+      .then((all) => Promise.all(all.filter((r) => r.scope.startsWith(earlier)).map((r) => r.unregister())))
       .catch(() => {})
       .finally(() => location.replace("$2" + location.hash));
   </script>

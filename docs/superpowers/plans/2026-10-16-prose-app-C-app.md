@@ -544,6 +544,6 @@ app.
 - [ ] **Step 5: Commit** `app: service worker, Pages deployment and desktop packaging`.
 - [ ] **Step 6: Deploy, after the user has approved screenshots of the built app** (rendered headlessly
   from `vite preview`, as for the mockups).
-  - Push `main`, switch Pages to the workflow, and check https://timosachsenberg.github.io/prose-web/
-    with the e2e suite against the live URL.
+  - Order: first switch Pages to GitHub Actions (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`), then push `main`. The switch keeps the site deployed before live until the workflow deploys; the push runs the workflow, which deploys the app. In the other order, Pages in branch mode would publish `main`'s root (the pointer `index.html` and the repository's files, no app) until the switch.
+  - Then check https://timosachsenberg.github.io/prose-web/ with the e2e suite against the live URL.
   - Publish desktop `0.3.0` with `gh release create`.

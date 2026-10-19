@@ -7,6 +7,7 @@
   import { openDebugResult } from '$lib/results/debug-result'
   import { readHash, router } from '$lib/route.svelte'
   import { openResult } from '$lib/search/session.svelte'
+  import { storeOfflineData, unregisterEarlierWorkers } from '$lib/sw-client'
   import History from './views/History.svelte'
   import NewSearch from './views/NewSearch.svelte'
   import Results from './views/Results.svelte'
@@ -21,19 +22,25 @@
     openDebugResult(debug, debugPeaks(location.search))
     if (debugSave(location.search) && openResult.current) void saveFinished(openResult.current)
   }
-  // OpenMS loads in the background from the start: the status chip and the search form need it
-  void startEngine().catch(() => {})
+  // OpenMS loads in the background from the start: the status chip and the search form need it; then
+  // the service worker stores the example and the cRAP database for offline use (not before: the first
+  // visit should not wait for them)
+  void startEngine().then(
+    () => storeOfflineData(),
+    () => {},
+  )
+  void unregisterEarlierWorkers()
 </script>
 
 <svelte:window onhashchange={readHash} />
 
 <Tooltip.Provider delayDuration={300}>
-  <!-- the results use the whole width and height of the window (below the top bar, which wraps on
-       narrow windows) -->
-  <div class={router.route.view === 'results' ? 'flex h-screen min-h-[540px] flex-col bg-muted/40' : 'min-h-screen bg-muted/40'}>
+  <!-- the results use the whole width and the height of the window below the top bar (which wraps on
+       narrow windows), at least 440 px: main takes what is left, the results fill it (absolutely) -->
+  <div class={router.route.view === 'results' ? 'flex min-h-screen flex-col bg-muted/40' : 'min-h-screen bg-muted/40'}>
     <TopBar route={router.route} resultId={router.resultId} />
     {#if router.route.view === 'results'}
-      <main class="min-h-0 flex-1">
+      <main class="relative min-h-[440px] flex-1">
         <Results id={router.route.id} />
       </main>
     {:else}

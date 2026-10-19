@@ -9,6 +9,8 @@ import { psmTestSpectra, scanOf } from './synthetic-mzml.js'
 // spectra (b and y ions only); a synthetic file of the example's peptides adds a ions, an oxidised
 // methionine and a spectrum with thousands of noise peaks.
 
+/** The PeptDeep MS2 model's URL (the app asks for it with the module's version: ?v=…). */
+const MS2_MODEL = /\/peptdeep_ms2_dynamic\.onnx(\?|$)/
 const spectrumOf = (psm: Locator) => psm.getByTestId('spectrum')
 const labels = (psm: Locator, type: string) => spectrumOf(psm).locator(`[data-testid="peak-label"][data-ions~="${type}"]`)
 const labelsWith = (psm: Locator, text: string | RegExp) => spectrumOf(psm).locator('[data-testid="peak-label"]', { hasText: text })
@@ -156,7 +158,7 @@ test.describe('a synthetic file with a ions', () => {
     info.setTimeout(180_000)
     page = await browser.newPage({ baseURL: info.project.use.baseURL })
     // the model cannot be read: the prediction fails (first test)
-    await page.route('**/peptdeep_ms2_dynamic.onnx', (route) => route.abort())
+    await page.route(MS2_MODEL, (route) => route.abort())
     await searchSynthetic(page, undefined, undefined, '?debug=engine') // window.__engine: one test makes a call fail
   })
   test.afterAll(async () => page?.close())
@@ -170,7 +172,7 @@ test.describe('a synthetic file with a ions', () => {
     await expect(psm.getByRole('radio', { name: 'Theoretical' })).toBeChecked()
     await page.keyboard.press('Escape')
     await expect(psm).toHaveCount(0)
-    await page.unroute('**/peptdeep_ms2_dynamic.onnx')
+    await page.unroute(MS2_MODEL)
   })
 
   // (before any test asks for this PSM's precursor peaks: the answers are kept, and a kept answer makes no call)

@@ -9,7 +9,7 @@
   import ExportMenu from './results/ExportMenu.svelte'
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
-  import { watchServiceWorker } from '$lib/sw-client'
+  import { applyUpdate, watchServiceWorker, watchUpdate } from '$lib/sw-client'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
 
@@ -50,6 +50,10 @@
   // a service worker serves the page: the app works offline (lib/sw-client.ts)
   let offline = $state(false)
   $effect(() => watchServiceWorker((controlled) => (offline = controlled)))
+  // a new version is installed and waits: offered as "Reload", never in the middle of a search
+  let updateReady = $state(false)
+  let updating = $state(false)
+  $effect(() => watchUpdate(() => (updateReady = true)))
 
   // "OpenMS 3.7 · 16 threads · works offline"; the full version in the title
   const status = $derived.by(() => {
@@ -75,8 +79,10 @@
   })
 </script>
 
-<!-- one row of 52 px; on windows of 900 px or less (max-[901px]: width < 901px) the result's chip and save state take a second row -->
-<header class="flex min-h-[52px] flex-wrap items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 max-[901px]:gap-x-4">
+<!-- One row of 52 px: the result's chip shrinks (and truncates) before anything wraps. On windows of
+     900 px or less (max-[901px]: width < 901px) the chip and the save state take a second row. -->
+<header
+  class="flex min-h-[52px] items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 *:shrink-0 max-[901px]:flex-wrap max-[901px]:gap-x-4">
   <div class="text-[15px] font-semibold tracking-tight whitespace-nowrap">
     ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[901px]:hidden">OpenMS search engine</small>
   </div>
@@ -94,40 +100,60 @@
     {/each}
   </nav>
   {#if result}
-    <div class="flex min-w-0 items-center gap-6 max-[901px]:order-last max-[901px]:basis-full max-[901px]:gap-4">
-      <Badge variant="outline" class="h-6 max-w-[28rem] min-w-0 truncate bg-background px-2.5 font-normal text-muted-foreground" data-testid="result-chip"
-        >{resultChip}</Badge>
+    <div
+      class="flex min-w-0 flex-1 basis-0 items-center gap-6 shrink! max-[901px]:order-last max-[901px]:basis-full max-[901px]:gap-4">
+      <Badge
+        variant="outline"
+        class="block h-6 max-w-[28rem] min-w-0 shrink truncate bg-background px-2.5 leading-[22px] font-normal text-muted-foreground"
+        title={resultChip}
+        data-testid="result-chip">{resultChip}</Badge>
       {#if saved}
         <a
           href={formatHash({ view: 'history' })}
-          class="text-xs text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+          class="shrink-0 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           data-testid="history-state"
           data-state={saved.state}
           title={saved.title}>{saved.text}</a>
       {/if}
     </div>
   {/if}
-  <div class="flex-1"></div>
-  {#if searchProgress.running && route.view !== 'search'}
-    <!-- a search runs on while the user is elsewhere: its progress, and the way back to it -->
-    <a
-      href={formatHash({ view: 'search' })}
-      class="rounded-md px-2 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-      title="{searchProgress.label} – back to New search"
-      aria-label="Search running{searchProgress.indeterminate ? '' : `, ${searchProgress.percent} %`}: back to New search"
-      data-testid="topbar-search-progress">
-      <SearchProgress compact />
-    </a>
-  {/if}
-  {#if resultView}
-    <ExportMenu view={resultView} />
-  {/if}
-  <Badge
-    variant="outline"
-    class="h-6 gap-1.5 bg-background px-2.5 font-normal text-muted-foreground"
-    data-testid="engine-status"
-    title={status.title}
-    role="status">
-    <span class={cn('size-[7px] rounded-full', status.dot)}></span>{status.text}
-  </Badge>
+  <!-- the right-hand side -->
+  <div class="ml-auto flex items-center gap-x-6 max-[901px]:gap-x-4">
+    {#if searchProgress.running && route.view !== 'search'}
+      <!-- a search runs on while the user is elsewhere: its progress, and the way back to it -->
+      <a
+        href={formatHash({ view: 'search' })}
+        class="rounded-md px-2 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        title="{searchProgress.label} – back to New search"
+        aria-label="Search running{searchProgress.indeterminate ? '' : `, ${searchProgress.percent} %`}: back to New search"
+        data-testid="topbar-search-progress">
+        <SearchProgress compact />
+      </a>
+    {/if}
+    {#if resultView}
+      <ExportMenu view={resultView} />
+    {/if}
+    {#if updateReady}
+      <span class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground" data-testid="update-notice" role="status">
+        A new version is ready ·
+        <button
+          type="button"
+          class="font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:text-muted-foreground disabled:no-underline"
+          disabled={searchProgress.running || updating}
+          title={searchProgress.running ? 'After the search: reloading now would end it' : 'Reload ProSE in its new version'}
+          onclick={() => {
+            updating = true
+            void applyUpdate()
+          }}>Reload</button>
+      </span>
+    {/if}
+    <Badge
+      variant="outline"
+      class="h-6 gap-1.5 bg-background px-2.5 font-normal text-muted-foreground"
+      data-testid="engine-status"
+      title={status.title}
+      role="status">
+      <span class={cn('size-[7px] rounded-full', status.dot)}></span>{status.text}
+    </Badge>
+  </div>
 </header>

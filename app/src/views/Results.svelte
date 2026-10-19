@@ -158,7 +158,7 @@
 
 {#if view && figures}
   {@const level = view.level}
-  <section data-testid="view-results" class="flex h-full min-h-[480px]">
+  <section data-testid="view-results" class="absolute inset-0 flex">
     <div
       class="flex min-w-0 flex-col gap-3 py-4 {psmOpen ? 'flex-none border-r pr-3 pl-4' : 'flex-1 px-5'}"
       style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>
@@ -170,7 +170,8 @@
 
       <Tabs.Root bind:value={view.tab} class="flex min-h-0 flex-1 flex-col gap-3">
         <div class="flex flex-wrap items-center justify-between gap-2" class:hidden={psmOpen}>
-          <Tabs.List>
+          <!-- scrolls sideways where the window is too narrow for all tabs -->
+          <Tabs.List class="max-w-full overflow-x-auto">
             {#each tabs as t (t.value)}
               <Tabs.Trigger value={t.value} class="px-3 text-[13px]">
                 {t.label}{#if t.count !== undefined}<span class="ml-1 text-xs font-normal text-muted-foreground tabular-nums"

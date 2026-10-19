@@ -180,7 +180,12 @@ class SearchForm {
       this.setDatabase(new File([fasta], EXAMPLE.fasta.split('/').pop()!))
       this.setParam('FDR:protein', EXAMPLE.proteinFdr)
     } catch (e) {
-      this.notices.push(`The example could not be loaded (${String((e as Error)?.message ?? e)}).`)
+      // a network error: offline, and the service worker has not stored the example (yet)
+      this.notices.push(
+        e instanceof TypeError
+          ? 'The example is not stored on this computer, and there is no connection. ProSE stores it for offline use once OpenMS has loaded while online.'
+          : `The example could not be loaded (${String((e as Error)?.message ?? e)}).`,
+      )
     } finally {
       this.exampleLoading = false
     }

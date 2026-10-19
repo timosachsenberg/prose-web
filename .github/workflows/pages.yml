@@ -1,5 +1,7 @@
-# Builds the site (the ProSE app at /prose-web/, see .github/assemble-site.sh for the layout) and
-# deploys it to GitHub Pages. The repository's Pages source must be "GitHub Actions":
+# Checks and builds the site (the ProSE app at /prose-web/, see .github/assemble-site.sh for the
+# layout) and deploys it to GitHub Pages from main. The repository's Pages source must be "GitHub
+# Actions" (switch it before the first push of the app: the site deployed before stays live until
+# this workflow deploys):
 #   gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow
 name: Pages
 
@@ -22,15 +24,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # the toolchain of the local builds (Node 24.19.0 with its npm 11.17.0)
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 24.19.0
           cache: npm
           cache-dependency-path: app/package-lock.json
+
+      - name: Check the npm version
+        run: test "$(npm --version)" = 11.17.0
 
       - name: Install the app's dependencies
         working-directory: app
         run: npm ci
+
+      - name: Type check
+        working-directory: app
+        run: npm run check
+
+      - name: Unit tests
+        working-directory: app
+        run: npx vitest run
 
       - name: Build the app (base /prose-web/)
         working-directory: app
@@ -47,6 +61,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write

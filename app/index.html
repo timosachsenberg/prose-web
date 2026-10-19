@@ -4,9 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ProSE</title>
+    <!-- the build's id, stamped by sw-stamp.ts: the service worker stores only a page of its own build -->
+    <meta name="prose-build" content="__BUILD_ID__" />
   </head>
   <body>
-    <div id="app"></div>
+    <!-- replaced when the app starts (main.ts); shown while the first visit waits for the service worker -->
+    <div id="app"><p style="font: 14px system-ui, sans-serif; color: #71717a; margin: 2rem">Loading ProSE…</p></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

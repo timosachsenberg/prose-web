@@ -5,11 +5,25 @@ import { registerServiceWorker } from '$lib/sw-client'
 
 // The service worker comes first (lib/sw-client.ts). On a page that is not cross-origin isolated (the
 // first visit on GitHub Pages) the page reloads under it, so nothing starts before it has decided:
-// OpenMS would load on one thread, and files added would be lost in the reload. An isolated page (a
-// later visit, the desktop app, `vite dev`) starts at once.
-const decided = registerServiceWorker()
-const start = () => mount(App, { target: document.getElementById('app')! })
+// OpenMS would load on one thread, and files added would be lost in the reload. Meanwhile index.html
+// says "Loading ProSE…". An isolated page (a later visit, the desktop app, `vite dev`) starts at once.
+let started = false
+function start() {
+  if (started) return
+  started = true
+  const target = document.getElementById('app')!
+  target.replaceChildren()
+  // ?debug=…: see lib/debug.ts
+  mount(App, { target })
+}
 
-// ?debug=…: see lib/debug.ts
-if (globalThis.crossOriginIsolated) start()
-else void decided.then((outcome) => outcome !== 'reloading' && start())
+if (globalThis.crossOriginIsolated) {
+  start()
+  void registerServiceWorker()
+} else {
+  // (registerServiceWorker never rejects; whatever goes wrong, the app starts)
+  registerServiceWorker().then(
+    (outcome) => outcome !== 'reloading' && start(),
+    () => start(),
+  )
+}

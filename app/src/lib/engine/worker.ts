@@ -43,14 +43,29 @@ let contaminants: string | null = null
 let stage: EngineStage = 'loading'
 
 async function fetchAsset(path: string): Promise<Response> {
-  const response = await fetch(new URL(path, baseUrl))
+  let response: Response
+  try {
+    response = await fetch(new URL(path, baseUrl))
+  } catch {
+    throw new Error(`${path} is not stored on this computer, and there is no connection.`)
+  }
   if (!response.ok) throw new Error(`${path} could not be loaded (${response.status} ${response.statusText}).`)
   return response
 }
 
+/**
+ * A file of the module package (`openms/`), always with the package's id: the service worker stores
+ * only files of its own module version, and a module never meets another version's wasm or models.
+ */
+function moduleFile(path: string): string {
+  return new URL(`openms/${path}?v=${__OPENMS_ID__}`, baseUrl).href
+}
+
 /** A PeptDeep model of the package (`openms/models/`). */
 async function fetchModel(file: string): Promise<Blob> {
-  return (await fetchAsset(`openms/models/${file}`)).blob()
+  const response = await fetch(moduleFile(`models/${file}`))
+  if (!response.ok) throw new Error(`openms/models/${file} could not be loaded (${response.status} ${response.statusText}).`)
+  return response.blob()
 }
 
 function loaded(): MainModule {
@@ -67,11 +82,16 @@ const handlers: Handlers = {
     stage = 'loading'
     if (!OpenMS) {
       baseUrl = url
-      // ?v=: the module's threads import it again, from the HTTP cache (the service worker does not see
-      // them): a new module must never meet an old one there
-      const moduleUrl = new URL(`openms/openms.mjs?v=${__OPENMS_ID__}`, baseUrl).href
-      const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleUrl)) as { default: OpenMSFactory }
-      OpenMS = await createOpenMS({ numThreads: threads, print: () => {}, printErr: (line: string) => console.debug(line) })
+      // ?v= on the module and on its wasm (locateFile; the module would ask for openms.wasm without it):
+      // the service worker keeps them of one version, and the module's threads, which import it again
+      // past the service worker (from a Blob), never meet another version in the HTTP cache
+      const { default: createOpenMS } = (await import(/* @vite-ignore */ moduleFile('openms.mjs'))) as { default: OpenMSFactory }
+      OpenMS = await createOpenMS({
+        numThreads: threads,
+        locateFile: (path: string) => moduleFile(path),
+        print: () => {},
+        printErr: (line: string) => console.debug(line),
+      })
       OpenMS.setLogEnabled('info', false)
     }
     return { result: engineInfo(OpenMS, scope.crossOriginIsolated === true) }
