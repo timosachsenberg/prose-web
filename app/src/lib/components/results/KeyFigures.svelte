@@ -6,12 +6,19 @@
 
   let { figures, proteinFdr, proteinFdrApplied }: { figures: KeyFigures; proteinFdr: number; proteinFdrApplied: boolean } = $props()
 
+  // proteins that cannot be told apart count once here, but each has a row in the Proteins tab
+  const groupTitle = $derived.by(() => {
+    const { proteins, proteinGroups } = figures
+    const base = `Target protein groups at the protein FDR (contaminants included). Proteins that share all their identified peptides cannot be told apart and form one group, so they count once here, while the Proteins tab lists every protein.`
+    if (proteins === proteinGroups) return `${base} Here every protein is a group of its own: ${formatCount(proteins)} proteins in ${formatCount(proteinGroups)} groups.`
+    return `${base} Here: ${formatCount(proteins)} proteins in ${formatCount(proteinGroups)} groups.`
+  })
   const share = $derived(figures.psmShareOfMs2 === null ? null : `${(figures.psmShareOfMs2 * 100).toFixed(0)} % of MS2`)
   const stats = $derived([
     {
       value: formatCount(figures.proteinGroups),
       note: proteinFdrApplied ? `protein groups · ${formatPercent(proteinFdr)} FDR` : 'protein groups · no protein FDR',
-      title: 'Target protein groups at the protein FDR (contaminants included)',
+      title: groupTitle,
       testid: 'protein-count',
     },
     { value: formatCount(figures.peptides), note: 'peptides', title: 'Target peptides (with their modifications) at the PSM FDR', testid: 'peptide-count' },

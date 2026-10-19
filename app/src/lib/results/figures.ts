@@ -31,8 +31,13 @@ export function levelTotal(m: ResultModel, level: Level, withDecoys: boolean): n
 }
 
 export type KeyFigures = {
-  /** Target protein groups at the protein FDR (contaminants included). */
+  /**
+   * Target protein groups at the protein FDR (contaminants included). Proteins that cannot be told
+   * apart (the same group) count once; a protein without a group (`group` -1) is a group of its own.
+   */
   proteinGroups: number
+  /** The target proteins behind them: the rows of the Proteins tab (before the user's filters). */
+  proteins: number
   /** Target peptides (peptidoforms) whose best PSM is within the PSM FDR. */
   peptides: number
   /** Target PSMs within the PSM FDR. */
@@ -50,8 +55,14 @@ export type KeyFigures = {
 
 export function keyFigures(m: ResultModel, summary: ProSEMultiSummary): KeyFigures {
   const proteins = levelRows(m, 'proteins', false)
-  const groups = new Set<number>()
-  for (const p of proteins) groups.add(m.tables.proteins.group[p])
+  // a protein without a group (-1) is its own group: counting the -1 as one group would merge them
+  const grouped = new Set<number>()
+  let ungrouped = 0
+  for (const p of proteins) {
+    const group = m.tables.proteins.group[p]
+    if (group < 0) ungrouped++
+    else grouped.add(group)
+  }
   const psms = levelRows(m, 'psms', false)
   const ms2 = summary.files.reduce((n, f) => n + f.ms2Spectra, 0)
 
@@ -66,7 +77,8 @@ export function keyFigures(m: ResultModel, summary: ProSEMultiSummary): KeyFigur
   const median = n === 0 ? null : n % 2 === 1 ? sorted[n >> 1] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
 
   return {
-    proteinGroups: groups.size,
+    proteinGroups: grouped.size + ungrouped,
+    proteins: proteins.length,
     peptides: levelTotal(m, 'peptides', false),
     psms: psms.length,
     ms2,

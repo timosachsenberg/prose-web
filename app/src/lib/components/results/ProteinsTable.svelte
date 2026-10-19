@@ -1,13 +1,14 @@
 <script lang="ts">
   // The proteins of the open result: accession, gene, description, coverage, counts (at the search
-  // PSM FDR), counts per sample grouped by condition, "found in".
+  // PSM FDR), counts per sample grouped by condition, "found in". A row opens the protein panel at the
+  // right of the table (`onOpen`), which takes room: the Description is hidden while it is open.
   import { formatCount, formatQValue, formatScore, parseAccession, parseDescription } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { tableColumns, sampleIndex, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
   import Marker from './Marker.svelte'
 
-  let { view, level }: { view: ResultsView; level: LevelState } = $props()
+  let { view, level, onOpen }: { view: ResultsView; level: LevelState; onOpen: (protein: number) => void } = $props()
 
   const m = $derived(view.model)
   const pr = $derived(m.tables.proteins)
@@ -48,7 +49,24 @@
     }
   }
 
-  const columns = $derived(tableColumns(level.visible, cells))
+  // with the panel open the table gives up its Description and narrows its count columns
+  const narrow: Record<string, number> = { coverage: 112, peptides: 84, psms: 72, foundIn: 78 }
+  const columns = $derived.by(() => {
+    const all = tableColumns(level.visible, cells)
+    if (view.panel === null) return all
+    return all
+      .filter((c) => c.id !== 'description')
+      .map((c) => {
+        const width = narrow[c.id] ?? (sampleIndex(c.id) >= 0 ? 46 : undefined)
+        return width !== undefined && typeof c.width === 'number' ? { ...c, width: Math.min(c.width, width) } : c
+      })
+  })
+
+  let table = $state<DataTable | null>(null)
+  /** Makes the protein's row the grid's active one and gives the grid the focus (the panel closed). */
+  export function focusRow(protein: number | null): void {
+    table?.focusRow(protein)
+  }
 </script>
 
 {#snippet accessionCell(p: number)}
@@ -67,11 +85,12 @@
 {/snippet}
 
 <DataTable
+  bind:this={table}
   label="Proteins"
   rows={level.rows}
   {columns}
   sort={level.effectiveSort}
   onSort={(key) => level.sortBy(key)}
-  onRowClick={(p) => (level.selected = p)}
+  onRowClick={onOpen}
   selected={level.selected}
   empty={level.emptyText} />

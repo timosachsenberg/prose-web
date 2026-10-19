@@ -358,6 +358,52 @@ describe('sortRows', () => {
     expect(sortRows(m, 'psms', every, 'qValue', 'desc', all)).toEqual(rows(0, 3, 2, 1))
   })
 
+  it('puts empty genes last in both directions', () => {
+    const tables = sampleTables()
+    tables.proteins.description[0] = 'Serum albumin OS=Homo sapiens OX=9606 GN=ALB PE=1 SV=2'
+    tables.proteins.description[1] = 'Alpha-1-antitrypsin' // no gene
+    tables.proteins.description[2] = 'Trypsin OS=Sus scrofa PE=1' // no gene
+    tables.proteins.description[3] = 'X protein GN=ABC'
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    const proteins = applyFilters(m, 'proteins', all)
+    expect(sortRows(m, 'proteins', proteins, 'gene', 'asc', all)).toEqual(rows(3, 0, 1, 2))
+    expect(sortRows(m, 'proteins', proteins, 'gene', 'desc', all)).toEqual(rows(0, 3, 1, 2))
+    // the proteins of a peptide: one without any (below the protein FDR) is last, too
+    const noProtein = sampleTables()
+    noProtein.peptides.proteinOffsets.set([0, 1, 2, 2, 3, 4])
+    noProtein.peptides.protein = Uint32Array.from([0, 0, 2, 3])
+    noProtein.peptides.start = Uint32Array.from([0, 4, 0, 0])
+    noProtein.peptides.end = Uint32Array.from([6, 10, 6, 6])
+    const n = buildModel(noProtein, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    const peptides = applyFilters(n, 'peptides', all)
+    expect(sortRows(n, 'peptides', peptides, 'proteins', 'asc', all)[4]).toBe(2)
+    expect(sortRows(n, 'peptides', peptides, 'proteins', 'desc', all)[4]).toBe(2)
+  })
+
+  it('sorts the spectrum numerically when every PSM has a scan number', () => {
+    const tables = sampleTables()
+    tables.psms.nativeId.splice(0, 5, 'scan=10', 'controllerType=0 controllerNumber=1 scan=2', 'scan=1000', 'index=3', 'spectrum=21')
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    const five = rows(0, 1, 2, 3, 4)
+    // 2, 3, 10, 21, 1000 (as text: 1000, 10, 2, ...)
+    expect(sortRows(m, 'psms', five, 'nativeId', 'asc', all)).toEqual(rows(1, 3, 0, 4, 2))
+    expect(sortRows(m, 'psms', five, 'nativeId', 'desc', all)).toEqual(rows(2, 4, 0, 3, 1))
+    // equal scans (two files) keep the order of the table
+    tables.psms.nativeId[3] = 'scan=10'
+    const same = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    expect(sortRows(same, 'psms', five, 'nativeId', 'asc', all)).toEqual(rows(1, 0, 3, 4, 2))
+  })
+
+  it('sorts native IDs without a scan number in natural order', () => {
+    const tables = sampleTables()
+    tables.psms.nativeId.splice(0, 5, 'merged=3 frame=12', 'merged=3 frame=5', 'merged=10 frame=1', 'scan=7', 'Merged=3 frame=100')
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    const five = rows(0, 1, 2, 3, 4)
+    // one of them has no number: natural order of the IDs, digits compared as numbers, case ignored
+    expect(sortRows(m, 'psms', five, 'nativeId', 'asc', all)).toEqual(rows(1, 0, 4, 2, 3))
+    expect(sortRows(m, 'psms', five, 'nativeId', 'desc', all)).toEqual(rows(3, 2, 4, 0, 1))
+  })
+
   it('sorts a subset without changing it, and rejects unknown keys', () => {
     const m = model()
     const subset = rows(8, 1, 2)

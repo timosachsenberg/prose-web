@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { formatCount, formatQValue, formatScore, parseAccession, parseDescription, resultName, sampleHeader, spectrumLabel } from './display'
+import {
+  formatCount,
+  formatQValue,
+  formatScore,
+  naturalKey,
+  parseAccession,
+  parseDescription,
+  resultName,
+  sampleHeader,
+  scanNumber,
+  spectrumLabel,
+} from './display'
 import type { ResultSample } from './model'
 
 describe('parseAccession', () => {
@@ -87,5 +98,24 @@ describe('spectrumLabel', () => {
     expect(spectrumLabel('frame=5 scan=12')).toBe('12')
     expect(spectrumLabel('merged=3 frame=5')).toBe('merged=3 frame=5')
     expect(spectrumLabel('scan=12a')).toBe('scan=12a')
+  })
+})
+
+describe('scanNumber', () => {
+  it('is the number of a scan=, spectrum= or index= term, else null', () => {
+    expect(scanNumber('controllerType=0 controllerNumber=1 scan=4711')).toBe(4711)
+    expect(scanNumber('spectrum=0')).toBe(0)
+    expect(scanNumber('index=17')).toBe(17)
+    expect(scanNumber('merged=3 frame=5')).toBeNull()
+    expect(scanNumber('scan=12a')).toBeNull()
+    expect(scanNumber('')).toBeNull()
+  })
+})
+
+describe('naturalKey', () => {
+  it('orders digits as numbers and ignores case, so that plain string comparison gives the natural order', () => {
+    const ids = ['frame=12', 'Frame=5', 'frame=100', 'frame=5a', 'frame=0']
+    const sorted = [...ids].sort((a, b) => (naturalKey(a) < naturalKey(b) ? -1 : naturalKey(a) > naturalKey(b) ? 1 : 0))
+    expect(sorted).toEqual(['frame=0', 'Frame=5', 'frame=5a', 'frame=12', 'frame=100'])
   })
 })

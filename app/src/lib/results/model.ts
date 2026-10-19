@@ -5,6 +5,7 @@
 
 import type { DesignResolution, Sample } from '../design/model'
 import type { ResultTables } from '../engine/openms-types'
+import { markCovered } from './protein'
 
 export type Level = 'proteins' | 'peptides' | 'psms'
 
@@ -314,27 +315,16 @@ export function buildModel(
     proFoundIn[p] = samplesFound(proPer, p * nS, nS, columnSample)
   }
 
-  // coverage: the union of the peptides' stretches, marked in a scratch strip
+  // coverage: the union of the peptides' stretches, marked in a scratch strip (the protein panel
+  // uses the same `markCovered`)
   let longest = 0
   for (let p = 0; p < nProt; p++) longest = Math.max(longest, pr.sequence[p].length)
   const strip = new Uint8Array(longest)
+  const members = { offsets: memberOffsets, peptide: memberPeptide, ref: memberRef }
   const coverage = new Float64Array(nProt)
   for (let p = 0; p < nProt; p++) {
     const length = pr.sequence[p].length
-    if (length === 0 || memberOffsets[p] === memberOffsets[p + 1]) continue
-    strip.fill(0, 0, length)
-    let covered = 0
-    for (let m = memberOffsets[p]; m < memberOffsets[p + 1]; m++) {
-      if (pepPsms[memberPeptide[m]] === 0) continue
-      const end = Math.min(pt.end[memberRef[m]], length)
-      for (let j = pt.start[memberRef[m]]; j < end; j++) {
-        if (strip[j] === 0) {
-          strip[j] = 1
-          covered++
-        }
-      }
-    }
-    coverage[p] = covered / length
+    if (length > 0) coverage[p] = markCovered(strip, length, members, p, pepPsms, pt.start, pt.end) / length
   }
 
   return {
@@ -362,7 +352,7 @@ export function buildModel(
       perSample: proPer,
       contaminant: proContaminant,
       foundIn: proFoundIn,
-      members: { offsets: memberOffsets, peptide: memberPeptide, ref: memberRef },
+      members,
     },
     columnSample,
   }

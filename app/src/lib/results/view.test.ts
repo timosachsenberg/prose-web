@@ -152,3 +152,94 @@ describe('ResultsView', () => {
     expect(view.proteins.rows.length).toBe(2)
   })
 })
+
+describe('the protein panel', () => {
+  it('opens a protein and closes it, and the selection stays', () => {
+    const view = resultsViewFor(result(1, 1))
+    expect(view.panel).toBeNull()
+    expect(view.panelTab).toBe('peptides')
+    view.openProtein(1)
+    expect(view.panel).toBe(1)
+    expect(view.proteins.selected).toBe(1)
+    view.openProtein(0) // another protein replaces it
+    expect(view.panel).toBe(0)
+    expect(view.proteins.selected).toBe(0)
+    view.closeProtein()
+    expect(view.panel).toBeNull()
+    expect(view.proteins.selected).toBe(0) // the row stays selected, the focus goes back to it
+  })
+
+  it('opens no panel for what is no protein (a peptide below the protein FDR has none)', () => {
+    const view = resultsViewFor(result(1, 1))
+    for (const row of [-1, 4, 1.5, NaN, 1e9]) view.openProtein(row)
+    expect(view.panel).toBeNull()
+    expect(view.proteins.selected).toBeNull()
+  })
+
+  it("'Open in PSM table' filters the PSMs by the protein and shows them", () => {
+    const view = resultsViewFor(result(1, 1))
+    view.filterBy({ protein: 0 })
+    expect(view.tab).toBe('psms')
+    expect(view.psms.filters.proteinFilter).toBe(0)
+    expect(Array.from(view.psms.rows)).toEqual([1, 3, 0, 2]) // ALBU's PSMs, by q-value
+    expect(view.psms.rows.length).toBe(view.model.protein.psms[0])
+  })
+
+  it("starts from the search's cutoff, without the other filters of that table", () => {
+    const view = resultsViewFor(result(1, 1))
+    view.psms.filters.text = 'zzz'
+    view.psms.filters.maxQ = 0.001
+    view.psms.filters.peptideFilter = 0
+    view.filterBy({ protein: 1 })
+    expect(view.psms.filters).toMatchObject({ text: '', maxQ: 1, proteinFilter: 1, peptideFilter: undefined })
+    expect(Array.from(view.psms.rows)).toEqual([4, 5, 6])
+    expect(view.psms.rows.length).toBe(view.model.protein.psms[1])
+  })
+
+  it('shows the contaminants or decoys that its protein is one of', () => {
+    const view = resultsViewFor(result(1, 1))
+    expect(view.psms.filters).toMatchObject({ hideContaminants: true, showDecoys: false })
+    view.filterBy({ protein: 2 }) // the trypsin contaminant
+    expect(view.psms.filters.hideContaminants).toBe(false)
+    expect(Array.from(view.psms.rows)).toEqual([7])
+    view.filterBy({ protein: 3 }) // the decoy
+    expect(view.psms.filters.showDecoys).toBe(true)
+    expect(Array.from(view.psms.rows)).toEqual([8])
+    view.filterBy({ protein: 0 })
+    expect(view.psms.filters).toMatchObject({ hideContaminants: false, showDecoys: true }) // what was shown stays shown
+  })
+
+  it('opens a PSM in the PSM table: its tab, the PSM selected, the filters that hid it lifted', () => {
+    const view = resultsViewFor(result(1, 1))
+    view.openPsm(3)
+    expect(view.tab).toBe('psms')
+    expect(view.psms.selected).toBe(3)
+    expect(view.psms.rows.includes(3)).toBe(true)
+
+    // a filter that lets it through stays
+    view.psms.filters.text = 'TFISLL'
+    view.openPsm(3)
+    expect(view.psms.filters.text).toBe('TFISLL')
+    // one that hides it goes
+    view.openPsm(0)
+    expect(view.psms.filters.text).toBe('')
+    expect(view.psms.selected).toBe(0)
+    view.filterBy({ protein: 1 })
+    view.openPsm(0)
+    expect(view.psms.filters.proteinFilter).toBeUndefined()
+    expect(view.psms.rows.includes(0)).toBe(true)
+  })
+
+  it('shows a contaminant PSM or a decoy PSM that the default filters hide', () => {
+    const view = resultsViewFor(result(1, 1))
+    expect(view.psms.rows.includes(7)).toBe(false)
+    view.openPsm(7) // trypsin
+    expect(view.psms.filters.hideContaminants).toBe(false)
+    expect(view.psms.rows.includes(7)).toBe(true)
+    expect(view.psms.rows.includes(8)).toBe(false)
+    view.openPsm(8) // the decoy
+    expect(view.psms.filters.showDecoys).toBe(true)
+    expect(view.psms.rows.includes(8)).toBe(true)
+    expect(view.psms.selected).toBe(8)
+  })
+})

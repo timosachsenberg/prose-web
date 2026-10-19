@@ -13,6 +13,8 @@ import { buildModel, peptideCounts, type Level, type ResultModel } from './model
 import { columnSpecs, csvColumns, defaultHidden, visibleSpecs } from './table-columns'
 
 export type Tab = 'overview' | 'proteins' | 'peptides' | 'psms' | 'samples' | 'qc'
+/** The tabs of the protein panel. */
+export type PanelTab = 'coverage' | 'peptides' | 'psms'
 export type SortDir = 'asc' | 'desc'
 export type SortState = { key: string; dir: SortDir }
 
@@ -100,6 +102,13 @@ export class ResultsView {
   showTechReplicates = $state(false)
   /** A CSV export is being written (the button says "Exporting…"). */
   exporting = $state(false)
+  /**
+   * The protein open in the panel at the right of the Proteins table (a row of `tables.proteins`), or
+   * null. The panel belongs to the Proteins tab; the protein stays open while another tab shows.
+   */
+  panel = $state<number | null>(null)
+  /** The panel's tab: Peptides is the one the mockup opens with. */
+  panelTab = $state<PanelTab>('peptides')
 
   readonly search: { openSearch: boolean }
 
@@ -149,6 +158,68 @@ export class ResultsView {
       )
       if (next) level.sort = { key: `sample:${next.index}`, dir: level.sort.dir }
     }
+  }
+
+  /**
+   * Opens the panel of protein `p` (a row of the Proteins table) and selects its row. What is no
+   * protein (a peptide below the protein FDR has none, an index out of range) opens nothing.
+   */
+  openProtein(p: number): void {
+    if (!Number.isInteger(p) || p < 0 || p >= this.model.tables.proteins.count) return
+    this.proteins.selected = p
+    this.panel = p
+  }
+
+  /** Closes the panel; the protein's row stays selected. */
+  closeProtein(): void {
+    this.panel = null
+  }
+
+  /**
+   * "Open in PSM table": the PSM table shows the PSMs of `protein` and only those (a "Protein: <accession>"
+   * chip says so and removes the filter): the search's cutoff, no text or peptide filter, and
+   * contaminants or decoys shown if the protein is one.
+   */
+  filterBy({ protein }: { protein: number }): void {
+    const m = this.model
+    if (!Number.isInteger(protein) || protein < 0 || protein >= m.tables.proteins.count) return
+    const f = this.psms.filters
+    this.psms.filters = {
+      ...f,
+      text: '',
+      maxQ: m.psmFdr,
+      proteinFilter: protein,
+      peptideFilter: undefined,
+      hideContaminants: m.protein.contaminant[protein] ? false : f.hideContaminants,
+      showDecoys: m.tables.proteins.decoy[protein] ? true : f.showDecoys,
+    }
+    this.tab = 'psms'
+  }
+
+  /**
+   * Opens PSM `i` (a row of `tables.psms`). Until the PSM view arrives (C9), this shows the PSMs tab
+   * with the PSM selected; a filter that hides it is lifted (text, protein and peptide filters, the
+   * cutoff, contaminants or decoys as far as it is one). The table scrolls to the selected row.
+   */
+  openPsm(i: number): void {
+    const m = this.model
+    const ps = m.tables.psms
+    if (!Number.isInteger(i) || i < 0 || i >= ps.count) return
+    const level = this.psms
+    if (!level.kept.includes(i)) {
+      const f = level.filters
+      level.filters = {
+        ...f,
+        text: '',
+        maxQ: m.psmFdr,
+        proteinFilter: undefined,
+        peptideFilter: undefined,
+        hideContaminants: m.peptide.contaminant[ps.peptide[i]] ? false : f.hideContaminants,
+        showDecoys: ps.decoy[i] ? true : f.showDecoys,
+      }
+    }
+    level.selected = i
+    this.tab = 'psms'
   }
 
   /** The level of the active tab, or null on Overview, Samples and QC. */

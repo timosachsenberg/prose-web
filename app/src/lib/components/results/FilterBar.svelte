@@ -7,7 +7,7 @@
   import * as Popover from '$lib/components/ui/popover'
   import * as Tooltip from '$lib/components/ui/tooltip'
   import { formatPercent, formatQ } from '$lib/format/fdr'
-  import { formatCount } from '$lib/results/display'
+  import { formatCount, parseAccession } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -17,13 +17,21 @@
   let { view, level, proteinFdrApplied }: { view: ResultsView; level: LevelState; proteinFdrApplied: boolean } = $props()
 
   const names = {
-    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, description, peptide…', q: 'Protein FDR' },
+    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, name, peptide…', q: 'Protein FDR' },
     peptides: { filter: 'Filter peptides', placeholder: 'Sequence, modification, accession…', q: 'Best PSM q-value' },
     psms: { filter: 'Filter PSMs', placeholder: 'Sequence, modification, accession…', q: 'PSM FDR' },
   } as const
   const name = $derived(names[level.level])
   const cutoff = $derived(level.level === 'proteins' ? view.result.proteinFdr : view.result.psmFdr)
   const qId = $derived(`q-filter-${level.level}`)
+
+  /** The protein the table is restricted to ("Open in PSM table"), as its accession shows in the tables. */
+  const protein = $derived.by(() => {
+    const p = level.filters.proteinFilter
+    if (p === undefined || level.level === 'proteins') return null
+    const accession = view.model.tables.proteins.accession[p]
+    return accession === undefined ? null : { id: parseAccession(accession).id, accession }
+  })
 
   // typing filters after a short pause, so that 150,000 PSMs are not filtered on every key
   // the bar is made anew for each level (Results keys it), so the first value is the one
@@ -64,7 +72,7 @@
 </script>
 
 <div class="flex flex-wrap items-center gap-2" data-testid="filter-bar">
-  <label class="relative flex h-8 max-w-80 min-w-56 grow basis-64 items-center">
+  <label class="relative flex h-8 max-w-80 min-w-[18.5rem] grow basis-[18.5rem] items-center">
     <span class="sr-only">{name.filter}</span>
     <SearchIcon class="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" aria-hidden="true" />
     <input
@@ -128,6 +136,11 @@
     {/if}
   {/if}
 
+  {#if protein}
+    <button type="button" class={chip} title={protein.accession} onclick={() => (level.filters.proteinFilter = undefined)}>
+      Protein: {protein.id}<XIcon class="size-3" aria-hidden="true" /><span class="sr-only">(remove the filter)</span>
+    </button>
+  {/if}
   {#if level.filters.hideContaminants}
     <button type="button" class={chip} onclick={() => (level.filters.hideContaminants = false)}>
       Contaminants hidden<XIcon class="size-3" aria-hidden="true" /><span class="sr-only">(show them)</span>

@@ -56,6 +56,12 @@
   }
 
   const columns = $derived(tableColumns(level.visible, cells))
+
+  let table = $state<DataTable | null>(null)
+  /** Makes the row the grid's active one, scrolls it into view and gives the grid the focus. */
+  export function focusRow(row: number | null): void {
+    table?.focusRow(row)
+  }
 </script>
 
 {#snippet peptideCell(i: number)}
@@ -70,6 +76,7 @@
 {/snippet}
 
 <DataTable
+  bind:this={table}
   label="PSMs"
   rows={level.rows}
   {columns}

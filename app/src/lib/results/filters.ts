@@ -3,6 +3,7 @@
 // copy of any such array. No row is ever turned into an object.
 
 import { columnDef } from './columns'
+import { naturalKey, scanNumber } from './display'
 import { peptideCounts, qLimit, type Level, type ResultModel } from './model'
 
 export type FilterState = {
@@ -168,7 +169,9 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
 /**
  * A sorted copy of `rows` by the column `key` (an id of `columns.ts`: "qValue", "psms", "accession",
  * "sample:1", ...). Numbers sort numerically with missing values (NaN) last in both directions, text
- * case-insensitively by UTF-16 code unit. Rows with equal keys stay in the order they have in `rows`.
+ * case-insensitively by UTF-16 code unit with empty text (no gene, no protein) last in both
+ * directions. The spectrum (native IDs) sorts by its scan number when every row has one, else in
+ * natural order. Rows with equal keys stay in the order they have in `rows`.
  *
  * `filters` is the level's filter state that made `rows`: the peptide counts ("psms", "foundIn",
  * "sample:<n>" of the peptides) are those at its cutoff (see `peptideCounts`), as in the table cells
@@ -188,19 +191,48 @@ export function sortRows(
   const n = rows.length
   const order = new Uint32Array(n)
   for (let i = 0; i < n; i++) order[i] = i
+  const sign = dir === 'desc' ? -1 : 1
+
+  // numbers (a native ID with a scan number is one), or text
+  let numbers: Float64Array | null = null
+  let texts: string[] | null = null
   if (def.number) {
-    const sign = dir === 'desc' ? -1 : 1
-    const keys = new Float64Array(n)
-    for (let i = 0; i < n; i++) {
-      const x = def.number(m, rows[i], counts)
-      keys[i] = x === x ? sign * x : Infinity
+    numbers = new Float64Array(n)
+    for (let i = 0; i < n; i++) numbers[i] = def.number(m, rows[i], counts)
+  } else {
+    texts = new Array(n)
+    for (let i = 0; i < n; i++) texts[i] = def.text!(m, rows[i], counts)
+    if (def.natural) {
+      const scans = new Float64Array(n)
+      let every = n > 0
+      for (let i = 0; i < n && every; i++) {
+        const scan = scanNumber(texts[i])
+        if (scan === null) every = false
+        else scans[i] = scan
+      }
+      if (every) {
+        numbers = scans
+        texts = null
+      } else {
+        texts = texts.map(naturalKey)
+      }
     }
+  }
+
+  if (numbers) {
+    const keys = new Float64Array(n)
+    for (let i = 0; i < n; i++) keys[i] = numbers[i] === numbers[i] ? sign * numbers[i] : Infinity
     order.sort((a, b) => keys[a] - keys[b] || a - b) // Infinity - Infinity is NaN, which falls through
   } else {
-    const sign = dir === 'desc' ? -1 : 1
-    const keys: string[] = new Array(n)
-    for (let i = 0; i < n; i++) keys[i] = def.text!(m, rows[i], counts).toLowerCase()
-    order.sort((a, b) => (keys[a] === keys[b] ? a - b : keys[a] < keys[b] ? -sign : sign))
+    const keys = texts!.map((t) => t.toLowerCase())
+    order.sort((a, b) => {
+      const x = keys[a]
+      const y = keys[b]
+      if (x === y) return a - b
+      if (x === '') return 1 // empty text is missing: last, whichever way it sorts
+      if (y === '') return -1
+      return x < y ? -sign : sign
+    })
   }
   const sorted = new Uint32Array(n)
   for (let i = 0; i < n; i++) sorted[i] = rows[order[i]]

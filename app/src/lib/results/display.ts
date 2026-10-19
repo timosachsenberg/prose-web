@@ -39,12 +39,28 @@ export function sampleHeader(sample: ResultSample): string {
   return condition !== null && label.startsWith(`${condition} `) ? label.slice(condition.length + 1) : label
 }
 
+const scanTerm = /(?:^|\s)(?:scan|spectrum|index)=(\d+)(?=\s|$)/
+
 /**
  * What the Spectrum column shows of a native ID: the number of its `scan=`, `spectrum=` or `index=`
  * term (Thermo "controllerType=0 controllerNumber=1 scan=4711" is 4711), else the native ID.
  */
 export function spectrumLabel(nativeId: string): string {
-  return /(?:^|\s)(?:scan|spectrum|index)=(\d+)(?=\s|$)/.exec(nativeId)?.[1] ?? nativeId
+  return scanTerm.exec(nativeId)?.[1] ?? nativeId
+}
+
+/** The number of the `scan=`, `spectrum=` or `index=` term of a native ID, or null if it has none. */
+export function scanNumber(nativeId: string): number | null {
+  const digits = scanTerm.exec(nativeId)?.[1]
+  return digits === undefined ? null : Number(digits)
+}
+
+/**
+ * A sort key that puts text in natural order by plain comparison: case-insensitive, with every run of
+ * digits padded to the same width, so that "frame=5" comes before "frame=12".
+ */
+export function naturalKey(text: string): string {
+  return text.toLowerCase().replace(/\d+/g, (digits) => digits.padStart(20, '0'))
 }
 
 const counts = new Intl.NumberFormat('en-US')

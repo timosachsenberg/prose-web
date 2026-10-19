@@ -34,6 +34,27 @@ describe('keyFigures', () => {
     expect(f.conditions).toBe(2)
   })
 
+  it('counts a protein without a group (group -1) as a group of its own', () => {
+    const tables = sampleTables()
+    tables.proteins.group.set([-1, -1, 7, -1]) // ALBU and A1AT have none, the contaminant is in group 7
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 1, proteinFdr: 1 })
+    const f = keyFigures(m, summary([20, 15]))
+    expect(f.proteins).toBe(3) // ALBU, A1AT and the contaminant (the decoy is not counted)
+    expect(f.proteinGroups).toBe(3) // not 2: the -1 of the first two do not make one group
+
+    tables.proteins.group.set([-1, -1, -1, -1])
+    expect(keyFigures(buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 1, proteinFdr: 1 }), summary([20])).proteinGroups).toBe(3)
+  })
+
+  it('counts the proteins of one group once, and says how many proteins there are', () => {
+    const tables = sampleTables()
+    tables.proteins.group.set([4, 4, 4, 3]) // ALBU, A1AT and the contaminant cannot be told apart
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 1, proteinFdr: 1 })
+    const f = keyFigures(m, summary([20]))
+    expect(f.proteins).toBe(3)
+    expect(f.proteinGroups).toBe(1)
+  })
+
   it('has no share without MS2 counts and no error without errors', () => {
     const tables = sampleTables()
     tables.psms.precursorErrorPpm.fill(NaN)

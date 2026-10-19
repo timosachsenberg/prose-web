@@ -31,6 +31,7 @@
 </script>
 
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { clampInto, keyTarget, rowsInView, scrollToShow, visibleRange } from '$lib/results/virtual'
   import { cn } from '$lib/utils'
   import ArrowDown from '@lucide/svelte/icons/arrow-down'
@@ -38,7 +39,9 @@
 
   // Keyboard model: the scroll box is the grid and the table's one tab stop; the active row is named
   // by aria-activedescendant. The active row is always one in view: when the mouse scrolls it away,
-  // it moves to the nearest row in view, so that what Enter selects is what the user sees.
+  // or the grid's height changes, it moves to the nearest row in view, so that what Enter selects is
+  // what the user sees and aria-activedescendant never names a row that is not rendered. ArrowDown
+  // from a sort button in the header goes to the grid, onto the active row.
 
   let {
     rows,
@@ -49,6 +52,7 @@
     selected,
     label,
     rowHeight = 33,
+    autoMinWidth = 220,
     empty = 'No rows match the filters.',
   }: {
     rows: Uint32Array
@@ -61,6 +65,8 @@
     /** The table's accessible name. */
     label: string
     rowHeight?: number
+    /** The least width of the 'auto' column (pixels): the table scrolls sideways below it. */
+    autoMinWidth?: number
     empty?: string
   } = $props()
 
@@ -110,7 +116,7 @@
     ),
   )
 
-  const minWidth = $derived(columns.reduce((w, c) => w + (c.width === 'auto' ? 220 : c.width), 0))
+  const minWidth = $derived(columns.reduce((w, c) => w + (c.width === 'auto' ? autoMinWidth : c.width), 0))
 
   // new rows (filtered or sorted): back to the top, the first row active
   let lastRows: Uint32Array | null = null
@@ -129,6 +135,23 @@
     if (view) active = clampInto(active, view)
   }
 
+  // the grid got shorter (or taller): the active row follows the rows in view, as it does when the
+  // mouse scrolls (the scroll position itself may not change, so there is no scroll event)
+  $effect(() => {
+    const view = inView
+    if (view) untrack(() => (active = clampInto(active, view)))
+  })
+
+  /**
+   * Makes the row `row` (a row value, not a position) the active one, scrolls it into view and gives the
+   * grid the keyboard focus. A row that is not in the table leaves the active row and only focuses.
+   */
+  export function focusRow(row: number | null) {
+    const index = row === null ? -1 : rows.indexOf(row)
+    if (index >= 0) activate(index)
+    box?.focus({ preventScroll: true })
+  }
+
   function onfocus() {
     if (inView) active = clampInto(active, inView)
   }
@@ -145,7 +168,12 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
-    // keys of the sort buttons in the header are theirs
+    // the keys of the sort buttons in the header are theirs, but ArrowDown leaves the header for the grid
+    if (event.key === 'ArrowDown' && event.target !== box && (event.target as Element).closest('thead')) {
+      event.preventDefault()
+      box?.focus({ preventScroll: true }) // onfocus puts the active row in view
+      return
+    }
     if (event.target !== box || rows.length === 0) return
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()

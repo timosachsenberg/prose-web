@@ -46,6 +46,27 @@ test('example search end to end', async ({ page }) => {
   expect(Number((await page.getByTestId('protein-count').textContent())!.replace(/[^\d]/g, ''))).toBeGreaterThan(10)
   await expect(page.getByTestId('proteins-empty')).toHaveCount(0)
 
+  // 48 proteins in 47 groups: the key figure counts groups, and says so in its tooltip; the table lists
+  // every protein (the contaminant KCRM shares its peptides with the human CKM)
+  await expect(page.getByTestId('protein-count').locator('..')).toHaveAttribute('title', /Here: 48 proteins in 47 groups\./)
+  await expect(page.getByTestId('protein-count')).toHaveText('47')
+  await expect(page.getByRole('tab', { name: /^Proteins/ })).toContainText('48')
+  await page.getByRole('button', { name: /Contaminants hidden/ }).click()
+  await page.getByLabel('Filter proteins').fill('KCRM')
+  await expect(page.getByTestId('row-count')).toHaveText('2 of 48')
+  const kcrm = page.getByTestId('results-table').locator('tr[data-index]').filter({ hasText: 'contaminant' })
+  await kcrm.click()
+  const panel = page.getByRole('region', { name: /^Protein KCRM_HUMAN/ })
+  await expect(panel.getByTestId('panel-group')).toHaveText('Indistinguishable from: P06732')
+  await expect(panel.getByTestId('panel-peptides')).toHaveText('17 peptides')
+  await panel.getByRole('button', { name: 'Close protein panel' }).click()
+  await expect(panel).toHaveCount(0)
+  await page.getByLabel('Filter proteins').fill('P06732')
+  await expect(page.getByTestId('row-count')).toHaveText('1 of 48')
+  await page.getByTestId('results-table').locator('tr[data-index]').first().click()
+  await expect(page.getByRole('region', { name: /^Protein P06732/ }).getByTestId('panel-group')).toContainText('KCRM_HUMAN')
+  await page.getByRole('button', { name: 'Close protein panel' }).click()
+
   // the engine still holds the search: the merged idXML can be exported
   await page.getByRole('button', { name: 'Export', exact: true }).click()
   const download = page.waitForEvent('download')
@@ -80,6 +101,12 @@ test('no protein at 1 %: the results say why, and search again at 5 %', async ({
   await page.getByRole('tab', { name: /^Proteins/ }).click()
   await empty.getByRole('button', { name: 'Show the peptides' }).click()
   await expect(page.getByRole('tab', { name: /^Peptides/ })).toHaveAttribute('aria-selected', 'true')
+  // every peptide is below the protein FDR: its protein cell says so, and no row opens a protein panel
+  const peptides = page.getByRole('grid', { name: 'Peptides' })
+  await expect(peptides.getByText('below protein FDR').first()).toBeVisible()
+  await peptides.locator('[data-index="0"]').click()
+  await expect(peptides.locator('[data-index="0"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('region', { name: /^Protein / })).toHaveCount(0)
   await page.getByRole('tab', { name: /^Proteins/ }).click()
 
   // back to New search with the same files and 5 %

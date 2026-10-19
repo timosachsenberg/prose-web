@@ -23,6 +23,11 @@ export type ColumnDef = {
   csv?: Get<string>
   /** The CSV cells are text (and need protection against spreadsheet formulas), not numbers. */
   csvText: boolean
+  /**
+   * A text column of native IDs: it sorts by the scan number when every row has one, else in natural
+   * order (digits as numbers, "frame=5" before "frame=12").
+   */
+  natural?: boolean
 }
 
 const num = (header: string, number: Get<number>, csv?: Get<string>): ColumnDef => ({ header, number, csv, csvText: false })
@@ -68,7 +73,7 @@ const psms: Record<string, ColumnDef> = {
   // sorts by the file's position in the search, prints its name (without directories)
   file: label('File', (m, i) => m.tables.psms.file[i], (m, i) => baseName(m.tables.files[m.tables.psms.file[i]])),
   sample: label('Sample', (m, i) => m.psmSample[i], (m, i) => m.samples[m.psmSample[i]].label),
-  nativeId: str('Spectrum', (m, i) => m.tables.psms.nativeId[i]),
+  nativeId: { ...str('Spectrum', (m, i) => m.tables.psms.nativeId[i]), natural: true },
   rt: num('RT (s)', (m, i) => m.tables.psms.rt[i]),
   mz: num('m/z', (m, i) => m.tables.psms.mz[i]),
   charge: num('Charge', (m, i) => m.tables.psms.charge[i]),

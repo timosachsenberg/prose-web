@@ -82,7 +82,7 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
     col('proteins', 'Proteins', 150, 'left'),
     col('sample', 'Sample', 96, 'left'),
-    col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: 'Scan number, else native ID' }),
+    col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: 'Sorts by scan number when every spectrum has one, else by native ID in natural order (scan 2 before scan 10)' }),
     col('charge', 'z', 44, 'right', { title: 'Charge' }),
     col('mz', 'm/z', 94, 'right'),
     col('rt', 'RT (min)', 84, 'right', { title: 'Retention time (the CSV writes seconds)' }),
