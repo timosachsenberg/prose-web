@@ -5,7 +5,7 @@
   // found; and every feature the search has, under "All features".
   import { formatCount, formatQValue, formatScore } from '$lib/results/display'
   import type { ResultModel } from '$lib/results/model'
-  import { featureValue, modificationList } from '$lib/psm/psm'
+  import { featureValue, modificationList, signedText } from '$lib/psm/psm'
   import { massShift } from '$lib/format/peptide'
 
   let {
@@ -27,7 +27,6 @@
   const names = $derived(ps.featureNames)
   const feature = (name: string) => featureValue(names, ps.features, row, name)
   const number = (v: number, digits = 3) => (Number.isFinite(v) ? String(Number(v.toPrecision(digits + 1))) : '–')
-  const signed = (v: number, digits: number) => (Number.isFinite(v) ? `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}` : '–')
 
   const modifications = $derived(modificationList(pt, k, fixedMods))
 
@@ -55,7 +54,7 @@
   const scoreName = $derived(model.rescored ? 'Percolator score' : 'ln(hyperscore)')
   const shift = $derived(massShift(ps.deltaMass[row]))
 
-  type Item = { name: string; value: string; title?: string }
+  type Item = { name: string; value: string; title?: string; note?: string }
   const items = $derived.by(() => {
     const list: Item[] = [{ name: scoreName, value: formatScore(ps.score[row], ps.qValue[row]) }]
     list.push({ name: 'q-value', value: formatQValue(ps.qValue[row]) })
@@ -69,12 +68,27 @@
         title: 'Of the ions shown (the toggles above); the share of the spectrum’s intensity that their peaks carry',
       })
     }
-    for (const name of ['ms2_cosine', 'ms2_spectral_angle', 'ms2_pearson', 'rt_abs_error']) {
+    for (const name of ['ms2_cosine', 'ms2_spectral_angle', 'ms2_pearson']) {
       const v = feature(name)
-      if (Number.isFinite(v)) list.push({ name, value: number(v, 3), title: 'PeptDeep feature of the search' })
+      if (Number.isFinite(v)) list.push({ name, value: number(v, 3), title: 'PeptDeep feature of the search (over all ions)' })
     }
-    list.push({ name: 'Precursor error', value: `${signed(ps.precursorErrorPpm[row], 2)} ppm` })
-    if (shift !== null) list.push({ name: 'Mass shift', value: `${shift} Da`, title: 'Unassigned mass shift of the open search, not localized' })
+    const rtError = feature('rt_abs_error')
+    if (Number.isFinite(rtError)) {
+      list.push({ name: 'rt_abs_error', value: `${number(rtError, 3)} s`, title: 'PeptDeep feature of the search: |RT − predicted RT| after calibration' })
+    }
+    if (shift === null) {
+      list.push({ name: 'Precursor error', value: `${signedText(ps.precursorErrorPpm[row], 2)} ppm` })
+    } else {
+      list.push({
+        name: 'Precursor error',
+        value: '—',
+        note: 'not shown: the open search puts the whole mass difference into the shift',
+        title:
+          `The open search puts the whole mass difference into the shift (${shift} Da), so no error is left to show. ` +
+          `The PSM table's ${signedText(ps.precursorErrorPpm[row], 1)} ppm is relative to the unmodified peptide.`,
+      })
+      list.push({ name: 'Mass shift', value: `${shift} Da`, title: 'Unassigned mass shift of the open search, not localized' })
+    }
     list.push({ name: 'Isotope error', value: String(ps.isotopeError[row]) })
     const missed = feature('enzInt')
     if (Number.isFinite(missed)) list.push({ name: 'Missed cleavages', value: String(missed) })
@@ -88,7 +102,7 @@
   <dl class="kv">
     {#each items as item (item.name)}
       <dt title={item.title}>{item.name}</dt>
-      <dd>{item.value}</dd>
+      <dd title={item.title}>{item.value}{#if item.note}<span class="sr-only"> ({item.note})</span>{/if}</dd>
     {/each}
   </dl>
   {#if alsoIn.length > 0 || otherForms.psms > 0}

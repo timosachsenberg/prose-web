@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 
 // A small mzML of synthetic MS2 spectra of tryptic peptides of the example database, for the PSM
 // view's tests: the example's spectra carry only b and y ions, so an `a` toggle could never show
-// anything on them. These carry a, b and y ions (1+), and some carry noise peaks.
+// anything on them. These carry a, b and y ions (1+), each off by up to ±5 ppm (deterministic), and
+// some carry noise, the precursor, neutral losses, 2+ fragments or one peak taller than all ions.
 
 const residue: Record<string, number> = {
   G: 57.021464, A: 71.037114, S: 87.032028, P: 97.052764, V: 99.068414, T: 101.047679,
@@ -13,6 +14,7 @@ const residue: Record<string, number> = {
 const PROTON = 1.007276
 const WATER = 18.010565
 const CO = 27.994915
+const CH4OS = 63.998285 // the loss of oxidised methionine
 export const OXIDATION = 15.994915
 
 export type SyntheticSpectrum = {
@@ -22,6 +24,14 @@ export type SyntheticSpectrum = {
   charge: number
   /** Noise peaks to add (deterministic). */
   noise?: number
+  /** Add the precursor peak ([M+zH]z+). */
+  precursor?: boolean
+  /** Add neutral losses: y − H2O, and − CH4OS for the fragments with an oxidised M. */
+  losses?: boolean
+  /** Add the 2+ y ions. */
+  twoPlus?: boolean
+  /** Add one unmatched peak this many times as tall as the strongest ion. */
+  tower?: number
 }
 
 /** A pseudo-random number generator with a seed (the files are the same in every run). */
@@ -47,25 +57,38 @@ export function precursorMz(spec: SyntheticSpectrum): number {
   return (mass + spec.charge * PROTON) / spec.charge
 }
 
-/** The peaks of a spectrum: b2.., y1.., a2.. (1+), and the noise. Sorted by m/z. */
+/** The peaks of a spectrum: b2.., y1.., a2.. (1+), what else it asks for, and the noise. Sorted by m/z. */
 export function peaks(spec: SyntheticSpectrum, seed: number): { mz: number[]; intensity: number[] } {
   const masses = residueMasses(spec)
   const n = masses.length
   const rnd = random(seed)
+  // the fragments are measured up to 5 ppm off
+  const off = (mz: number) => mz * (1 + (rnd() * 2 - 1) * 5e-6)
+  const oxidisedAt = Object.entries(spec.mods ?? {}).find(([, d]) => Math.abs(d - OXIDATION) < 1e-3)?.[0]
+  const ox = oxidisedAt === undefined ? -1 : Number(oxidisedAt)
   const out: [number, number][] = []
   let b = PROTON
   for (let i = 0; i < n - 1; i++) {
     b += masses[i]
     if (i >= 1) {
-      out.push([b, 2000 + 5000 * rnd()])
-      out.push([b - CO, 800 + 800 * rnd()]) // a ion
+      out.push([off(b), 2000 + 5000 * rnd()])
+      out.push([off(b - CO), 800 + 800 * rnd()]) // a ion
+      if (spec.losses && ox >= 0 && i >= ox) out.push([off(b - CH4OS), 600 + 400 * rnd()])
     }
   }
   let y = WATER + PROTON
+  let strongest = 0
   for (let i = n - 1; i > 0; i--) {
     y += masses[i]
-    out.push([y, 4000 + 8000 * rnd()])
+    const height = 4000 + 8000 * rnd()
+    strongest = Math.max(strongest, height)
+    out.push([off(y), height])
+    if (spec.losses) out.push([off(y - WATER), 500 + 500 * rnd()])
+    if (spec.losses && ox >= 0 && i <= ox) out.push([off(y - CH4OS), 600 + 400 * rnd()])
+    if (spec.twoPlus && n - i >= 3) out.push([off((y + PROTON) / 2), 1500 + 2000 * rnd()])
   }
+  if (spec.precursor) out.push([off(precursorMz(spec)), 3000])
+  if (spec.tower) out.push([300.1234, strongest * spec.tower])
   const top = precursorMz(spec) * spec.charge
   for (let k = 0; k < (spec.noise ?? 0); k++) out.push([100 + rnd() * (top - 100), 30 + 300 * rnd()])
   out.sort((p, q) => p[0] - q[0])
@@ -138,22 +161,27 @@ export function examplePeptides(): string[] {
 }
 
 /**
- * The spectra of the PSM view's tests: 40 peptides of the example database at 2+, then the first
- * peptide with an M once more with that M oxidised, then a peptide with 4,000 noise peaks, then a
- * peptide that starts with M, oxidised (an open search finds it by its y ions, with a mass shift).
+ * The spectra of the PSM view's tests: 40 peptides of the example database at 2+; then the first
+ * peptide with an M once more with that M oxidised, its precursor and neutral losses; a peptide with
+ * 4,000 noise peaks; a peptide that starts with M, oxidised (an open search finds it by its y ions,
+ * with a mass shift); and a long peptide at 3+ with its precursor, 2+ fragments and a peak three
+ * times as tall as its strongest ion.
  */
 export function psmTestSpectra(): {
   spectra: SyntheticSpectrum[]
   oxidised: SyntheticSpectrum
   noisy: SyntheticSpectrum
   shifted: SyntheticSpectrum
+  triple: SyntheticSpectrum
 } {
   const peptides = examplePeptides()
   const plain = peptides.slice(0, 40).map((sequence) => ({ sequence, charge: 2 }))
   const withM = peptides.find((p) => p.includes('M') && !p.startsWith('M'))!
-  const oxidised: SyntheticSpectrum = { sequence: withM, mods: { [withM.indexOf('M')]: OXIDATION }, charge: 2 }
+  const oxidised: SyntheticSpectrum = { sequence: withM, mods: { [withM.indexOf('M')]: OXIDATION }, charge: 2, precursor: true, losses: true }
   const noisy: SyntheticSpectrum = { sequence: peptides[45], charge: 2, noise: 4000 }
   const startsWithM = peptides.find((p) => p.startsWith('M') && p.length >= 10)!
   const shifted: SyntheticSpectrum = { sequence: startsWithM, mods: { 0: OXIDATION }, charge: 2, noise: 60 }
-  return { spectra: [...plain, oxidised, noisy, shifted], oxidised, noisy, shifted }
+  const long = peptides.find((p, i) => i >= 46 && p.length >= 14 && !p.includes('M'))!
+  const triple: SyntheticSpectrum = { sequence: long, charge: 3, precursor: true, twoPlus: true, tower: 3 }
+  return { spectra: [...plain, oxidised, noisy, shifted, triple], oxidised, noisy, shifted, triple }
 }

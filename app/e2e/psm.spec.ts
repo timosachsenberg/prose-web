@@ -11,6 +11,25 @@ import { psmTestSpectra, scanOf, syntheticMzML } from './synthetic-mzml.js'
 
 const spectrumOf = (psm: Locator) => psm.getByTestId('spectrum')
 const labels = (psm: Locator, type: string) => spectrumOf(psm).locator(`[data-testid="peak-label"][data-ions~="${type}"]`)
+const labelsWith = (psm: Locator, text: string | RegExp) => spectrumOf(psm).locator('[data-testid="peak-label"]', { hasText: text })
+
+/** The losses and precursor menu of the view: sets its items as asked, then closes it. */
+async function setMore(page: Page, psm: Locator, items: Record<string, boolean>) {
+  await psm.getByRole('button', { name: /^Losses and precursor peaks: / }).click()
+  for (const [name, on] of Object.entries(items)) {
+    const item = page.getByRole('menuitemcheckbox', { name })
+    if ((await item.getAttribute('aria-checked')) !== String(on)) await item.click()
+    await expect(item).toHaveAttribute('aria-checked', String(on))
+  }
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('menu')).toHaveCount(0)
+}
+
+/** A signed number as the view writes it (rounded first, a real minus, no negative zero). */
+function signedText(v: number, digits: number): string {
+  const text = Math.abs(v).toFixed(digits)
+  return Number(text) === 0 ? text : `${v < 0 ? '−' : '+'}${text}`
+}
 
 /** The example (two copies of one file) searched with Percolator and PeptDeep. */
 async function searchExample(page: Page) {
@@ -24,7 +43,7 @@ async function searchExample(page: Page) {
 }
 
 /** The synthetic file searched against the example database, without Percolator (about 40 PSMs). */
-async function searchSynthetic(page: Page, preset?: string) {
+async function searchSynthetic(page: Page, preset?: string, fragmentDa?: number) {
   await page.goto('./')
   await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
   await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles({
@@ -36,6 +55,12 @@ async function searchSynthetic(page: Page, preset?: string) {
   if (preset) {
     await page.getByLabel('Preset').click()
     await page.getByRole('option', { name: preset }).click()
+  }
+  if (fragmentDa !== undefined) {
+    await page.locator('#fragment-tolerance').fill(String(fragmentDa))
+    await page.locator('#fragment-tolerance').press('Tab')
+    await page.getByRole('button', { name: /^Fragment tolerance unit: ppm/ }).click()
+    await expect(page.getByRole('button', { name: /^Fragment tolerance unit: Da/ })).toBeVisible()
   }
   await page.getByRole('switch', { name: 'Percolator' }).click()
   await page.getByRole('button', { name: /^Start search/ }).click()
@@ -114,7 +139,10 @@ test('PSM view shows the annotated spectrum, ion table and mass errors', async (
   // the bottom half: PeptDeep's prediction at the NCE the search calibrated; the similarity from the features
   await expect(spectrum.getByTestId('bottom-label')).toContainText(/^PeptDeep · NCE \d+ \(calibrated\)/, { timeout: 60_000 })
   await expect(spectrum.getByTestId('bottom-peaks').first()).toBeAttached()
-  await expect(spectrum.getByTestId('similarity')).toHaveText(/^cosine \d\.\d{3} · spectral angle \d\.\d{3}$/)
+  await expect(spectrum.getByTestId('similarity')).toHaveText(/^cosine \d\.\d{3} · spectral angle \d\.\d{3} \(search\)$/)
+  // each half says what its 100 % is
+  await expect(spectrum.getByTestId('top-label')).toHaveText('Observed · 100 % = strongest matched b/y')
+  await expect(spectrum.getByTestId('bottom-label')).toContainText('100 % = strongest predicted b/y')
   await expect(psm.getByTestId('psm-features')).toContainText('Percolator score')
   await expect(psm.getByTestId('psm-features')).toContainText('ms2_cosine')
 
@@ -128,6 +156,7 @@ test('PSM view shows the annotated spectrum, ion table and mass errors', async (
   // the theoretical spectrum instead of the prediction
   await psm.getByRole('radio', { name: 'Theoretical' }).check()
   await expect(spectrum.getByTestId('bottom-label')).toHaveText('Theoretical')
+  await expect(spectrum.getByTestId('top-label')).toHaveText('Observed · 100 % = base peak')
   await expect(spectrum.getByTestId('bottom-peaks').first()).toBeAttached()
 
   // Esc goes back to the table, at the PSM
@@ -140,9 +169,10 @@ test('PSM view shows the annotated spectrum, ion table and mass errors', async (
 
 test.describe('a synthetic file with a ions', () => {
   test.describe.configure({ mode: 'serial' })
-  const { oxidised, noisy } = psmTestSpectra()
+  const { oxidised, noisy, triple } = psmTestSpectra()
   const oxidisedScan = scanOf(40)
   const noisyScan = scanOf(41)
+  const tripleScan = scanOf(43)
 
   let page: Page
   test.beforeAll(async ({ browser }, info) => {
@@ -170,7 +200,9 @@ test.describe('a synthetic file with a ions', () => {
     const psm = await openScan(page, oxidised.sequence, oxidisedScan)
     // the oxidised methionine: marked in the ladder, its loss offered and on
     await expect(psm.getByTestId('ladder-mod')).toHaveText(['ox'])
-    await expect(psm.getByRole('checkbox', { name: 'CH₄SO loss (oxidised M)' })).toBeChecked()
+    await expect(psm.getByRole('button', { name: /^Losses and precursor peaks: / })).toHaveAccessibleName(
+      'Losses and precursor peaks: CH₄SO',
+    )
 
     await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
     await expect(labels(psm, 'a')).toHaveCount(0)
@@ -196,10 +228,91 @@ test.describe('a synthetic file with a ions', () => {
     await psm.getByRole('checkbox', { name: '2+ fragments' }).check()
     await expect(table.getByRole('columnheader', { name: 'y²⁺' })).toBeVisible()
 
-    // the choices hold for the next PSM, and a off again takes the labels away
+    // a off again takes the labels away
     await psm.getByRole('checkbox', { name: 'a ions' }).uncheck()
     await expect(labels(psm, 'a')).toHaveCount(0)
     await psm.getByRole('checkbox', { name: '2+ fragments' }).uncheck()
+
+    // the losses: that of oxidised methionine is on, water is not
+    await expect(labelsWith(psm, 'CH₄SO').first()).toBeVisible()
+    await expect(labelsWith(psm, '-H₂O')).toHaveCount(0)
+    await setMore(page, psm, { 'CH₄SO loss (oxidised M)': false, 'H₂O loss': true })
+    await expect(labelsWith(psm, 'CH₄SO')).toHaveCount(0)
+    await expect(labelsWith(psm, '-H₂O').first()).toBeVisible()
+    await expect(psm.getByRole('button', { name: /^Losses and precursor peaks: / })).toHaveAccessibleName('Losses and precursor peaks: H₂O')
+
+    // the precursor: [M+2H]++ of this 2+ PSM
+    await expect(labels(psm, 'precursor')).toHaveCount(0)
+    await setMore(page, psm, { 'H₂O loss': false, 'Precursor peaks': true })
+    await expect(labels(psm, 'precursor')).toHaveText(['[M+2H]++'])
+    await setMore(page, psm, { 'Precursor peaks': false })
+    await page.keyboard.press('Escape')
+  })
+
+  test('the mass errors spread within the band; the mean and the SD are those of the dots', async () => {
+    // the synthetic fragments are up to ±5 ppm off
+    const psm = await openScan(page, oxidised.sequence, oxidisedScan)
+    await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
+    const errors = psm.getByTestId('mass-error')
+    const dots = await errors.getByTestId('error-dot').evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect()
+        return { e: Number(el.getAttribute('data-error-ppm')), y: r.top + r.height / 2 }
+      }),
+    )
+    expect(dots.length).toBeGreaterThan(8)
+    const e = dots.map((d) => d.e)
+    expect(Math.max(...e.map(Math.abs))).toBeLessThan(5.5)
+    const mean = e.reduce((a, b) => a + b, 0) / e.length
+    const sd = Math.sqrt(e.reduce((a, b) => a + (b - mean) ** 2, 0) / (e.length - 1))
+    expect(sd).toBeGreaterThan(1.5) // not all on the zero line
+    const ys = dots.map((d) => d.y)
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(8)
+    const band = (await errors.getByTestId('tolerance-band').boundingBox())!
+    for (const y of ys) expect(y > band.y && y < band.y + band.height).toBe(true)
+    await expect(errors.getByTestId('error-stats')).toHaveText(`mean ${signedText(mean, 1)} ppm · SD ${sd.toFixed(1)} ppm · dot size = intensity`)
+    await page.keyboard.press('Escape')
+  })
+
+  test("the lower half's ions stand where the observed ones are", async () => {
+    const psm = await openScan(page, oxidised.sequence, oxidisedScan)
+    await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
+    await psm.getByRole('radio', { name: 'Theoretical' }).check()
+    const spectrum = spectrumOf(psm)
+    await expect(spectrum.getByTestId('bottom-label')).toHaveText('Theoretical')
+    // the single b and y ions labelled above, and the theoretical ions below
+    const above = await spectrum
+      .locator('[data-testid="peak-label"]')
+      .evaluateAll((els) => els.filter((el) => /^[by]\d+$/.test(el.textContent!.trim())).map((el) => Number(el.getAttribute('x'))))
+    const below = await spectrum
+      .getByTestId('bottom-peaks')
+      .evaluateAll((els) => els.flatMap((el) => [...el.getAttribute('d')!.matchAll(/M([\d.]+) /g)].map((m) => Number(m[1]))))
+    expect(above.length).toBeGreaterThan(5)
+    for (const x of above) expect(Math.min(...below.map((b) => Math.abs(b - x)))).toBeLessThan(0.6)
+    await psm.getByRole('radio', { name: 'PeptDeep prediction' }).check()
+    await page.keyboard.press('Escape')
+  })
+
+  test('a 3+ PSM: its precursor at 3+, its 2+ fragments, and a peak taller than the matched ones clipped', async () => {
+    const psm = await openScan(page, triple.sequence, tripleScan)
+    await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
+    const twoPlus = labelsWith(psm, /y\d+\+\+/)
+    await psm.getByRole('checkbox', { name: '2+ fragments' }).check()
+    await expect(twoPlus.first()).toBeVisible()
+    await psm.getByRole('checkbox', { name: '2+ fragments' }).uncheck()
+    await expect(twoPlus).toHaveCount(0)
+    await setMore(page, psm, { 'Precursor peaks': true })
+    await expect(labels(psm, 'precursor')).toHaveText(['[M+3H]+++'])
+    await setMore(page, psm, { 'Precursor peaks': false })
+    // against PeptDeep the observed half is scaled to the strongest matched b/y: the taller peak is clipped
+    const spectrum = spectrumOf(psm)
+    await expect(spectrum.getByTestId('top-label')).toHaveText('Observed · 100 % = strongest matched b/y')
+    await expect(spectrum.getByTestId('clipped-peaks')).toHaveCount(1)
+    // against the theoretical spectrum, to the base peak: nothing is clipped
+    await psm.getByRole('radio', { name: 'Theoretical' }).check()
+    await expect(spectrum.getByTestId('top-label')).toHaveText('Observed · 100 % = base peak')
+    await expect(spectrum.getByTestId('clipped-peaks')).toHaveCount(0)
+    await psm.getByRole('radio', { name: 'PeptDeep prediction' }).check()
     await page.keyboard.press('Escape')
   })
 
@@ -225,8 +338,9 @@ test.describe('a synthetic file with a ions', () => {
     expect(svg.startsWith('<?xml')).toBe(true)
     expect(svg).toContain('<svg')
     expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"')
-    expect(svg).not.toMatch(/class=|var\(|url\(|<style|href=|currentColor/)
+    expect(svg).not.toMatch(/class=|var\(|url\(|<style|href=|currentColor|Predicting|annotating|ion table/)
     expect(svg).toMatch(/<title[^>]*>[^<]*DCPVTAMQK/)
+    expect(svg).toMatch(/<desc[^>]*>[^<]*Above, 100 % is the strongest matched b\/y/)
     await page.keyboard.press('Escape')
   })
 })
@@ -245,6 +359,24 @@ test('an open search: the PSM shows its mass shift, and the annotation is of the
   expect(await labels(psm, 'y').count()).toBeGreaterThan(8)
   await expect(labels(psm, 'b')).toHaveCount(0)
   await expect(psm.getByTestId('ladder-mod')).toHaveCount(0)
+})
+
+test('a fragment tolerance in Da: the band narrows with m/z, and every match is inside it', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { oxidised } = psmTestSpectra()
+  await searchSynthetic(page, undefined, 0.02)
+  const psm = await openScan(page, oxidised.sequence, scanOf(40))
+  await expect(labels(psm, 'y').first()).toBeVisible({ timeout: 60_000 })
+  await expect(labels(psm, 'b').first()).toBeVisible()
+  const errors = psm.getByTestId('mass-error')
+  await expect(errors).toContainText('tolerance ±0.02 Da')
+  // 0.02 Da is 100 ppm at m/z 200 and 20 ppm at m/z 1000: the band is no rectangle
+  expect(await errors.getByTestId('tolerance-band').getAttribute('d')).toContain('L')
+  const dots = await errors.getByTestId('error-dot').evaluateAll((els) =>
+    els.map((el) => ({ e: Number(el.getAttribute('data-error-ppm')), mz: Number(el.getAttribute('data-mz')) })),
+  )
+  expect(dots.length).toBeGreaterThan(8)
+  for (const d of dots) expect(Math.abs(d.e)).toBeLessThanOrEqual((0.02 / d.mz) * 1e6)
 })
 
 test('a PSM without a stored spectrum shows its ladder and features; an open search shows its shift', async ({ page }) => {

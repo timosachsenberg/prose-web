@@ -9,19 +9,26 @@
 </script>
 
 <script lang="ts">
-  // The annotated spectrum, mirrored (mockup 3): the observed peaks above the axis, scaled to the
-  // base peak, matched ones in the colour of their series with their ions as direct labels (b blue, y
-  // orange, other series dark grey; unmatched peaks light grey); below the axis PeptDeep's prediction
-  // or the theoretical spectrum. Drawn by hand: each series is one path, so thousands of peaks stay a
-  // handful of nodes; labels are placed most intense first and left out where they would collide.
-  // Hovering tells a peak's m/z, intensity and ions; the ion table is the chart's table view.
-  import { ionLabel, COLORS, type PeakGroup } from '$lib/psm/psm'
-  import { mzDomain, nearest, niceTicks, placeLabels, px, scale, stickPath, textWidth } from '$lib/psm/plot'
+  // The annotated spectrum, mirrored (mockup 3): the observed peaks above the axis, matched ones in the
+  // colour of their series with their ions as direct labels (b blue, y orange, other series dark grey;
+  // unmatched peaks light grey); below the axis PeptDeep's prediction or the theoretical spectrum.
+  //
+  // Both halves say what their 100 % is: against PeptDeep, the observed half is scaled to its strongest
+  // matched b or y peak (PeptDeep scales to its strongest b or y ion), and taller peaks are clipped at
+  // 100 % with a small marker; against the theoretical spectrum, to the base peak.
+  //
+  // Drawn by hand: each series is one path, so thousands of peaks stay a handful of nodes; labels are
+  // placed most intense first and left out where they would collide. Hovering tells a peak's m/z,
+  // intensity and ions; the ion table is the chart's table view. What only the page shows (a prediction
+  // on its way, "annotating…") is marked `data-no-export`.
+  import { ionLabel, signedText, COLORS, type PeakGroup } from '$lib/psm/psm'
+  import { clipMarks, mzDomain, nearest, niceTicks, placeLabels, px, scale, stickGroups, stickPath, textWidth } from '$lib/psm/plot'
 
   let {
     mz,
     intensity,
     groups,
+    reference,
     bottom,
     similarity = null,
     title,
@@ -33,8 +40,10 @@
     intensity: Float32Array
     /** The matched peaks with their ions (`groupByPeak`). */
     groups: PeakGroup[]
+    /** The observed half's 100 %: an intensity, and what it is ("strongest matched b/y", "base peak"). */
+    reference: { intensity: number; text: string }
     bottom: Bottom
-    /** "cosine 0.931 · spectral angle 0.762", from the PSM's features. */
+    /** "cosine 0.931 · spectral angle 0.762 (search)", from the PSM's features. */
     similarity?: string | null
     title: string
     description: string
@@ -45,10 +54,11 @@
   } = $props()
 
   const uid = $props.id()
-  const H = 300
-  const M = { left: 46, right: 14, top: 22, bottom: 24 }
-  const plotTop = M.top
-  const plotBottom = H - M.bottom
+  const H = 320
+  const M = { left: 46, right: 14 }
+  /** The strip above the plot (what the upper half is, the legend) and the one below the axis labels. */
+  const plotTop = 24
+  const plotBottom = H - 42
   const mid = (plotTop + plotBottom) / 2
   const font = "'Inter Variable', ui-sans-serif, system-ui, sans-serif"
   const ink = '#3f3f46'
@@ -65,64 +75,45 @@
   const bottomIons = $derived(bottom.kind === 'ions' ? bottom.ions : [])
   const domain = $derived(mzDomain([mz, bottomIons.map((b) => b.mz)]))
   const x = $derived(scale(domain, [M.left, Math.max(M.left + 10, width - M.right)]))
-  const maxI = $derived.by(() => {
-    let max = 0
-    for (let i = 0; i < intensity.length; i++) if (intensity[i] > max) max = intensity[i]
-    return max > 0 ? max : 1
-  })
-  /** Upper half: relative intensity 0–1 to y (room for the base peak's label above it). */
-  const upper = (r: number) => mid - r * (mid - plotTop - 16)
+  const ref = $derived(reference.intensity > 0 ? reference.intensity : 1)
+  /** Upper half: the ratio to the reference (0–1) to y, with room for the labels of the tallest peaks. */
+  const upper = (r: number) => mid - r * (mid - plotTop - 18)
   /** Lower half: 0–1 to y. */
-  const lower = (r: number) => mid + r * (plotBottom - mid - 4)
+  const lower = (r: number) => mid + r * (plotBottom - mid - 6)
 
   const groupOf = $derived(new Map(groups.map((g) => [g.peak, g])))
-
-  /** The sticks: one path for the unmatched peaks, one per colour for the matched ones. */
-  const sticks = $derived.by(() => {
-    const xs: number[] = []
-    const tops: number[] = []
-    for (let i = 0; i < mz.length; i++) {
-      if (groupOf.has(i)) continue
-      xs.push(x(mz[i]))
-      tops.push(upper(intensity[i] / maxI))
-    }
-    const byColor = new Map<string, { xs: number[]; tops: number[] }>()
-    for (const g of groups) {
-      const color = colorOf(g.type)
-      const s = byColor.get(color) ?? { xs: [], tops: [] }
-      s.xs.push(x(g.mz))
-      s.tops.push(upper(g.intensity / maxI))
-      byColor.set(color, s)
-    }
-    return {
-      unmatched: stickPath(xs, tops, mid),
-      matched: [...byColor].map(([color, s]) => ({ color, d: stickPath(s.xs, s.tops, mid) })),
-    }
-  })
 
   function colorOf(type: string): string {
     return type === 'b' ? COLORS.b : type === 'y' ? COLORS.y : COLORS.other
   }
 
-  /** The lower half's sticks: one path per colour, faint ones (theoretical ions without a match) apart. */
-  const bottomSticks = $derived.by(() => {
-    const paths = new Map<string, { color: string; faint: boolean; xs: number[]; tops: number[] }>()
-    for (const b of bottomIons) {
-      const color = colorOf(b.type)
-      const key = `${color}/${b.faint}`
-      const p = paths.get(key) ?? { color, faint: b.faint, xs: [], tops: [] }
-      p.xs.push(x(b.mz))
-      p.tops.push(lower(b.height))
-      paths.set(key, p)
+  /** The observed sticks: unmatched light grey, matched by colour; above the reference clipped at 100 %. */
+  const sticks = $derived.by(() => {
+    const items: { mz: number; ratio: number; color: string }[] = []
+    for (let i = 0; i < mz.length; i++) {
+      const g = groupOf.get(i)
+      items.push({ mz: mz[i], ratio: intensity[i] / ref, color: g ? colorOf(g.type) : COLORS.unmatched })
     }
-    return [...paths.values()].map((p) => ({ color: p.color, faint: p.faint, d: stickPath(p.xs, p.tops, mid) }))
+    return stickGroups(items, x, upper)
   })
+
+  /** The lower half's sticks, faint ones (theoretical ions without a match) apart. */
+  const bottomSticks = $derived(
+    stickGroups(
+      bottomIons.map((b) => ({ mz: b.mz, ratio: b.height, color: colorOf(b.type), faint: b.faint })),
+      x,
+      lower,
+    ),
+  )
 
   /** The labels of the matched peaks, the most intense first; those without room are left out. */
   const labels = $derived.by(() => {
     const order = [...groups].sort((p, q) => q.intensity - p.intensity)
     const ys = placeLabels(
-      order.map((g) => ({ x: x(g.mz), y: upper(g.intensity / maxI) - 4, width: textWidth(g.label, 11) + 6 })),
+      order.map((g) => {
+        const r = g.intensity / ref
+        return { x: x(g.mz), y: upper(Math.min(1, r)) - (r > 1 ? 9 : 4), width: textWidth(g.label, 11) + 8 }
+      }),
       { lineHeight: 12, tries: 4, top: plotTop + 10 },
     )
     const out: { x: number; y: number; text: string; ions: string; key: number }[] = []
@@ -146,19 +137,19 @@
     }
     if (groups.length < mz.length) items.push({ color: COLORS.unmatched, text: 'unmatched' })
     let right = width - M.right
-    const placed = items.map((item) => ({ ...item, w: textWidth(item.text, 11) + 22 }))
+    const placed = items.map((item) => ({ ...item, w: textWidth(item.text, 11) + 22, x: 0 }))
     for (let i = placed.length - 1; i >= 0; i--) {
       right -= placed[i].w
-      ;(placed[i] as { x?: number }).x = right
+      placed[i].x = right
     }
-    return placed as ((typeof placed)[number] & { x: number })[]
+    return placed
   })
 
   // hover: the peak (or predicted ion) under the pointer, the most intense within 6 px
   let tip = $state<{ x: number; y: number; lines: string[] } | null>(null)
 
   function strongestNear(values: ArrayLike<number>, heights: ArrayLike<number>, at: number): number {
-    let i = nearest(values, at)
+    const i = nearest(values, at)
     if (i < 0) return -1
     let best = -1
     for (let j = i; j >= 0 && Math.abs(x(values[j]) - x(at)) <= 6; j--) if (best < 0 || heights[j] > heights[best]) best = j
@@ -177,13 +168,17 @@
       const i = strongestNear(mz, intensity, at)
       if (i < 0) return void (tip = null)
       const g = groupOf.get(i)
-      const lines = [`m/z ${mz[i].toFixed(4)} · ${((intensity[i] / maxI) * 100).toFixed(1)} %`]
-      if (g) for (const m of g.matches) lines.push(`${ionLabel(m.ion)} · ${m.errorPpm >= 0 ? '+' : ''}${m.errorPpm.toFixed(2)} ppm`)
+      const share = (intensity[i] / ref) * 100
+      const lines = [`m/z ${mz[i].toFixed(4)} · ${share.toFixed(1)} %${share > 100 ? ' (clipped)' : ''}`]
+      if (g) for (const m of g.matches) lines.push(`${ionLabel(m.ion)} · ${signedText(m.errorPpm, 2)} ppm`)
       else lines.push('unmatched')
       tip = { x: x(mz[i]), y: py, lines }
     } else if (bottom.kind === 'ions' && bottomIons.length > 0) {
-      const mzs = bottomIons.map((b) => b.mz)
-      const i = strongestNear(mzs, bottomIons.map((b) => b.height), at)
+      const i = strongestNear(
+        bottomIons.map((b) => b.mz),
+        bottomIons.map((b) => b.height),
+        at,
+      )
       if (i < 0) return void (tip = null)
       const b = bottomIons[i]
       const what = bottom.relative ? ` · ${(b.height * 100).toFixed(1)} %` : b.faint ? ' · not matched' : ' · matched'
@@ -201,7 +196,7 @@
     role="img"
     aria-labelledby="{uid}-title"
     aria-describedby="{uid}-desc"
-    width={width}
+    {width}
     height={H}
     viewBox="0 0 {width} {H}"
     font-family={font}
@@ -216,16 +211,25 @@
       <line x1={px(x(t))} x2={px(x(t))} y1={plotTop} y2={plotBottom} stroke="#f4f4f5" stroke-width="1" />
     {/each}
 
-    <!-- the observed peaks: unmatched light grey, matched in their series' colour -->
-    <path d={sticks.unmatched} stroke={COLORS.unmatched} stroke-width="1" fill="none" data-testid="unmatched-peaks" />
-    {#each sticks.matched as s (s.color)}
-      <path d={s.d} stroke={s.color} stroke-width="1.75" stroke-linecap="round" fill="none" />
+    <!-- the observed peaks: unmatched light grey and thin, matched in their series' colour -->
+    {#each sticks as s (s.color)}
+      {@const matched = s.color !== COLORS.unmatched}
+      <path
+        d={stickPath(s.xs, s.tops, mid)}
+        stroke={s.color}
+        stroke-width={matched ? 1.75 : 1}
+        stroke-linecap={matched ? 'round' : 'butt'}
+        fill="none"
+        data-testid={matched ? 'matched-peaks' : 'unmatched-peaks'} />
+      {#if s.clipped.length > 0}
+        <path d={clipMarks(s.clipped, upper(1) - 1, true)} fill={s.color} data-testid="clipped-peaks" />
+      {/if}
     {/each}
 
     <!-- the lower half -->
     {#each bottomSticks as s (`${s.color}/${s.faint}`)}
       <path
-        d={s.d}
+        d={stickPath(s.xs, s.tops, mid)}
         stroke={s.color}
         stroke-width={s.faint ? 1 : bottom.kind === 'ions' && !bottom.relative ? 1.25 : 1.75}
         stroke-opacity={s.faint ? 0.4 : 1}
@@ -240,17 +244,18 @@
         text-anchor="middle"
         font-size="12"
         fill={muted}
-        data-testid="bottom-status">{bottom.message}</text>
+        data-testid="bottom-status"
+        data-no-export="">{bottom.message}</text>
     {/if}
 
     <!-- the axis -->
     <line x1={M.left} x2={width - M.right} y1={mid} y2={mid} stroke={muted} stroke-width="1" />
     {#each xTicks as t (t)}
-      {#if x(t) < width - M.right - 30}<text x={px(x(t))} y={H - 7} text-anchor="middle" font-size="11" fill={muted}>{t}</text>{/if}
+      {#if x(t) < width - M.right - 30}<text x={px(x(t))} y={plotBottom + 15} text-anchor="middle" font-size="11" fill={muted}>{t}</text>{/if}
     {/each}
-    <text x={width - M.right} y={H - 7} text-anchor="end" font-size="11" fill={muted}>m/z</text>
+    <text x={width - M.right} y={plotBottom + 15} text-anchor="end" font-size="11" fill={muted}>m/z</text>
 
-    <!-- relative intensity: of the base peak above, of the strongest predicted ion below -->
+    <!-- relative intensity, of each half's 100 % -->
     <g font-size="10" fill={muted} text-anchor="end">
       {#each [1, 0.5] as r (r)}
         <text x={M.left - 6} y={px(upper(r) + 3.5)}>{r * 100} %</text>
@@ -279,33 +284,26 @@
         data-ions={l.ions}>{l.text}</text>
     {/each}
 
-    <!-- what the halves are, the similarity of the search, the legend -->
-    <text x={M.left} y="13" font-size="11" fill={muted}>Observed{annotating ? ' · annotating…' : ''}</text>
-    <text
-      x={M.left + 4}
-      y={plotBottom - 5}
-      font-size="11"
-      fill={muted}
-      stroke="#ffffff"
-      stroke-width="3"
-      paint-order="stroke"
-      data-testid="bottom-label">{bottom.label}</text>
-    {#if similarity}
-      <text
-        x={width - M.right - 4}
-        y={plotBottom - 5}
-        text-anchor="end"
-        font-size="11"
-        fill={muted}
-        stroke="#ffffff"
-        stroke-width="3"
-        paint-order="stroke"
-        data-testid="similarity">{similarity}</text>
+    <!-- above: what the upper half is and the legend; below: what the lower half is, the similarity -->
+    <text x={M.left} y="14" font-size="11" fill={muted} data-testid="top-label">Observed · 100 % = {reference.text}</text>
+    {#if annotating}
+      <text x={M.left + 6 + textWidth(`Observed · 100 % = ${reference.text}`, 11)} y="14" font-size="11" fill={muted} data-no-export=""
+        >· annotating…</text>
     {/if}
     {#each legend as item (item.text)}
-      <rect x={px(item.x)} y="4" width="10" height="10" rx="2" fill={item.color} />
-      <text x={px(item.x + 15)} y="13" font-size="11" fill={ink}>{item.text}</text>
+      <rect x={px(item.x)} y="5" width="10" height="10" rx="2" fill={item.color} />
+      <text x={px(item.x + 15)} y="14" font-size="11" fill={ink}>{item.text}</text>
     {/each}
+    <text
+      x={M.left}
+      y={H - 6}
+      font-size="11"
+      fill={muted}
+      data-testid="bottom-label"
+      data-no-export={bottom.kind === 'status' ? '' : undefined}>{bottom.label}</text>
+    {#if similarity}
+      <text x={width - M.right} y={H - 6} text-anchor="end" font-size="11" fill={muted} data-testid="similarity">{similarity}</text>
+    {/if}
   </svg>
 
   {#if bottom.kind === 'status' && bottom.failed && onTheoretical}

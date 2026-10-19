@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bandPath, mzDomain, niceTicks, placeLabels, scale, stickPath, textWidth } from './plot'
+import { bandPath, clipMarks, mzDomain, niceTicks, placeLabels, scale, stickGroups, stickPath, textWidth } from './plot'
 
 describe('axes', () => {
   it('puts ticks on round numbers inside the range', () => {
@@ -28,6 +28,28 @@ describe('marks', () => {
   it('draws sticks as one path', () => {
     expect(stickPath([10, 20.04], [5, 8.26], 50)).toBe('M10 50V5M20 50V8.3')
     expect(stickPath([], [], 50)).toBe('')
+  })
+
+  it('groups sticks by colour on one m/z scale, and clips them at 100 %', () => {
+    const x = scale([100, 1100], [0, 1000])
+    const y = (r: number) => 100 - 100 * r
+    const groups = stickGroups(
+      [
+        { mz: 500.0025, ratio: 0.5, color: 'blue' }, // an observed b ion, 5 ppm off
+        { mz: 600, ratio: 1.8, color: 'grey' }, // a peak stronger than the reference
+        { mz: 700, ratio: 1, color: 'blue' },
+      ],
+      x,
+      y,
+    )
+    expect(groups.map((g) => g.color)).toEqual(['blue', 'grey'])
+    expect(groups[0]).toMatchObject({ xs: [400.0025, 600], tops: [50, 0], clipped: [] })
+    expect(groups[1]).toMatchObject({ xs: [500], tops: [0], clipped: [500] })
+    // the same ion below (its theoretical m/z) is where the observed one is, to the pixel
+    const below = stickGroups([{ mz: 500, ratio: 1, color: 'blue', faint: true }], x, (r) => 100 + 100 * r)
+    expect(below[0]).toMatchObject({ faint: true, xs: [400], tops: [200] })
+    expect(Math.abs(below[0].xs[0] - groups[0].xs[0])).toBeLessThan(0.01)
+    expect(clipMarks([500], 0, true)).toBe('M497 0L500 -5L503 0Z')
   })
 
   it('draws a tolerance band that follows m/z for Da', () => {

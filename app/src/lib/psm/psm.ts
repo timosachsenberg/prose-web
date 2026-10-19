@@ -8,6 +8,7 @@
 
 import type {
   AnnotationOptions,
+  PeakAnnotationResult,
   PeakMatch,
   ProSEFileSummary,
   ResultTables,
@@ -164,12 +165,22 @@ export function lossOptions(mods: { name: string; residue: string }[]): LossOpti
   return out
 }
 
+/**
+ * The fragment charges a PSM of precursor `charge` can have in the view: 1+, and 2+ for precursors of
+ * 2+ or more (as PeptDeep predicts them).
+ */
+export function fragmentCharges(charge: number): number[] {
+  return charge >= 2 ? [1, 2] : [1]
+}
+
 /** The choices for a PSM of precursor `charge`, with its loss toggles, in a module with or without ONNX Runtime. */
 export function resolveOptions(user: PsmOptionState, ctx: { charge: number; losses: LossOption[]; onnx: boolean }): PsmOptions {
   const offered = new Set(ctx.losses.map((l) => l.formula))
+  const possible = fragmentCharges(ctx.charge)
+  const charges = (user.charges ?? (ctx.charge >= 3 ? [1, 2] : [1])).filter((c) => possible.includes(c))
   return {
     ions: [...user.ions],
-    charges: user.charges ? [...user.charges] : ctx.charge >= 3 ? [1, 2] : [1],
+    charges: charges.length > 0 || user.charges?.length === 0 ? charges : [1],
     losses: user.losses ? user.losses.filter((l) => offered.has(l)) : ctx.losses.filter((l) => l.auto).map((l) => l.formula),
     precursor: user.precursor,
     bottom: ctx.onnx ? (user.bottom ?? 'peptdeep') : 'theoretical',
@@ -177,17 +188,36 @@ export function resolveOptions(user: PsmOptionState, ctx: { charge: number; loss
 }
 
 /**
- * What the engine is asked for: the ion types shown, fragments up to 2+ when 2+ shows (as PeptDeep's
- * prediction has them), losses when any loss shows, the search's tolerance.
+ * What the engine is asked for, for the fragment ions: the ion types shown, fragments up to 2+ when 2+
+ * shows (as PeptDeep's prediction has them), losses when any loss shows, the search's tolerance. The
+ * precursor is asked for apart (`precursorOptions`): the engine makes precursor peaks at `maxCharge` only.
  */
 export function annotationOptions(o: PsmOptions, tolerance: Tolerance): NonNullable<AnnotationOptions> {
   return {
     tolerance: tolerance.value,
     unit: tolerance.unit,
     maxCharge: Math.max(1, ...o.charges.filter((c) => c <= 2)),
-    ions: o.ions.length > 0 ? ION_TYPES.filter((t) => o.ions.includes(t)) : ['b', 'y'],
+    ions: ION_TYPES.filter((t) => o.ions.includes(t)),
     losses: o.losses.length > 0,
-    precursor: o.precursor,
+    precursor: false,
+  }
+}
+
+/** What the engine is asked for, for the precursor peaks: no fragment ions, the precursor at its own charge. */
+export function precursorOptions(tolerance: Tolerance, charge: number): NonNullable<AnnotationOptions> {
+  return { tolerance: tolerance.value, unit: tolerance.unit, maxCharge: Math.max(1, charge), ions: [], losses: true, precursor: true }
+}
+
+/** The fragment annotation with the precursor's matches and ions (of the separate precursor annotation) added. */
+export function withPrecursor(fragments: PeakAnnotationResult, precursor: PeakAnnotationResult | null): PeakAnnotationResult {
+  if (!precursor) return fragments
+  const isPrecursor = (x: { type: string }) => x.type === 'precursor'
+  const byMz = (p: { mz: number }, q: { mz: number }) => p.mz - q.mz
+  return {
+    matches: [...fragments.matches.filter((m) => !isPrecursor(m)), ...precursor.matches.filter(isPrecursor)].sort(
+      (p, q) => p.theoreticalMz - q.theoreticalMz,
+    ),
+    theoretical: [...fragments.theoretical.filter((t) => !isPrecursor(t)), ...precursor.theoretical.filter(isPrecursor)].sort(byMz),
   }
 }
 
@@ -387,6 +417,45 @@ export function modificationList(t: ResultTables['peptides'], k: number, fixedMo
     else fixed.push(`${name} (${site}, fixed)`)
   }
   return [...marked, ...fixed]
+}
+
+/**
+ * A signed number for the page: rounded first, so that what rounds to zero has no sign ("0.0", not
+ * "−0.0"); the minus is U+2212, as in typeset numbers.
+ */
+export function signedText(v: number, digits: number): string {
+  if (!Number.isFinite(v)) return '–'
+  const text = Math.abs(v).toFixed(digits)
+  if (Number(text) === 0) return text
+  return `${v < 0 ? '−' : '+'}${text}`
+}
+
+/**
+ * The similarity of the PSM's spectrum to PeptDeep's prediction that the search computed (its
+ * features `ms2_cosine` and `ms2_spectral_angle`, over all ions), or null without them.
+ */
+export function similarityText(names: string[], features: Float64Array, row: number): string | null {
+  const cosine = featureValue(names, features, row, 'ms2_cosine')
+  const angle = featureValue(names, features, row, 'ms2_spectral_angle')
+  const parts = [
+    Number.isFinite(cosine) ? `cosine ${cosine.toFixed(3)}` : null,
+    Number.isFinite(angle) ? `spectral angle ${angle.toFixed(3)}` : null,
+  ].filter((p) => p !== null)
+  return parts.length > 0 ? `${parts.join(' · ')} (search)` : null
+}
+
+/**
+ * The 100 % of the observed half when it is compared with PeptDeep's prediction: the most intense
+ * peak with a matched b or y ion of the types shown (PeptDeep scales its b and y ions to the strongest
+ * one), or null when no b or y ion is matched.
+ */
+export function matchedByReference(groups: { intensity: number; matches: PeakMatch[] }[], o: PsmOptions): number | null {
+  let best = 0
+  for (const g of groups) {
+    const by = g.matches.some((m) => (m.type === 'b' || m.type === 'y') && (o.ions as string[]).includes(m.type))
+    if (by && g.intensity > best) best = g.intensity
+  }
+  return best > 0 ? best : null
 }
 
 /** A feature of PSM `row` by name (`psms.featureNames`), or NaN if the search has none of that name. */

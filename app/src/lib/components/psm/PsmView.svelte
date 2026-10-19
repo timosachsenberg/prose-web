@@ -19,28 +19,34 @@
   // ion table, the fragment mass errors and the PSM's features. A PSM whose peaks the search did not
   // keep shows its ladder, theoretical ions and features. An open search's unlocalized mass shift is
   // shown, and the annotation is of the peptide without it.
-  import { Button } from '$lib/components/ui/button'
+  import { Button, buttonVariants } from '$lib/components/ui/button'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import Marker from '$lib/components/results/Marker.svelte'
   import { download } from '$lib/download'
   import { engineClient, engineState } from '$lib/engine/app-engine.svelte'
   import { massShift, peptideView, psmProforma, type PeptideView } from '$lib/format/peptide'
   import {
     annotationOptions,
-    featureValue,
+    fragmentCharges,
     fragmentTolerance,
     groupByPeak,
     instrumentOf,
     ionTable,
     ladderCuts,
     lossOptions,
+    matchedByReference,
     matchSummary,
     modificationList,
     nceFor,
+    precursorOptions,
     resolveOptions,
+    signedText,
+    similarityText,
     spectrumPeaks,
     svgFileName,
     visibleMatches,
     visibleTheoretical,
+    withPrecursor,
     ION_TYPES,
     type IonType,
     type PsmOptions,
@@ -51,7 +57,9 @@
   import { formatQValue, parseAccession, parseDescription, scanNumber } from '$lib/results/display'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { defaultsOf } from '$lib/settings/parameters'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import XIcon from '@lucide/svelte/icons/x'
+  import { cn } from '$lib/utils'
   import { tick } from 'svelte'
   import FragmentLadder from './FragmentLadder.svelte'
   import IonTable from './IonTable.svelte'
@@ -139,14 +147,43 @@
       )
   })
 
-  const result = $derived(
+  // the precursor peaks, asked for apart: the engine makes them at `maxCharge` only, which is the
+  // precursor's charge here (and not the fragments' 1 or 2)
+  const precursorKey = $derived(options.precursor ? `${psmKey}|precursor|${tolerance.value}${tolerance.unit}` : null)
+  let precursorAnnotation = $state.raw<{ key: string; result: PeakAnnotationResult | null } | null>(null)
+  $effect(() => {
+    const key = precursorKey
+    if (key === null) return
+    const cached = annotations.get(key)
+    if (cached) {
+      precursorAnnotation = { key, result: cached }
+      return
+    }
+    precursorAnnotation = { key, result: null }
+    engineClient()
+      .annotate(peaks?.mz ?? new Float32Array(0), peaks?.intensity ?? new Float32Array(0), pt.openms[k], charge, precursorOptions(tolerance, charge))
+      .then(
+        (result) => {
+          remember(annotations, key, result, 400)
+          if (precursorAnnotation?.key === key) precursorAnnotation = { key, result }
+        },
+        () => {}, // the fragments' annotation reports problems
+      )
+  })
+  const precursorResult = $derived(precursorKey !== null && precursorAnnotation?.key === precursorKey ? precursorAnnotation.result : null)
+
+  const fragments = $derived(
     annotation?.key === annotationKey && annotation.result
       ? annotation.result
       : lastShown?.psm === psmKey
         ? lastShown.result
         : null,
   )
-  const annotating = $derived(annotation?.key === annotationKey && annotation.result === null && annotation.error === null)
+  const result = $derived(fragments ? withPrecursor(fragments, precursorResult) : null)
+  const annotating = $derived(
+    (annotation?.key === annotationKey && annotation.result === null && annotation.error === null) ||
+      (precursorKey !== null && precursorResult === null),
+  )
   const annotationError = $derived(annotation?.key === annotationKey ? annotation.error : null)
 
   const shown = $derived(result ? visibleMatches(result.matches, options) : [])
@@ -201,7 +238,7 @@
         ions: theoretical.map((t) => ({ mz: t.mz, height: 0.55, type: t.type, ion: t.ion, faint: !matched.has(t.ion) })),
       }
     }
-    const label = `PeptDeep · ${nce.label} · ${instrument}`
+    const label = `PeptDeep · ${nce.label} · ${instrument} · 100 % = strongest predicted b/y`
     if (prediction?.key === predictionKey && prediction.error !== null) {
       return { kind: 'status', label: 'PeptDeep', message: `Prediction unavailable: ${prediction.error}`, failed: true }
     }
@@ -214,17 +251,22 @@
     return { kind: 'ions', label, relative: true, ions }
   })
 
-  /** PeptDeep's similarity of the search (its features), when the lower half shows the search's prediction. */
-  const similarity = $derived.by(() => {
-    if (options.bottom !== 'peptdeep' || (nce.source !== 'calibrated' && nce.source !== 'search')) return null
-    const cosine = featureValue(ps.featureNames, ps.features, row, 'ms2_cosine')
-    const angle = featureValue(ps.featureNames, ps.features, row, 'ms2_spectral_angle')
-    const parts = [
-      Number.isFinite(cosine) ? `cosine ${cosine.toFixed(3)}` : null,
-      Number.isFinite(angle) ? `spectral angle ${angle.toFixed(3)}` : null,
-    ].filter((p) => p !== null)
-    return parts.length > 0 ? parts.join(' · ') : null
+  /** PeptDeep's similarity that the search computed (over all ions), whenever the search has it. */
+  const similarity = $derived(similarityText(ps.featureNames, ps.features, row))
+
+  /**
+   * The observed half's 100 %: against PeptDeep, the strongest matched b or y peak (as PeptDeep scales
+   * its prediction); against the theoretical spectrum, or without a matched b or y, the base peak.
+   */
+  const reference = $derived.by(() => {
+    let base = 0
+    for (let i = 0; i < (peaks?.intensity.length ?? 0); i++) base = Math.max(base, peaks!.intensity[i])
+    const matched = options.bottom === 'peptdeep' ? matchedByReference(groups, options) : null
+    return matched !== null ? { intensity: matched, text: 'strongest matched b/y' } : { intensity: base, text: 'base peak' }
   })
+
+  /** The annotation or the prediction is on its way: the spectrum is not exported meanwhile. */
+  const pending = $derived(annotating || (bottom.kind === 'status' && !bottom.failed))
 
   const domain = $derived(peaks ? mzDomain([peaks.mz, bottom.kind === 'ions' ? bottom.ions.map((b) => b.mz) : []]) : ([0, 100] as [number, number]))
 
@@ -262,7 +304,8 @@
       Number.isFinite(ps.mz[row]) ? `m/z ${ps.mz[row].toFixed(4)}` : null,
       rt >= 0 ? `RT ${(rt / 60).toFixed(1)} min` : null,
       `q ${formatQValue(ps.qValue[row])}`,
-      Number.isFinite(err) ? `${err >= 0 ? '+' : '−'}${Math.abs(err).toFixed(1)} ppm` : null,
+      // an open search's shift is the whole mass difference: no error is left to show
+      Number.isFinite(err) && shift === null ? `${signedText(err, 1)} ppm` : null,
     ]
       .filter((p) => p)
       .join(' · ')
@@ -279,9 +322,18 @@
     peaks
       ? `${groups.length} of ${peaks.mz.length} peaks matched: b ions blue, y ions orange, other ions dark grey, unmatched peaks light grey.` +
           (summary ? ` ${summary.matched} of ${summary.total} ions shown are matched; their peaks carry ${Math.round(summary.intensityFraction * 100)} % of the intensity.` : '') +
-          ' The ion table below lists the ions.'
+          ` Above, 100 % is the ${reference.text}; below, ${options.bottom === 'peptdeep' ? 'the strongest predicted b or y ion' : 'every ion has one height'}.` +
+          (similarity ? ` ${similarity.replace(' (search)', '')}, as the search computed it over all ions.` : '')
       : '',
   )
+
+  /** What the losses menu's button says: the losses on, and the precursor ("CH₄SO · precursor", "none"). */
+  const moreSummary = $derived.by(() => {
+    const on = losses.filter((l) => options.losses.includes(l.formula)).map((l) => (l.formula === 'other' ? 'other' : l.label))
+    if (options.precursor) on.push('precursor')
+    return on.length > 0 ? on.join(', ') : 'none'
+  })
+  const moreOn = $derived(options.losses.length > 0 || options.precursor)
 
   // the toggles: a choice made here becomes the user's (no longer automatic) for all PSMs
   function setIon(type: IonType, on: boolean) {
@@ -312,7 +364,7 @@
 
   // the Export menu's "Spectrum (SVG)" does what the button does
   $effect(() => {
-    view.spectrumExporter = peaks ? exportSvg : null
+    view.spectrumExporter = peaks && !pending ? exportSvg : null
     return () => (view.spectrumExporter = null)
   })
 
@@ -421,8 +473,13 @@
         aria-keyshortcuts="ArrowRight"
         disabled={neighbours.next === null}
         onclick={() => step(1)}>Next ›</Button>
-      <Button variant="outline" size="sm" class="h-7 px-2.5 text-xs" disabled={!peaks} title={peaks ? undefined : 'The spectrum was not stored'} onclick={exportSvg}
-        >Export spectrum (SVG)</Button>
+      <Button
+        variant="outline"
+        size="sm"
+        class="h-7 px-2.5 text-xs"
+        disabled={!peaks || pending}
+        title={!peaks ? 'The spectrum was not stored' : pending ? 'Wait for the annotation and the prediction' : undefined}
+        onclick={exportSvg}>Export spectrum (SVG)</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Close the PSM view" title="Back (Esc)" onclick={onClose}>
         <XIcon aria-hidden="true" />
       </Button>
@@ -448,42 +505,56 @@
         <span id="{uid}-ions" class="mr-1 text-muted-foreground">Ions</span>
         {#each ION_TYPES as t (t)}
           <label class="relative">
-            <input type="checkbox" class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" aria-label="{t} ions" checked={options.ions.includes(t)} onchange={(e) => setIon(t, e.currentTarget.checked)} />
+            <input
+              type="checkbox"
+              class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+              aria-label="{t} ions"
+              checked={options.ions.includes(t)}
+              onchange={(e) => setIon(t, e.currentTarget.checked)} />
             <span class={toggle}>{t}</span>
           </label>
         {/each}
-        <label class="relative ml-1">
-          <input
-            type="checkbox"
-            class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-            aria-label="Precursor peaks"
-            checked={options.precursor}
-            onchange={(e) => (view.psmOptions.precursor = e.currentTarget.checked)} />
-          <span class={toggle}>precursor</span>
-        </label>
       </div>
       <div class="flex items-center gap-1" role="group" aria-labelledby="{uid}-charge">
         <span id="{uid}-charge" class="mr-1 text-muted-foreground">Charge</span>
-        {#each [1, 2] as c (c)}
+        <!-- a 1+ precursor has 1+ fragments only -->
+        {#each fragmentCharges(charge) as c (c)}
           <label class="relative">
-            <input type="checkbox" class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed" aria-label="{c}+ fragments" checked={options.charges.includes(c)} onchange={(e) => setCharge(c, e.currentTarget.checked)} />
+            <input
+              type="checkbox"
+              class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+              aria-label="{c}+ fragments"
+              checked={options.charges.includes(c)}
+              onchange={(e) => setCharge(c, e.currentTarget.checked)} />
             <span class={toggle}>{c}+</span>
           </label>
         {/each}
       </div>
-      <div class="flex items-center gap-1" role="group" aria-labelledby="{uid}-losses">
-        <span id="{uid}-losses" class="mr-1 text-muted-foreground">Losses</span>
-        {#each losses as l (l.formula)}
-          <label class="relative" title={l.formula === 'other' ? 'Other neutral losses the engine finds (e.g. of side chains)' : undefined}>
-            <input
-              type="checkbox"
-              class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-              aria-label={l.formula === 'other' ? 'other losses' : `${l.label} loss${l.note ? ` (${l.note})` : ''}`}
-              checked={options.losses.includes(l.formula)}
-              onchange={(e) => setLoss(l.formula, e.currentTarget.checked)} />
-            <span class={toggle}>{l.label}{#if l.note}{' '}({l.note.replace('oxidised', 'ox')}){/if}</span>
-          </label>
-        {/each}
+      <!-- the neutral losses and the precursor peaks: one menu, its button says what is on -->
+      <div class="flex items-center gap-1">
+        <span id="{uid}-more" class="mr-1 text-muted-foreground">Losses</span>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[26px] gap-1 px-2 text-xs font-normal', moreOn && 'border-primary')}
+            aria-label="Losses and precursor peaks: {moreSummary}">
+            {moreSummary}<ChevronDown class="size-3.5 text-muted-foreground" aria-hidden="true" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content class="w-auto min-w-56" align="start">
+            <DropdownMenu.Group>
+              <DropdownMenu.GroupHeading class="text-xs font-medium text-muted-foreground">Neutral losses</DropdownMenu.GroupHeading>
+              {#each losses as l (l.formula)}
+                <DropdownMenu.CheckboxItem
+                  checked={options.losses.includes(l.formula)}
+                  onCheckedChange={(on) => setLoss(l.formula, on)}
+                  title={l.formula === 'other' ? 'Other neutral losses the engine finds (e.g. of side chains)' : undefined}
+                  >{l.formula === 'other' ? 'other losses' : `${l.label} loss${l.note ? ` (${l.note})` : ''}`}</DropdownMenu.CheckboxItem>
+              {/each}
+            </DropdownMenu.Group>
+            <DropdownMenu.Separator />
+            <DropdownMenu.CheckboxItem checked={options.precursor} onCheckedChange={(on) => (view.psmOptions.precursor = on)}
+              >Precursor peaks</DropdownMenu.CheckboxItem>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
       </div>
       <div class="ml-auto flex items-center gap-1" role="radiogroup" aria-labelledby="{uid}-bottom">
         <span id="{uid}-bottom" class="mr-1 text-muted-foreground">Bottom</span>
@@ -517,6 +588,7 @@
         mz={peaks.mz}
         intensity={peaks.intensity}
         {groups}
+        {reference}
         {bottom}
         {similarity}
         title={spectrumTitle}

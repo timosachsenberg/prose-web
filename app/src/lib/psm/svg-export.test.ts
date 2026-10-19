@@ -53,6 +53,14 @@ describe('exportSpectrumSvg', () => {
     expect(out).toMatch(/<rect x="0" y="0" width="640" height="300" fill="#ffffff"\/>/)
   })
 
+  it('leaves out what only the page shows (a prediction on its way)', () => {
+    const svg = pageSvg()
+    svg.insertAdjacentHTML('beforeend', '<text x="300" y="200" data-no-export="">Predicting with PeptDeep…</text>')
+    const out = exportSpectrumSvg(svg)
+    expect(out).not.toContain('Predicting')
+    expect(out).toContain('>b2</text>')
+  })
+
   it('leaves the SVG on the page as it is', () => {
     const svg = pageSvg()
     const before = svg.outerHTML

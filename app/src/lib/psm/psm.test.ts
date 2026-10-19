@@ -6,6 +6,7 @@ import {
   annotationOptions,
   errorStats,
   featureValue,
+  fragmentCharges,
   fragmentTolerance,
   groupByPeak,
   instrumentOf,
@@ -14,13 +15,18 @@ import {
   ladderCuts,
   lossOptions,
   matchSummary,
+  matchedByReference,
   modificationList,
   nceFor,
+  precursorOptions,
   resolveOptions,
+  signedText,
+  similarityText,
   spectrumPeaks,
   svgFileName,
   visibleMatches,
   visibleTheoretical,
+  withPrecursor,
   type PsmOptionState,
   type TheoreticalIon,
 } from './psm'
@@ -127,7 +133,20 @@ describe('options', () => {
     expect(resolveOptions(chosen, { charge: 2, losses, onnx: false })).toMatchObject({ charges: [2], losses: ['H2O'], bottom: 'theoretical' })
   })
 
-  it('asks the engine for what is shown: the tolerance of the search, 2+ fragments when shown', () => {
+  it('offers 2+ fragments only for precursors of 2+ or more', () => {
+    expect(fragmentCharges(1)).toEqual([1])
+    expect(fragmentCharges(2)).toEqual([1, 2])
+    expect(fragmentCharges(4)).toEqual([1, 2])
+    const losses = lossOptions([])
+    // a 1+ precursor: no 2+ fragments, also when the user chose them for other PSMs
+    expect(resolveOptions({ ...user, charges: [1, 2] }, { charge: 1, losses, onnx: true }).charges).toEqual([1])
+    expect(resolveOptions({ ...user, charges: [2] }, { charge: 1, losses, onnx: true }).charges).toEqual([1])
+    expect(resolveOptions({ ...user, charges: [2] }, { charge: 2, losses, onnx: true }).charges).toEqual([2])
+    // all charges switched off stays so
+    expect(resolveOptions({ ...user, charges: [] }, { charge: 2, losses, onnx: true }).charges).toEqual([])
+  })
+
+  it('asks the engine for the fragments shown: the tolerance of the search, 2+ when shown, no precursor', () => {
     const o = resolveOptions({ ...user, ions: ['a', 'y'], precursor: true }, { charge: 2, losses: lossOptions([]), onnx: true })
     expect(annotationOptions(o, { value: 20, unit: 'ppm' })).toEqual({
       tolerance: 20,
@@ -135,12 +154,49 @@ describe('options', () => {
       maxCharge: 1,
       ions: ['a', 'y'],
       losses: false,
-      precursor: true,
+      precursor: false,
     })
     const two = { ...o, charges: [1, 2], losses: ['NH3'] }
     expect(annotationOptions(two, { value: 0.02, unit: 'Da' })).toMatchObject({ unit: 'Da', maxCharge: 2, losses: true })
-    // no ion type: the engine still needs one (nothing of it is shown)
-    expect(annotationOptions({ ...o, ions: [] }, { value: 20, unit: 'ppm' }).ions).toEqual(['b', 'y'])
+    // no ion type: no fragment ions
+    expect(annotationOptions({ ...o, ions: [] }, { value: 20, unit: 'ppm' }).ions).toEqual([])
+  })
+
+  it('asks for the precursor apart, at its own charge (the engine makes precursor peaks at maxCharge only)', () => {
+    expect(precursorOptions({ value: 20, unit: 'ppm' }, 2)).toEqual({
+      tolerance: 20,
+      unit: 'ppm',
+      maxCharge: 2,
+      ions: [],
+      losses: true,
+      precursor: true,
+    })
+    // a 3+ PSM: [M+3H]+++
+    expect(precursorOptions({ value: 0.02, unit: 'Da' }, 3)).toMatchObject({ unit: 'Da', maxCharge: 3, ions: [], precursor: true })
+  })
+
+  it('adds the precursor annotation to the fragment annotation', () => {
+    const fragments = {
+      matches: [match(0, 'b2', { theoreticalMz: 200 }), match(2, 'y3', { theoreticalMz: 700 })],
+      theoretical: [theo('b2', 200), theo('y3', 700)],
+    }
+    const precursor = {
+      matches: [match(1, '[M+3H]+++', { theoreticalMz: 512.97, charge: 3 })],
+      theoretical: [
+        { ion: '[M+3H-H2O]+++', type: 'precursor', ordinal: 0, charge: 3, mz: 506.96 },
+        { ion: '[M+3H]+++', type: 'precursor', ordinal: 0, charge: 3, mz: 512.97 },
+      ],
+    }
+    const merged = withPrecursor(fragments, precursor)
+    expect(merged.matches.map((m) => m.ion)).toEqual(['b2', '[M+3H]+++', 'y3'])
+    expect(merged.theoretical.map((t) => t.ion)).toEqual(['b2', '[M+3H-H2O]+++', '[M+3H]+++', 'y3'])
+    expect(withPrecursor(fragments, null)).toBe(fragments)
+    // shown with the precursor toggle, whatever the fragment charges; its losses with the loss toggles
+    const o = { ions: ['b', 'y'] as ('b' | 'y')[], charges: [1], losses: [] as string[], precursor: true, bottom: 'theoretical' as const }
+    expect(visibleMatches(merged.matches, o).map((m) => m.ion)).toEqual(['b2', '[M+3H]+++', 'y3'])
+    expect(visibleTheoretical(merged.theoretical, o).map((t) => t.ion)).toEqual(['b2', '[M+3H]+++', 'y3'])
+    expect(visibleTheoretical(merged.theoretical, { ...o, losses: ['H2O'] }).map((t) => t.ion)).toContain('[M+3H-H2O]+++')
+    expect(visibleMatches(merged.matches, { ...o, precursor: false }).map((m) => m.ion)).toEqual(['b2', 'y3'])
   })
 })
 
@@ -257,6 +313,34 @@ describe('numbers', () => {
     const features = Float64Array.of(1, 0.5, 2, 0.9)
     expect(featureValue(names, features, 1, 'ms2_cosine')).toBe(0.9)
     expect(featureValue(names, features, 0, 'ms2_spectral_angle')).toBeNaN()
+  })
+
+  it('writes signed numbers rounded first, with a real minus and no negative zero', () => {
+    expect(signedText(-0.04, 1)).toBe('0.0')
+    expect(signedText(-0.0, 2)).toBe('0.00')
+    expect(signedText(-1.26, 1)).toBe('−1.3')
+    expect(signedText(2, 1)).toBe('+2.0')
+    expect(signedText(NaN, 1)).toBe('–')
+  })
+
+  it("says the search's similarity to PeptDeep's prediction, when the search has it", () => {
+    const names = ['ln(hyperscore)', 'ms2_cosine', 'ms2_spectral_angle']
+    expect(similarityText(names, Float64Array.of(1, 0.9312, 0.7624), 0)).toBe('cosine 0.931 · spectral angle 0.762 (search)')
+    expect(similarityText(['ln(hyperscore)'], Float64Array.of(1), 0)).toBeNull()
+    expect(similarityText(names, Float64Array.of(1, NaN, NaN), 0)).toBeNull()
+  })
+
+  it('scales the observed half to the strongest matched b or y peak of the types shown', () => {
+    const o = { ions: ['b', 'y'] as ('a' | 'b' | 'y')[], charges: [1], losses: [] as string[], precursor: true, bottom: 'peptdeep' as const }
+    const groups = [
+      { intensity: 90, matches: [match(0, '[M+2H]++')] }, // the precursor: no reference
+      { intensity: 40, matches: [match(1, 'b2')] },
+      { intensity: 70, matches: [match(2, 'a3')] }, // an a ion: no reference
+      { intensity: 60, matches: [match(3, 'y4'), match(3, 'a5')] },
+    ]
+    expect(matchedByReference(groups, o)).toBe(60)
+    expect(matchedByReference(groups, { ...o, ions: ['b'] })).toBe(40)
+    expect(matchedByReference(groups.slice(0, 1), o)).toBeNull()
   })
 
   it('names an exported spectrum after its peptide and scan', () => {

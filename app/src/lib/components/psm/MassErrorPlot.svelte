@@ -3,7 +3,7 @@
   // the colour of its series, its area by the intensity of its peak; the band is the search's fragment
   // tolerance (for a tolerance in Da it narrows with m/z). The mean and the spread are written below.
   import type { PeakMatch } from '$lib/engine/openms-types'
-  import { COLORS, errorStats, ionColor, ionLabel, type Tolerance } from '$lib/psm/psm'
+  import { COLORS, errorStats, ionColor, ionLabel, signedText, type Tolerance } from '$lib/psm/psm'
   import { bandPath, niceTicks, px, scale } from '$lib/psm/plot'
 
   let {
@@ -59,11 +59,10 @@
       .map((m) => ({ m, cx: x(mz[m.peak]), cy: y(m.errorPpm), r: radius(m.peak) })),
   )
   const stats = $derived(errorStats(matches))
-  const signed = (v: number) => (Math.abs(v) < 0.05 ? '0.0' : `${v > 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`)
   const statsText = $derived(
     matches.length === 0
       ? 'no matched ions'
-      : `mean ${signed(stats.mean)} ppm${Number.isFinite(stats.sd) ? ` · SD ${stats.sd.toFixed(1)} ppm` : ''} · dot size = intensity`,
+      : `mean ${signedText(stats.mean, 1)} ppm${Number.isFinite(stats.sd) ? ` · SD ${stats.sd.toFixed(1)} ppm` : ''} · dot size = intensity`,
   )
   const fmt = (v: number) => String(Number(v.toFixed(2)))
 </script>
@@ -80,7 +79,8 @@
     class="block">
     <title id="{uid}-title">Fragment mass error</title>
     <desc id="{uid}-desc"
-      >{matches.length} matched ions: error in ppm against m/z, within the {toleranceText}; {statsText}.</desc>
+      >{matches.length} matched ions: error in ppm against m/z, within the {toleranceText}; {statsText}. Each dot's title names its
+      ion.</desc>
 
     <path d={band} fill="#f4f4f5" data-testid="tolerance-band" />
     {#each yTicks as t (t)}
@@ -106,15 +106,15 @@
         data-testid="error-dot"
         data-type={d.m.type}
         data-error-ppm={d.m.errorPpm}
-        ><title>{ionLabel(d.m.ion)} · m/z {mz[d.m.peak].toFixed(4)} · {d.m.errorPpm >= 0 ? '+' : ''}{d.m.errorPpm.toFixed(2)} ppm</title></circle>
+        data-mz={mz[d.m.peak]}
+        ><title>{ionLabel(d.m.ion)} · m/z {mz[d.m.peak].toFixed(4)} · {signedText(d.m.errorPpm, 2)} ppm</title></circle>
     {/each}
   </svg>
   <p class="mt-1 text-xs text-foreground tabular-nums" data-testid="error-stats">{statsText}</p>
-  <p class="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground" aria-hidden="true">
+  <p class="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground" aria-hidden="true" title="Hover a dot for its ion">
     <span><i class="key" style:background={COLORS.b}></i>b</span>
     <span><i class="key" style:background={COLORS.y}></i>y</span>
     <span><i class="key" style:background={COLORS.other}></i>other series</span>
-    <span>hover a dot for its ion</span>
   </p>
 </div>
 

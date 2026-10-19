@@ -1,6 +1,7 @@
 // "Export spectrum (SVG)": the spectrum as a standalone SVG file. What the page's CSS gives the chart
 // (classes, CSS variables, `currentColor`, the font of an ancestor) is written into inline styles, and
 // nothing in the file refers to the page or the network: no classes, no stylesheet, no links, no images.
+// Elements marked `data-no-export` (states of the page, like a prediction on its way) are left out.
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -52,6 +53,8 @@ export function exportSpectrumSvg(svg: SVGSVGElement): string {
   // walk the page's elements and their copies side by side
   const originals = [svg as Element, ...Array.from(svg.querySelectorAll('*'))]
   const copies = [clone as Element, ...Array.from(clone.querySelectorAll('*'))]
+  // what only the page shows, found before its attributes go
+  const pageOnly = Array.from(clone.querySelectorAll('[data-no-export]'))
   const computed = new Map<Element, CSSStyleDeclaration>()
   for (const el of originals) computed.set(el, styleOf(el))
 
@@ -82,7 +85,9 @@ export function exportSpectrumSvg(svg: SVGSVGElement): string {
     if (inline.length > 0) copy.setAttribute('style', inline.join('; '))
   })
 
-  // no links, no images, no stylesheets or scripts: a link keeps its content
+  // what only the page shows (e.g. "Predicting with PeptDeep…"), no links, no images, no stylesheets or
+  // scripts: a link keeps its content
+  for (const el of pageOnly) el.remove()
   for (const el of Array.from(clone.querySelectorAll('a'))) el.replaceWith(...Array.from(el.childNodes))
   for (const el of Array.from(clone.querySelectorAll('image, use, style, script, foreignObject'))) el.remove()
   for (const el of [clone, ...Array.from(clone.querySelectorAll('*'))]) {

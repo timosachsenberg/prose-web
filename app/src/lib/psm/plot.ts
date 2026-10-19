@@ -58,6 +58,38 @@ export function stickPath(xs: ArrayLike<number>, tops: ArrayLike<number>, base: 
   return d
 }
 
+export type Sticks = { color: string; faint: boolean; xs: number[]; tops: number[]; clipped: number[] }
+
+/**
+ * Sticks grouped by colour (and faintness, for the lower half): their x on the shared m/z scale and
+ * where they end (`y` of the ratio to the half's 100 %). A stick above 100 % ends at 100 % and is
+ * listed in `clipped`, for a marker.
+ */
+export function stickGroups(
+  items: { mz: number; ratio: number; color: string; faint?: boolean }[],
+  x: (mz: number) => number,
+  y: (ratio: number) => number,
+): Sticks[] {
+  const groups = new Map<string, Sticks>()
+  for (const item of items) {
+    const faint = item.faint === true
+    const key = `${item.color}/${faint}`
+    let g = groups.get(key)
+    if (!g) groups.set(key, (g = { color: item.color, faint, xs: [], tops: [], clipped: [] }))
+    const at = x(item.mz)
+    g.xs.push(at)
+    g.tops.push(y(Math.min(1, Math.max(0, item.ratio))))
+    if (item.ratio > 1) g.clipped.push(at)
+  }
+  return [...groups.values()]
+}
+
+/** Small triangles pointing away from the axis at `y`, marking sticks clipped at 100 % (`up`: upper half). */
+export function clipMarks(xs: number[], y: number, up: boolean): string {
+  const tip = up ? y - 5 : y + 5
+  return xs.map((x) => `M${px(x - 3)} ${px(y)}L${px(x)} ${px(tip)}L${px(x + 3)} ${px(y)}Z`).join('')
+}
+
 /**
  * The band of ±`tolerance` around 0 ppm over the m/z range: a rectangle for ppm; for Da a band that
  * narrows with m/z (a fixed Da tolerance is more ppm at low m/z), sampled at `steps` points and clipped
@@ -88,7 +120,15 @@ export function bandPath(
 /** The width of a label in pixels, estimated (the SVG is laid out before the text is measured). */
 export function textWidth(text: string, fontSize: number): number {
   let w = 0
-  for (const ch of text) w += ch === ' ' ? 0.3 : ch === '/' || ch === '.' || ch === '-' ? 0.35 : /[₀-₉]/.test(ch) ? 0.42 : /[+]/.test(ch) ? 0.6 : 0.58
+  for (const ch of text) {
+    if (ch === ' ') w += 0.3
+    else if (ch === '/' || ch === '.' || ch === '-') w += 0.38
+    else if (/[₀-₉]/.test(ch)) w += 0.45
+    else if (ch === '+') w += 0.62
+    else if (/[A-Z]/.test(ch)) w += 0.68
+    else if (/[0-9]/.test(ch)) w += 0.6
+    else w += 0.56
+  }
   return w * fontSize
 }
 
