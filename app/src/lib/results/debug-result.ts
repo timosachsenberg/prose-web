@@ -4,22 +4,26 @@
 import type { DebugResultFlag } from '../debug'
 import { navigate } from '../route.svelte'
 import { openStoredResult } from '../search/session.svelte'
-import { loadDebugResult } from './synthetic'
+import { loadDebugResult, syntheticSpectra } from './synthetic'
 
-export function openDebugResult(flag: DebugResultFlag): void {
+/** `peaks`: the peaks per spectrum of the stored spectra every PSM gets (0: no spectra). */
+export function openDebugResult(flag: DebugResultFlag, peaks = 0): void {
   const { tables, design, summary, psmFdr, proteinFdr } = loadDebugResult(flag)
   const id = openStoredResult({
     outcome: {
       tables,
       summary,
-      spectra: {
-        psmSpectrum: new Int32Array(tables.psms.count).fill(-1),
-        offsets: new Uint32Array(1),
-        mz: new Float32Array(0),
-        intensity: new Float32Array(0),
-        precursorMz: new Float64Array(0),
-        collisionEnergy: new Float32Array(0),
-      },
+      spectra:
+        peaks > 0
+          ? syntheticSpectra(tables, peaks)
+          : {
+              psmSpectrum: new Int32Array(tables.psms.count).fill(-1),
+              offsets: new Uint32Array(1),
+              mz: new Float32Array(0),
+              intensity: new Float32Array(0),
+              precursorMz: new Float64Array(0),
+              collisionEnergy: new Float32Array(0),
+            },
       seconds: 161,
     },
     design,

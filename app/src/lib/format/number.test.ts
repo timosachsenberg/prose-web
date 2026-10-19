@@ -23,6 +23,16 @@ describe('signedNumber', () => {
     expect(signedNumber(-0.0004, 3, { plus: false })).toBe('0.000') // no "-0.000"
   })
 
+  it('can drop the zeros at the end of the decimals (axis ticks)', () => {
+    expect(signedNumber(-2.5, 2, { plus: false, trim: true })).toBe('−2.5')
+    expect(signedNumber(-1, 2, { plus: false, trim: true })).toBe('−1')
+    expect(signedNumber(0, 2, { plus: false, trim: true })).toBe('0')
+    expect(signedNumber(-0.001, 2, { plus: false, trim: true })).toBe('0')
+    expect(signedNumber(10, 2, { plus: false, trim: true })).toBe('10')
+    expect(signedNumber(0.25, 2, { plus: true, trim: true })).toBe('+0.25')
+    expect(signedNumber(100, 0, { plus: false, trim: true })).toBe('100')
+  })
+
   it('writes a dash for what is no number', () => {
     expect(signedNumber(NaN, 2)).toBe('–')
     expect(signedNumber(Infinity, 2)).toBe('–')

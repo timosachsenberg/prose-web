@@ -89,6 +89,21 @@ describe('ptmRows', () => {
   })
 })
 
+describe('ptmRows peptides', () => {
+  it('has no peptide count where the engine reports more peptides than PSMs (it is no peptide count then)', () => {
+    const odd: NonNullable<ModificationAnalysis> = {
+      ...analysis,
+      ptms: { ...analysis.ptms, entries: [{ ...analysis.ptms.entries[0], count: 161, uniquePeptides: 1111 }, analysis.ptms.entries[1]] },
+    }
+    const rows = ptmRows(odd)
+    expect(rows[0].peptides).toBeNull()
+    expect(rows[1].peptides).toBe(18)
+    // as many peptides as PSMs is possible
+    const equal = ptmRows({ ...analysis, ptms: { ...analysis.ptms, entries: [{ ...analysis.ptms.entries[0], count: 90, uniquePeptides: 90 }] } })
+    expect(equal[0].peptides).toBe(90)
+  })
+})
+
 describe('shiftSummary', () => {
   it('says how many PSMs carry a shift and how many are unmodified', () => {
     expect(shiftSummary(analysis)).toEqual({ total: 1000, shifted: 200, unmodified: 800, shareShifted: 0.2, unassigned: 60, mapped: 140 })

@@ -12,9 +12,10 @@
 <script lang="ts">
   // A histogram drawn by hand (SVG): bars of 2 px apart with the data end rounded, one or two series
   // side by side in each bin, a hairline grid, round ticks, the x axis named, an optional reference at
-  // zero and an optional marker (the median) with its direct label. Hovering a bin reads its range and
-  // counts; the numbers are also in the table under the chart (`ChartCard`). The title and description
-  // name what it shows for screen readers.
+  // zero and an optional marker (the median) with its direct label. With two series or more, each is
+  // named in the plot above its tallest bar, so colour is not the only cue. Hovering a bin reads its
+  // range and counts; the numbers are also in the table under the chart (`ChartCard`). The title and
+  // description name what it shows for screen readers.
   import { barPath, tickLabel } from '$lib/format/chart'
   import { formatCount } from '$lib/results/display'
   import { niceTicks, px, scale, tickStep, textWidth } from '$lib/psm/plot'
@@ -69,16 +70,21 @@
   const yTicks = $derived(niceTicks(0, yMax, 4))
   const xTicks = $derived(niceTicks(edges[0], edges[nBins], Math.max(2, Math.floor((width - M.left - M.right) / 70))))
 
-  /** The bars: per bin and series a rounded column; a bin of one series fills the bin (2 px apart), of two shares it. */
+  /** Where the bars of bin `b` start and how wide each is: a bin of one series fills the bin (2 px apart), of two shares it. */
+  function slotOf(b: number): { start: number; each: number } {
+    const k = series.length
+    const left = x(edges[b])
+    const slot = Math.max(1, x(edges[b + 1]) - left - 2)
+    const each = Math.min(24, (slot - (k - 1)) / k)
+    const used = each * k + (k - 1)
+    return { start: left + 1 + (slot - used) / 2, each }
+  }
+
+  /** The bars: per bin and series a rounded column. */
   const bars = $derived.by(() => {
     const out: { path: string; series: HistogramSeries; bin: number }[] = []
-    const k = series.length
     for (let b = 0; b < nBins; b++) {
-      const left = x(edges[b])
-      const slot = Math.max(1, x(edges[b + 1]) - left - 2)
-      const each = Math.min(24, (slot - (k - 1)) / k)
-      const used = each * k + (k - 1)
-      const start = left + 1 + (slot - used) / 2
+      const { start, each } = slotOf(b)
       series.forEach((s, i) => {
         const count = s.counts[b] ?? 0
         if (count <= 0) return
@@ -86,6 +92,32 @@
         out.push({ path: barPath(start + i * (each + 1), top, each, plotBottom - top, 4), series: s, bin: b })
       })
     }
+    return out
+  })
+
+  // The names of the series, in the plot above each one's tallest bar (a later label that would touch an
+  // earlier one is lifted above it)
+  const LABEL_SIZE = 11
+  const labels = $derived.by(() => {
+    const out: { name: string; x: number; y: number }[] = []
+    if (series.length < 2) return out
+    series.forEach((s, i) => {
+      let bin = -1
+      let tallest = 0
+      s.counts.forEach((c, b) => {
+        if (c > tallest) (tallest = c), (bin = b)
+      })
+      if (bin < 0) return
+      const { start, each } = slotOf(bin)
+      const w = textWidth(s.name, LABEL_SIZE)
+      const lx = Math.min(Math.max(start + i * (each + 1) + each / 2 - w / 2, M.left), Math.max(M.left, width - M.right - w))
+      let ly = Math.min(y(tallest), plotBottom - 2) - 5
+      for (const other of out) {
+        const ow = textWidth(other.name, LABEL_SIZE)
+        if (lx < other.x + ow + 2 && other.x < lx + w + 2 && Math.abs(ly - other.y) < LABEL_SIZE + 2) ly = other.y - (LABEL_SIZE + 2)
+      }
+      out.push({ name: s.name, x: lx, y: Math.max(LABEL_SIZE, ly) })
+    })
     return out
   })
 
@@ -106,9 +138,16 @@
     hover ? [range(hover.bin), ...series.map((s) => `${s.name} · ${formatCount(s.counts[hover!.bin] ?? 0)} PSMs`)] : [],
   )
 
-  // the marker's label sits over the line, turned to the inside near the edges
+  // The marker's label sits beside the line (to its right, else to its left); a long label that fits on
+  // neither side stands at the top of the plot, within its edges
   const markerAt = $derived(marker ? x(marker.x) : 0)
-  const markerEnd = $derived(marker ? markerAt + textWidth(marker.label, 11) + 8 > width - M.right : false)
+  const markerLabel = $derived.by(() => {
+    if (!marker) return { x: 0, anchor: 'start' as const, y: M.top + 1 }
+    const w = textWidth(marker.label, 11)
+    if (markerAt + 4 + w <= width - M.right) return { x: markerAt + 4, anchor: 'start' as const, y: M.top + 1 }
+    if (markerAt - 4 - w >= M.left) return { x: markerAt - 4, anchor: 'end' as const, y: M.top + 1 }
+    return { x: Math.min(Math.max(markerAt - w / 2, M.left), Math.max(M.left, width - M.right - w)), anchor: 'start' as const, y: M.top - 8 }
+  })
 </script>
 
 <div class="relative" bind:clientWidth={width}>
@@ -147,12 +186,26 @@
       <path d={bar.path} fill={bar.series.color} data-testid={bar.series.testid} data-bin={bar.bin} />
     {/each}
 
+    {#each labels as label (label.name)}
+      <text
+        x={px(label.x)}
+        y={px(label.y)}
+        font-size={LABEL_SIZE}
+        font-weight="600"
+        fill={ink}
+        stroke="#ffffff"
+        stroke-width="3"
+        stroke-linejoin="round"
+        paint-order="stroke"
+        data-testid="series-label">{label.name}</text>
+    {/each}
+
     {#if marker}
       <line x1={px(markerAt)} x2={px(markerAt)} y1={M.top - 4} y2={plotBottom} stroke={ink} stroke-width="1.5" data-testid="marker-line" />
       <text
-        x={px(markerAt + (markerEnd ? -4 : 4))}
-        y={M.top + 1}
-        text-anchor={markerEnd ? 'end' : 'start'}
+        x={px(markerLabel.x)}
+        y={px(markerLabel.y)}
+        text-anchor={markerLabel.anchor}
         font-size="11"
         font-weight="600"
         fill={ink}

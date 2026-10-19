@@ -61,7 +61,8 @@ export type PtmRow = {
   /** observed − theoretical, in mDa. */
   deviation: string
   psms: number
-  peptides: number
+  /** Distinct peptides among the PSMs; null if the engine reports more than there are PSMs (then it is no peptide count). */
+  peptides: number | null
   share: string
   /** The residues the modification can sit on (Unimod). */
   residues: string
@@ -75,7 +76,7 @@ export function ptmRows(a: Analysis): PtmRow[] {
     observed: signedNumber(e.observedMass, 4),
     deviation: signedNumber(e.massDeviation * 1000, 3, { plus: false }),
     psms: e.count,
-    peptides: e.uniquePeptides,
+    peptides: e.uniquePeptides > e.count ? null : e.uniquePeptides,
     share: percent(e.percentage),
     residues: e.targetResidues,
   }))

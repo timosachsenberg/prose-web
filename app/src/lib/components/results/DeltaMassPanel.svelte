@@ -35,7 +35,7 @@
   <div>
     <h2 id="delta-mass-heading" class="text-[13px] font-semibold">Mass shifts (open search)</h2>
     <p class="mt-0.5 text-xs text-muted-foreground" data-testid="shift-summary">
-      {formatCount(summary.shifted)} of {formatCount(summary.total)} PSMs carry a mass shift above 0.05 Da ({(summary.shareShifted * 100).toFixed(1)} %);
+      {formatCount(summary.shifted)} of {formatCount(summary.total)} PSMs (targets and decoys) carry a mass shift above 0.05 Da ({(summary.shareShifted * 100).toFixed(1)} %);
       {formatCount(summary.unmodified)} are unmodified.
       {#if summary.shifted > 0}
         Of the shifted PSMs, {formatCount(summary.mapped)} match a known modification and {formatCount(summary.unassigned)} do not.
@@ -98,7 +98,7 @@
                 <Table.Head scope="col" class="{head} h-auto text-right">PSMs</Table.Head>
                 <Table.Head scope="col" class="{head} h-auto text-right" title="Distinct peptides (with their modifications) among those PSMs">Peptides</Table.Head>
                 <Table.Head scope="col" class="{head} h-auto text-right" title="Share of the PSMs that match a known modification">%</Table.Head>
-                <Table.Head scope="col" class="{head} h-auto text-left" title="The residues the modification can sit on (Unimod)">Residues</Table.Head>
+                <Table.Head scope="col" class="{head} h-auto text-left" title="The residues the modification can sit on, as the Unimod entry lists them">Residues (Unimod)</Table.Head>
               </Table.Row>
             </Table.Header>
             <Table.Body>
@@ -109,15 +109,15 @@
                   <Table.Cell data-column="observed" class="{cell} text-right">{row.observed}</Table.Cell>
                   <Table.Cell data-column="deviation" class="{cell} text-right">{row.deviation}</Table.Cell>
                   <Table.Cell data-column="psms" class="{cell} text-right">{formatCount(row.psms)}</Table.Cell>
-                  <Table.Cell data-column="peptides" class="{cell} text-right">{formatCount(row.peptides)}</Table.Cell>
+                  <Table.Cell data-column="peptides" class="{cell} text-right" title={row.peptides === null ? 'The engine reports more peptides than PSMs for this shift, so the count is not shown' : undefined}>{row.peptides === null ? '–' : formatCount(row.peptides)}</Table.Cell>
                   <Table.Cell data-column="share" class="{cell} text-right">{row.share}</Table.Cell>
                   <Table.Cell data-column="residues" class="{cell} text-left">{row.residues}</Table.Cell>
                 </Table.Row>
               {:else}
                 <Table.Row class="hover:bg-transparent" data-testid="ptm-empty">
                   <Table.Cell colspan={8} class="whitespace-normal px-3 py-3 text-muted-foreground">
-                    No mass shift matched a known modification. The {formatCount(summary.unassigned)} shifted PSMs have masses that no
-                    modification of the Unimod list explains; the table on the left lists their shifts.
+                    The engine matched none of the {formatCount(summary.unassigned)} shifted PSMs to a known modification; the table on
+                    the left lists their shifts.
                   </Table.Cell>
                 </Table.Row>
               {/each}

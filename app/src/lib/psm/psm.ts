@@ -115,6 +115,21 @@ export function nceFor(file: ProSEFileSummary | undefined, collisionEnergy: numb
   return { nce: DEFAULT_NCE, source: 'default', label: label(DEFAULT_NCE, 'default') }
 }
 
+/** What PeptDeep's predictMS2 takes (the module refuses other values with InvalidValue). */
+export const PEPTDEEP_RANGE = { nce: [10, 60], charge: [1, 6] } as const
+
+/**
+ * Why PeptDeep cannot predict at this NCE and charge ("NCE 75 is outside PeptDeep's range 10–60"), or
+ * null. A search can record or use an NCE outside the range (the file's collision energy).
+ */
+export function predictionRange(nce: number, charge: number): string | null {
+  const [lowNce, highNce] = PEPTDEEP_RANGE.nce
+  const [lowCharge, highCharge] = PEPTDEEP_RANGE.charge
+  if (!(nce >= lowNce && nce <= highNce)) return `NCE ${Number(nce.toFixed(1))} is outside PeptDeep's range ${lowNce}–${highNce}`
+  if (!(charge >= lowCharge && charge <= highCharge)) return `Charge ${charge} is outside PeptDeep's range ${lowCharge}–${highCharge}`
+  return null
+}
+
 export type Peaks = {
   /** The spectrum's index in `StoredSpectra`. */
   index: number

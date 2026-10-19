@@ -150,13 +150,13 @@ export async function startSearch(): Promise<void> {
 }
 
 /**
- * New search still holds the inputs of `result` (a search of this session): the same files, by name
- * and order, and the same database. It can then search them again with other settings.
+ * New search still holds the inputs of `result`: the same files, by name and order, and the same
+ * database. It can then search them again with other settings. A result from History or a project
+ * file has no files of its own, so it qualifies only when New search holds them again.
  */
 export function canSearchAgain(result: OpenResult): boolean {
   const rows = result.design.rows
   return (
-    result.engineResult &&
     form.database?.file.name === result.settings.database &&
     form.files.length === rows.length &&
     form.files.every((r, i) => r.file.name === rows[i].fileName)

@@ -2,6 +2,7 @@
   import { Badge } from '$lib/components/ui/badge'
   import { engineState } from '$lib/engine/app-engine.svelte'
   import { formatHash, type Route, type View } from '$lib/route'
+  import { history } from '$lib/persist/history.svelte'
   import { exportName } from '$lib/results/exports'
   import { resultsViewFor } from '$lib/results/view.svelte'
   import { openResult, searchProgress } from '$lib/search/session.svelte'
@@ -34,6 +35,15 @@
     const s = Math.round(result.outcome.seconds)
     const took = s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`
     return `${exportName(result)} · ${files} ${files === 1 ? 'file' : 'files'} · finished ${finished} · ${took}`
+  })
+
+  // what became of the save of the open result (a search of this session; stored ones have no status)
+  const saved = $derived.by(() => {
+    const save = history.save
+    if (!result || !save || save.id !== result.id) return null
+    if (save.state === 'saving') return { state: save.state, text: 'Saving to History…', title: 'The search is being written to this browser\'s storage' }
+    if (save.state === 'saved') return { state: save.state, text: 'Saved to History', title: 'Open History' }
+    return { state: save.state, text: 'Not saved to History', title: save.message }
   })
 
   // "OpenMS 3.7 · 16 threads"; the full version in the title
@@ -70,6 +80,14 @@
   {#if result}
     <Badge variant="outline" class="h-6 max-w-[28rem] truncate bg-background px-2.5 font-normal text-muted-foreground" data-testid="result-chip"
       >{resultChip}</Badge>
+    {#if saved}
+      <a
+        href={formatHash({ view: 'history' })}
+        class="text-xs text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        data-testid="history-state"
+        data-state={saved.state}
+        title={saved.title}>{saved.text}</a>
+    {/if}
   {/if}
   <div class="flex-1"></div>
   {#if searchProgress.running && route.view !== 'search'}

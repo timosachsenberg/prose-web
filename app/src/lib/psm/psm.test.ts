@@ -19,6 +19,7 @@ import {
   modificationList,
   nceFor,
   precursorOptions,
+  predictionRange,
   resolveOptions,
   similarityText,
   spectrumPeaks,
@@ -64,6 +65,13 @@ describe('search settings of the view', () => {
     expect(instrumentOf({ 'peptdeep:instrument': 'timsTOF' })).toBe('timsTOF')
     expect(instrumentOf({}, { 'peptdeep:instrument': 'Lumos' })).toBe('Lumos')
     expect(instrumentOf({})).toBe('QE')
+  })
+
+  it("says when PeptDeep cannot predict at the PSM's NCE or charge (predictMS2 takes NCE 10-60, charge 1-6)", () => {
+    expect(predictionRange(75, 2)).toBe("NCE 75 is outside PeptDeep's range 10–60")
+    expect(predictionRange(9.46, 2)).toBe("NCE 9.5 is outside PeptDeep's range 10–60")
+    expect(predictionRange(30, 7)).toBe("Charge 7 is outside PeptDeep's range 1–6")
+    for (const [nce, charge] of [[10, 1], [60, 6], [27.5, 3]]) expect(predictionRange(nce, charge)).toBeNull()
   })
 
   it("takes the NCE the search used for the PSM's file, else the spectrum's, else 30, and says which", () => {

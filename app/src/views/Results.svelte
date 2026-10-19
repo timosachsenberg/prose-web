@@ -4,6 +4,7 @@
   // panel beside the Proteins table; a PSM opens the PSM view beside the PSM table, which then narrows
   // to the list that "Previous" and "Next" go through. The Overview (files, and the mass shifts of an
   // open search), Samples and QC tabs show the search as a whole; Proteins stays the first view.
+  import SaveNotice from '$lib/components/history/SaveNotice.svelte'
   import ColumnsMenu from '$lib/components/results/ColumnsMenu.svelte'
   import FilterBar from '$lib/components/results/FilterBar.svelte'
   import KeyFigures from '$lib/components/results/KeyFigures.svelte'
@@ -22,6 +23,7 @@
   import { formatCount } from '$lib/results/display'
   import { exportCsv } from '$lib/results/exports'
   import { keyFigures, levelTotal } from '$lib/results/figures'
+  import { restoreFromHistory } from '$lib/persist/history.svelte'
   import { resultsViewFor, type Tab } from '$lib/results/view.svelte'
   import { openResult } from '$lib/search/session.svelte'
   import { tick } from 'svelte'
@@ -30,6 +32,23 @@
 
   const result = $derived(openResult.current !== null && openResult.current.id === id ? openResult.current : null)
   const view = $derived(result ? resultsViewFor(result) : null)
+
+  // An address of a search that is not open (after a reload): History may have it
+  let restoring = $state<string | null>(null)
+  let restoreFailed = $state<{ id: string; reason: string | null } | null>(null)
+  $effect(() => {
+    const wanted = id
+    if (wanted === null || result !== null || restoring === wanted || restoreFailed?.id === wanted) return
+    restoring = wanted
+    restoreFromHistory(wanted)
+      .then((found) => {
+        if (!found) restoreFailed = { id: wanted, reason: null }
+      })
+      .catch((e) => (restoreFailed = { id: wanted, reason: String((e as Error)?.message ?? e) }))
+      .finally(() => {
+        if (restoring === wanted) restoring = null
+      })
+  })
 
   // at the search's cutoffs, without decoys: the key figures and the tabs' counts
   const figures = $derived(view ? keyFigures(view.model, view.result.outcome.summary) : null)
@@ -144,6 +163,7 @@
       class="flex min-w-0 flex-col gap-3 py-4 {psmOpen ? 'flex-none border-r pr-3 pl-4' : 'flex-1 px-5'}"
       style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>
       <h1 class="sr-only">Results</h1>
+      <SaveNotice id={view.result.id} />
       {#if !panelOpen && !psmOpen}
         <KeyFigures {figures} proteinFdr={view.result.proteinFdr} proteinFdrApplied={view.result.outcome.summary.proteinFdrApplied} />
       {/if}
@@ -226,9 +246,10 @@
 {:else}
   <section data-testid="view-results" class="mx-auto max-w-[1120px] px-5 pt-6 pb-24">
     <h1 class="mb-1 text-xl font-semibold tracking-tight">Results</h1>
-    <p class="mb-5 text-muted-foreground">
-      {#if id === null}No result is open. Start a search, or open one from History.{:else}Result {id} is not open in this
-        session.{/if}
+    <p class="mb-5 text-muted-foreground" data-testid="results-none">
+      {#if id === null}No result is open. Start a search, or open one from History.{:else if restoring === id}Opening result {id}
+        from History…{:else if restoreFailed?.id === id && restoreFailed.reason}Result {id} could not be opened from
+        History: {restoreFailed.reason}{:else}Result {id} is not open, and History does not have it. Open one from History.{/if}
     </p>
   </section>
 {/if}

@@ -3,7 +3,7 @@
 // Only the tests and the debug results (`?debug=large|small`, debug-result.ts) use them.
 
 import { resolveDesign, type DesignInput, type DesignResolution } from '../design/model'
-import type { ModificationAnalysis, ProSEMultiSummary, ResultTables } from '../engine/openms-types'
+import type { ModificationAnalysis, ProSEMultiSummary, ResultTables, StoredSpectra } from '../engine/openms-types'
 
 export type ProteinSpec = {
   accession: string
@@ -376,8 +376,24 @@ export function syntheticSummary(t: ResultTables, cutoffs: { psmFdr: number; pro
       decoyPSMs: decoys[f],
       percolator: { applied: true, skipped: null, warning: null },
       peptdeepNce: null,
+      precursorError: null,
+      fragmentError: null,
       secondsSearch: 10,
     })),
+    search: {
+      databaseFile: 'synthetic.fasta',
+      enzyme: 'Trypsin',
+      openSearch: false,
+      calibration: false,
+      chunked: false,
+      decoyMode: 'auto',
+      targetProteins: 0,
+      decoyProteins: 0,
+      indexedPeptides: 0,
+      indexedFragments: 0,
+      secondsIndexBuild: 0,
+      secondsTotal: 10 * t.files.length,
+    },
     proteinFdrApplied: true,
     psmFdr: cutoffs.psmFdr,
     proteinFdr: cutoffs.proteinFdr,
@@ -515,4 +531,36 @@ export function loadDebugResult(which: 'large' | 'large1' | 'dense' | 'small'): 
     for (const f of summary.files) f.percolator = null
   }
   return { tables, design: syntheticDesign(tables.files), summary, ...cutoffs }
+}
+
+/**
+ * Stored spectra for the PSMs of `tables` (a spectrum per PSM with a q-value within `maxQ`, about `peaks`
+ * peaks each, m/z ascending): float32 peaks as the engine hands them over, some precursors without m/z or
+ * collision energy (NaN).
+ */
+export function syntheticSpectra(tables: ResultTables, peaks = 120, maxQ = 1): StoredSpectra {
+  const rand = random(7)
+  const { count, qValue } = tables.psms
+  const psmSpectrum = new Int32Array(count).fill(-1)
+  let n = 0
+  for (let i = 0; i < count; i++) if (!(qValue[i] > maxQ)) psmSpectrum[i] = n++
+  const offsets = new Uint32Array(n + 1)
+  for (let s = 0; s < n; s++) offsets[s + 1] = offsets[s] + Math.max(1, peaks + (s % 17) - 8)
+  const mz = new Float32Array(offsets[n])
+  const intensity = new Float32Array(offsets[n])
+  for (let s = 0; s < n; s++) {
+    let m = 100 + rand() * 50
+    for (let p = offsets[s]; p < offsets[s + 1]; p++) {
+      m += 1 + rand() * 8
+      mz[p] = m
+      intensity[p] = Math.exp(rand() * 12)
+    }
+  }
+  const precursorMz = new Float64Array(n)
+  const collisionEnergy = new Float32Array(n)
+  for (let s = 0; s < n; s++) {
+    precursorMz[s] = s % 23 === 0 ? NaN : 300 + rand() * 900
+    collisionEnergy[s] = s % 29 === 0 ? NaN : 27 + (s % 7)
+  }
+  return { psmSpectrum, offsets, mz, intensity, precursorMz, collisionEnergy }
 }

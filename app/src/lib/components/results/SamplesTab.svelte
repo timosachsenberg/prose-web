@@ -43,6 +43,7 @@
   <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
     <p class="text-xs text-muted-foreground" data-testid="samples-note">
       Target PSMs at the search's PSM FDR ({psmFdr}). Peptides are distinct sequences, proteins are protein groups at the protein FDR.
+      The key figures count peptide forms and protein groups; the totals here count distinct sequences and groups with a PSM.
     </p>
     {#if view.hasTechReplicates}
       <!-- the same setting as the Columns menu of the Proteins and Peptides tabs -->
@@ -68,7 +69,7 @@
           {#if group.name !== null}
             <Table.Row class="bg-muted/40 hover:bg-muted/40" data-testid="condition-row">
               <Table.Head scope="rowgroup" class="h-auto border-b px-2.5 py-1.5 text-left font-semibold"
-                >{group.name}<span class="ml-1.5 font-normal text-muted-foreground">· {group.samples.length} {group.samples.length === 1 ? 'sample' : 'samples'}</span></Table.Head>
+                >{group.name}<span class="ml-1.5 font-normal text-muted-foreground">· {group.sampleCount} {group.sampleCount === 1 ? 'sample' : 'samples'}</span></Table.Head>
               <Table.Cell data-column="files" class="{cell} font-medium">{formatCount(files(group.samples))}</Table.Cell>
               {@render numbers(group.counts, `${cell} font-medium`)}
             </Table.Row>

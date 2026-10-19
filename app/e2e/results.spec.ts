@@ -148,12 +148,11 @@ test('exports the filtered view as CSV', async ({ page }) => {
     expect(fields(lines[0])).toContain(sample)
   }
 
-  // the header's Export menu: CSV of the current view; the project waits for History; no idXML
-  // without the engine's result
+  // the header's Export menu: CSV of the current view, the project file; no idXML without the engine's result
   await page.getByRole('button', { name: 'Export', exact: true }).click()
   await expect(page.getByRole('menuitem', { name: 'CSV (current view)' })).toBeEnabled()
   await expect(page.getByRole('menuitem', { name: 'Design (design.tsv)' })).toBeEnabled()
-  await expect(page.getByRole('menuitem', { name: 'Project (.prose)' })).toHaveAttribute('aria-disabled', 'true')
+  await expect(page.getByRole('menuitem', { name: 'Project (.prose)' })).toBeEnabled()
   const idxml = page.getByRole('menuitem', { name: 'idXML (merged)' })
   await expect(idxml).toHaveAttribute('aria-disabled', 'true')
   await expect(idxml).toHaveAttribute('title', 'Run the search again to export idXML')

@@ -9,7 +9,7 @@ import { RELOAD } from '../engine/protocol'
 import { releaseResultsView } from '../results/view.svelte'
 import { describeFailure, type Failure } from './failure'
 
-/** A finished search, open in this session (History keeps them later). */
+/** A finished search, open in this session (History keeps it, see persist/history.svelte.ts). */
 export type OpenResult = {
   id: string
   createdAt: string
@@ -20,6 +20,8 @@ export type OpenResult = {
   proteinFdr: number
   /** The search ran in this session's engine, whose worker may still hold it (for idXML). */
   engineResult: boolean
+  /** Set for a result opened from History or a project file: its name there and who made it. */
+  stored?: { name: string; appVersion: string; moduleVersion: string }
   settings: {
     /** The parameters that differ from ProSE's defaults. */
     parameters: Record<string, unknown>
@@ -101,12 +103,29 @@ export const openResult = {
   },
 }
 
-/** Opens a result that did not come from this session's engine (the debug results; History later). Returns its id. */
-export function openStoredResult(result: Omit<OpenResult, 'id' | 'createdAt' | 'engineResult'>): string {
-  const id = newId()
+/**
+ * Opens a result that did not come from this session's engine (a search of History, a project file, the
+ * debug results) in place of the open one, whose view and caches are released. A stored search keeps
+ * its `id` and `createdAt` (`origin`), so that its address stays the same. Returns the id.
+ */
+export function openStoredResult(
+  result: Omit<OpenResult, 'id' | 'createdAt' | 'engineResult'>,
+  origin?: { id: string; createdAt: string },
+): string {
+  const id = origin?.id ?? newId()
   releaseResultsView()
-  open = { ...result, id, createdAt: new Date().toISOString(), engineResult: false }
+  open = { ...result, id, createdAt: origin?.createdAt ?? new Date().toISOString(), engineResult: false }
   return id
+}
+
+/** Called with every search that finished in this session (not with failed or cancelled ones). */
+type FinishedListener = (result: OpenResult) => void
+const finishedListeners = new Set<FinishedListener>()
+
+/** Registers `listener` for the searches that finish from now on; returns the way to remove it. */
+export function onSearchFinished(listener: FinishedListener): () => void {
+  finishedListeners.add(listener)
+  return () => finishedListeners.delete(listener)
 }
 
 /** The run in flight: a cancelled or replaced run ignores what its promises bring later. */
@@ -182,8 +201,16 @@ export async function runSearch(
     if (id !== runId) return null
     const resultId = newId()
     releaseResultsView() // the previous result's view, model and caches
-    open = { ...meta, id: resultId, createdAt: new Date().toISOString(), outcome, engineResult: true }
+    const finished: OpenResult = { ...meta, id: resultId, createdAt: new Date().toISOString(), outcome, engineResult: true }
+    open = finished
     searchRun.status = 'done'
+    for (const listener of finishedListeners) {
+      try {
+        listener(finished)
+      } catch {
+        // a listener must not turn a finished search into a failed one
+      }
+    }
     return resultId
   } catch (e) {
     if (id !== runId) return null

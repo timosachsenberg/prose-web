@@ -33,7 +33,7 @@
     { name: 'Protein FDR', value: summary.proteinFdrApplied ? fdr(summary.proteinFdr) : 'not applied' },
     { name: 'Fixed modifications', value: settings.fixedMods.length > 0 ? settings.fixedMods.join(', ') : 'none' },
     { name: 'Rescoring', value: rescoring },
-    { name: 'Search time', value: formatSeconds(result.outcome.seconds) },
+    { name: 'Total time', value: formatSeconds(result.outcome.seconds) },
   ])
 
   const head = 'h-auto border-b px-2.5 py-1.5 font-medium text-muted-foreground'
@@ -69,7 +69,7 @@
             {#if showNce}
               <Table.Head scope="col" class="{head} text-right" title="The normalised collision energy that PeptDeep calibrated for the file">PeptDeep NCE</Table.Head>
             {/if}
-            <Table.Head scope="col" class="{head} text-right" title="How long the search of the file took">Search time</Table.Head>
+            <Table.Head scope="col" class="{head} text-right" title="How long the database search of the file took (the engine's own measure, without reading the files and loading the models)">Database search</Table.Head>
             <Table.Head scope="col" class="{head} text-left">Status</Table.Head>
           </Table.Row>
         </Table.Header>

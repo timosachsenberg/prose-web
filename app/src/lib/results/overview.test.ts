@@ -12,12 +12,28 @@ const file = (path: string, more: Partial<ProSEFileSummary> = {}): ProSEFileSumm
   decoyPSMs: 4,
   percolator: { applied: true, skipped: null, warning: null },
   peptdeepNce: null,
+  precursorError: null,
+  fragmentError: null,
   secondsSearch: 12.34,
   ...more,
 })
 
 const summary = (files: ProSEFileSummary[]): ProSEMultiSummary => ({
   files,
+  search: {
+    databaseFile: 'db.fasta',
+    enzyme: 'Trypsin',
+    openSearch: false,
+    calibration: false,
+    chunked: false,
+    decoyMode: 'auto',
+    targetProteins: 100,
+    decoyProteins: 100,
+    indexedPeptides: 1000,
+    indexedFragments: 10000,
+    secondsIndexBuild: 1,
+    secondsTotal: 10,
+  },
   proteinFdrApplied: true,
   psmFdr: 0.01,
   proteinFdr: 0.01,

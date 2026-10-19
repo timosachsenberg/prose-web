@@ -26,7 +26,10 @@ export type SampleRow = {
 export type ConditionGroup = {
   /** `null`: the samples without a condition. */
   name: string | null
+  /** The rows: samples, or with technical replicates shown separately their measurements. */
   samples: SampleRow[]
+  /** The biological samples of the condition (a sample split into measurements counts once). */
+  sampleCount: number
   /** The condition as a whole. */
   counts: SampleCounts
 }
@@ -99,6 +102,7 @@ export function sampleTable(m: ResultModel): SamplesTable {
     const columns = g.samples.flat()
     return {
       name: g.name,
+      sampleCount: g.samples.length,
       samples: columns.map((c) => ({
         column: c,
         label: m.samples[c].label,

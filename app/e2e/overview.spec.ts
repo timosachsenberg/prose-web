@@ -25,7 +25,7 @@ test('overview lists every file', async ({ page }) => {
 
   const overview = page.getByTestId('overview-tab')
   const table = overview.getByRole('table', { name: 'Searched files' })
-  for (const name of ['File', 'Sample', 'MS2 spectra', 'Target PSMs', 'Decoy PSMs', 'Percolator', 'Search time', 'Status']) {
+  for (const name of ['File', 'Sample', 'MS2 spectra', 'Target PSMs', 'Decoy PSMs', 'Percolator', 'Database search', 'Status']) {
     await expect(table.getByRole('columnheader', { name })).toBeVisible()
   }
   // a closed search without PeptDeep: no NCE column
@@ -47,6 +47,10 @@ test('overview lists every file', async ({ page }) => {
   }
   expect(await sum('targets')).toBeGreaterThan(1000)
   expect(count(await total.locator('[data-column="targets"]').textContent())).toBe(count(await page.getByTestId('psm-count').textContent()))
+
+  // two different times: the whole run, and the database search of each file
+  await expect(overview.getByTestId('search-facts').getByText('Total time', { exact: true })).toBeVisible()
+  await expect(overview.getByText('Search time')).toHaveCount(0)
 
   // a closed search has no mass-shift panel
   await expect(page.getByTestId('delta-mass-panel')).toHaveCount(0)
@@ -143,6 +147,10 @@ test('QC shows the score distribution, the precursor error and the PSMs per file
     await expect(details.getByRole('table')).toBeVisible()
   }
 
+  // the tab has a heading of its own before the charts' headings
+  await expect(qc.getByRole('heading', { level: 2, name: 'Quality control' })).toHaveCount(1)
+  expect(await qc.getByRole('heading').evaluateAll((hs) => hs.map((h) => h.tagName))).toEqual(['H2', 'H3', 'H3', 'H3'])
+
   // targets against decoys
   const score = qc.getByTestId('qc-score')
   await expect(score.getByRole('heading')).toHaveText('Score distribution')
@@ -152,6 +160,17 @@ test('QC shows the score distribution, the precursor error and the PSMs per file
   await expect(score.getByTestId('x-label')).toHaveText('Percolator score')
   expect(await score.getByTestId('target-bar').count()).toBeGreaterThan(5)
   expect(await score.getByTestId('decoy-bar').count()).toBeGreaterThan(0)
+  // the plot names its series, so that colour is not the only cue: the labels are in the plot and do not touch
+  const names = score.getByTestId('series-label')
+  await expect(names).toHaveText(['Targets', 'Decoys'])
+  const plot = (await score.getByTestId('histogram').boundingBox())!
+  const [t, d] = [(await names.nth(0).boundingBox())!, (await names.nth(1).boundingBox())!]
+  for (const box of [t, d]) {
+    expect(box.x).toBeGreaterThanOrEqual(plot.x)
+    expect(box.x + box.width).toBeLessThanOrEqual(plot.x + plot.width)
+    expect(box.y).toBeGreaterThanOrEqual(plot.y)
+  }
+  expect(t.x + t.width <= d.x || d.x + d.width <= t.x || t.y + t.height <= d.y || d.y + d.height <= t.y).toBe(true)
   // the table has a row per bin and the counts of the legend
   const scoreRows = score.locator('details tbody tr')
   const targets = (await scoreRows.locator('[data-column="targets"]').allTextContents()).reduce((n, t) => n + count(t), 0)
@@ -162,8 +181,14 @@ test('QC shows the score distribution, the precursor error and the PSMs per file
   await expect(precursor.getByRole('heading')).toHaveText('Precursor mass error')
   await expect(precursor.getByTestId('qc-subtitle')).toContainText('Target PSMs at the search FDR')
   await expect(precursor.getByTestId('x-label')).toHaveText('Precursor error (ppm)')
-  await expect(precursor.getByTestId('median-label')).toHaveText(new RegExp(`^median [+${MINUS}]?\\d+\\.\\d ppm$`))
+  await expect(precursor.getByTestId('median-label')).toHaveText(new RegExp(`^median precursor error \\(unmodified\\) [+${MINUS}]?\\d+\\.\\d ppm$`))
   expect(await precursor.getByTestId('error-bar').count()).toBeGreaterThan(5)
+  // one series: no series label; the median's label stays inside the plot
+  await expect(precursor.getByTestId('series-label')).toHaveCount(0)
+  const precursorPlot = (await precursor.getByTestId('histogram').boundingBox())!
+  const median = (await precursor.getByTestId('median-label').boundingBox())!
+  expect(median.x).toBeGreaterThanOrEqual(precursorPlot.x)
+  expect(median.x + median.width).toBeLessThanOrEqual(precursorPlot.x + precursorPlot.width)
 
   // PSMs per file
   const files = qc.getByTestId('qc-files')
@@ -232,7 +257,7 @@ test('the mass shifts of a stored open search: a histogram, the shifts and the m
   await expect(panel.getByTestId('legend')).toContainText('Known modification')
   await expect(panel.getByTestId('legend')).toContainText('No known modification')
 
-  await expect(panel.getByTestId('shift-summary')).toContainText(/[\d,]+ of 3,000 PSMs carry a mass shift/)
+  await expect(panel.getByTestId('shift-summary')).toContainText(/[\d,]+ of 3,000 PSMs \(targets and decoys\) carry a mass shift/)
   const shifts = panel.getByRole('table', { name: 'Mass shifts' })
   await expect(shifts.locator('tbody tr').first()).toBeVisible()
   const masses = await column(shifts, 'mass')
@@ -268,7 +293,7 @@ test('open search shows delta masses', async ({ page }) => {
   await expect(chart).toBeVisible()
   expect(await chart.getByTestId('shift-bar').count()).toBeGreaterThan(2)
   const total = (await panel.getByTestId('shift-summary').textContent())!
-  expect(total).toMatch(/^[\d,]+ of [\d,]+ PSMs carry a mass shift above 0\.05 Da/)
+  expect(total).toMatch(/^[\d,]+ of [\d,]+ PSMs \(targets and decoys\) carry a mass shift above 0\.05 Da/)
 
   // the shifts as a table: a row for each bar, the most frequent first
   const shifts = panel.getByRole('table', { name: 'Mass shifts' })
@@ -283,7 +308,7 @@ test('open search shows delta masses', async ({ page }) => {
   // the table says so instead of staying empty
   const ptms = panel.getByRole('table', { name: 'Mapped modifications' })
   await expect(ptms).toBeVisible()
-  await expect(ptms.getByTestId('ptm-empty')).toContainText('No mass shift matched a known modification')
+  await expect(ptms.getByTestId('ptm-empty')).toContainText('The engine matched none of the')
 
   // the QC uses the unmodified PSMs for the precursor error
   await page.getByRole('tab', { name: 'QC' }).click()
@@ -319,5 +344,60 @@ test('a mapped modification fills the mapped-modification table', async ({ page 
   await expect(panel.getByTestId('delta-mass-chart').getByTestId('shift-label')).toHaveText(name)
   await expect(panel.getByRole('table', { name: 'Mass shifts' }).locator('tbody tr')).toHaveCount(1)
   await expect(panel.getByRole('table', { name: 'Mass shifts' }).locator('[data-column="modification"]')).toHaveText(name)
-  await expect(panel.getByTestId('shift-summary')).toContainText('1 of 43 PSMs carry a mass shift above 0.05 Da (2.3 %)')
+  await expect(panel.getByTestId('shift-summary')).toContainText('1 of 43 PSMs (targets and decoys) carry a mass shift above 0.05 Da (2.3 %)')
+})
+
+test('technical replicates: one sample on the Samples tab, its measurements when asked', async ({ page }) => {
+  test.setTimeout(240_000)
+  await page.goto('./')
+  await page.getByRole('button', { name: 'Try the example' }).click()
+  // the second copy of the file is a second measurement of the first sample
+  const replicate = page.getByLabel('Replicate of DatabaseSuitability_2.mzML')
+  await replicate.fill('1')
+  await replicate.press('Tab')
+  await expect(page.getByTestId('design-summary')).toHaveText('2 files → 1 sample · 1 condition')
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
+  const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
+  if ((await peptdeep.getAttribute('aria-checked')) === 'true') await peptdeep.click()
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 150_000 })
+
+  await page.getByRole('tab', { name: 'Samples' }).click()
+  const samples = page.getByTestId('samples-tab')
+  const table = samples.getByRole('table', { name: 'Samples by condition' })
+  const condition = table.getByTestId('condition-row')
+  const rows = table.getByTestId('sample-row')
+  const sw = samples.getByRole('switch', { name: 'Show technical replicates separately' })
+
+  // merged: one sample of two files
+  await expect(sw).toHaveAttribute('aria-checked', 'false')
+  await expect(condition.locator('th')).toContainText('example')
+  await expect(condition.locator('th')).toContainText('1 sample')
+  await expect(rows).toHaveCount(1)
+  await expect(rows.locator('th')).toHaveText('example 1')
+  await expect(rows.locator('[data-column="files"]')).toHaveText('2')
+  const merged = count(await rows.locator('[data-column="psms"]').textContent())
+  expect(merged).toBe(count(await page.getByTestId('psm-count').textContent()))
+
+  // separate: a row for each measurement, and still one sample in the condition
+  await sw.click()
+  await expect(sw).toHaveAttribute('aria-checked', 'true')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.locator('th')).toHaveText(['example 1 · TR1', 'example 1 · TR2'])
+  await expect(rows.locator('[data-column="files"]')).toHaveText(['1', '1'])
+  await expect(condition.locator('th')).toContainText('1 sample')
+  await expect(condition.locator('th')).not.toContainText('2 samples')
+  const parts = (await rows.locator('[data-column="psms"]').allTextContents()).map(count)
+  expect(parts[0] + parts[1]).toBe(merged)
+  // the setting is the one of the Columns menu: it holds on the Proteins tab
+  await page.getByRole('tab', { name: /^Proteins/ }).click()
+  await page.getByRole('button', { name: 'Columns' }).click()
+  await expect(page.getByRole('menuitemcheckbox', { name: /Show technical replicates separately/ })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Escape')
+
+  // merged again
+  await page.getByRole('tab', { name: 'Samples' }).click()
+  await sw.click()
+  await expect(rows).toHaveCount(1)
+  await expect(condition.locator('th')).toContainText('1 sample')
 })

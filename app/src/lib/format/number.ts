@@ -7,11 +7,17 @@ export const MINUS = '−'
 /**
  * `v` with `digits` decimals and its sign: "+2.05", "−5.91". The number is rounded first, so that
  * what rounds to zero has no sign ("0.00", never "−0.00"). `plus: false` leaves the plus out (a
- * score that is usually positive: "3.142", "−1.500"). What is no number is a dash ("–").
+ * score that is usually positive: "3.142", "−1.500"). `trim` drops the zeros at the end of the
+ * decimals (axis ticks: "−2.5", "0", "1"). What is no number is a dash ("–").
  */
-export function signedNumber(v: number, digits: number, { plus = true }: { plus?: boolean } = {}): string {
+export function signedNumber(
+  v: number,
+  digits: number,
+  { plus = true, trim = false }: { plus?: boolean; trim?: boolean } = {},
+): string {
   if (!Number.isFinite(v)) return '–'
-  const text = Math.abs(v).toFixed(digits)
+  let text = Math.abs(v).toFixed(digits)
+  if (trim) text = String(Number(text))
   if (Number(text) === 0) return text
   return `${v < 0 ? MINUS : plus ? '+' : ''}${text}`
 }

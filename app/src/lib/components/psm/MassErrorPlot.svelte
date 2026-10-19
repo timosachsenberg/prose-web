@@ -65,7 +65,8 @@
       ? 'no matched ions'
       : `mean ${signedNumber(stats.mean, 1)} ppm${Number.isFinite(stats.sd) ? ` · SD ${stats.sd.toFixed(1)} ppm` : ''} · dot size = intensity`,
   )
-  const fmt = (v: number) => String(Number(v.toFixed(2)))
+  /** An axis tick: two decimals at most, a real minus (U+2212). */
+  const fmt = (v: number) => signedNumber(v, 2, { plus: false, trim: true })
 </script>
 
 <div bind:clientWidth={width}>

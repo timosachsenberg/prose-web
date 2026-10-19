@@ -36,7 +36,7 @@
     },
     {
       value: figures.medianAbsPpm === null ? '–' : `${figures.medianAbsPpm.toFixed(1)} ppm`,
-      note: 'median precursor error',
+      note: 'median |precursor error|',
       title: 'Median absolute precursor mass error of those PSMs',
       testid: 'precursor-error',
     },

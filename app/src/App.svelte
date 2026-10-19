@@ -1,17 +1,26 @@
 <script lang="ts">
   import TopBar from '$lib/components/TopBar.svelte'
   import * as Tooltip from '$lib/components/ui/tooltip'
-  import { debugFlag } from '$lib/debug'
+  import { debugFlag, debugPeaks, debugSave } from '$lib/debug'
   import { startEngine } from '$lib/engine/app-engine.svelte'
+  import { initHistory, saveFinished } from '$lib/persist/history.svelte'
   import { openDebugResult } from '$lib/results/debug-result'
   import { readHash, router } from '$lib/route.svelte'
+  import { openResult } from '$lib/search/session.svelte'
+  import History from './views/History.svelte'
   import NewSearch from './views/NewSearch.svelte'
   import Results from './views/Results.svelte'
 
   readHash()
-  // ?debug=large|large1|dense|small: a stored synthetic result (?debug=engine is handled by the engine module)
+  // finished searches are saved to History as they come
+  initHistory()
+  // ?debug=large|large1|dense|small: a stored synthetic result (?debug=engine is handled by the engine module);
+  // with &save it is also saved to History
   const debug = debugFlag(location.search)
-  if (debug !== null && debug !== 'engine') openDebugResult(debug)
+  if (debug !== null && debug !== 'engine') {
+    openDebugResult(debug, debugPeaks(location.search))
+    if (debugSave(location.search) && openResult.current) void saveFinished(openResult.current)
+  }
   // OpenMS loads in the background from the start: the status chip and the search form need it
   void startEngine().catch(() => {})
 </script>
@@ -31,10 +40,7 @@
         {#if router.route.view === 'search'}
           <NewSearch />
         {:else}
-          <section data-testid="view-history">
-            <h1 class="mb-1 text-xl font-semibold tracking-tight">History</h1>
-            <p class="mb-5 text-muted-foreground">Finished searches are listed here.</p>
-          </section>
+          <History />
         {/if}
       </main>
     {/if}

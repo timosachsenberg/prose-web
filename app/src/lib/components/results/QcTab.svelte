@@ -46,6 +46,8 @@
 </script>
 
 <div class="grid grid-cols-1 items-start gap-4 pb-6 xl:grid-cols-2" data-testid="qc-content">
+  <!-- the cards are h3: the tab's own heading comes first, for the outline of the page -->
+  <h2 class="sr-only">Quality control</h2>
   <!-- targets against decoys -->
   {#if score}
     <ChartCard
@@ -106,7 +108,7 @@
         xLabel="Precursor error (ppm)"
         unit="ppm"
         zeroLine
-        marker={{ x: errors.median, label: `median ${signedNumber(errors.median, 1)} ppm` }}
+        marker={{ x: errors.median, label: `median precursor error (unmodified) ${signedNumber(errors.median, 1)} ppm` }}
         series={[{ name: 'Target PSMs', color: targetColor, counts: errors.counts, testid: 'error-bar' }]} />
     </ChartCard>
   {:else}

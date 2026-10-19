@@ -107,6 +107,15 @@ describe('sampleTable', () => {
       expect(egf.samples[0].counts).toEqual({ psms: 3, peptides: 2, proteins: 1 })
     })
 
+    it('counts the samples of a condition, not its measurements (a split sample is still one sample)', () => {
+      for (const showTechReplicates of [false, true]) {
+        const t = sampleTable(buildModel(tables, design, { showTechReplicates, psmFdr: 1, proteinFdr: 1 }))
+        expect(t.groups.map((g) => [g.name, g.sampleCount]), `separate: ${showTechReplicates}`).toEqual([['EGF', 1], ['control', 1]])
+      }
+      // (the rows are the measurements when split)
+      expect(sampleTable(buildModel(tables, design, { showTechReplicates: true, psmFdr: 1, proteinFdr: 1 })).groups[0].samples).toHaveLength(2)
+    })
+
     it('shows each measurement as its own row when asked, and the condition adds them up', () => {
       const t = sampleTable(buildModel(tables, design, { showTechReplicates: true, psmFdr: 1, proteinFdr: 1 }))
       const egf = t.groups[0]

@@ -40,6 +40,7 @@
     modificationList,
     nceFor,
     precursorOptions,
+    predictionRange,
     resolveOptions,
     similarityText,
     spectrumPeaks,
@@ -211,6 +212,12 @@
     const cached = predictions.get(key)
     if (cached) {
       prediction = { key, ions: cached, error: null }
+      return
+    }
+    // outside what PeptDeep takes (e.g. a recorded collision energy of 75): said instead of asked
+    const outOfRange = predictionRange(nce.nce, charge)
+    if (outOfRange !== null) {
+      prediction = { key, ions: null, error: outOfRange }
       return
     }
     prediction = { key, ions: null, error: null }
