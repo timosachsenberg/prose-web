@@ -185,7 +185,7 @@ Local trees used for the work:
   `peptdeep_rt_dynamic.onnx` 2.8 MB) are fetched from `openms/models/` into `/models` once per worker.
 - **Memory.** One module can address 4 GB (wasm32) or 16 GB (wasm64). Memory grows in 20 % steps and
   never shrinks; the allocator is OpenMS' build of mimalloc (`OPENMS_WASM_MALLOC=openms-mimalloc`,
-  since the packages 3.7.0-pre.fd807dc89a of PR #10659; Emscripten's `-sMALLOC=mimalloc` before). Hence
+  since the packages 3.7.0-pre.fd807dc89a of PR #10659, now 76607e6451; Emscripten's `-sMALLOC=mimalloc` before). Hence
   the fresh worker per search (B-R9, C-R13). The inputs go in file by file (B9, C4b): only the file
   being searched is in the heap.
 - **Data transfer.** Results reach the page as compact typed columns, never one object per PSM. The
@@ -244,7 +244,10 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
 - **The 64-bit module (W64).** In the manifest (size, SHA-256), but neither in the shell nor in an
   update's installation: stored only when a search first uses it (then offline too). Without room it
   is answered from the network, unstored, and STATUS says `module64Full` (not `storageFull`: the app
-  still works offline). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
+  still works offline), also after the worker restarts (kept in the generation marker, W64 r1). An
+  update's installation without room for its module drops the 64-bit stores (entry by entry; the
+  worker checks them by their keys and never holds their responses, so Chrome frees the bytes at once)
+  and tries again (W64 r1). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
 - **Updates (fix rounds 1–2).** A new version's worker installs **completely before it waits**: the
   shell and, because a previous version is active, the module (`openms.mjs`, `openms.wasm`), verified;
   DATA and the models the previous generation stored are carried over where the bytes are the new
@@ -852,7 +855,8 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
   `openms64/` with that package's `?v=`. `EngineInfo` gains `variant` and `maxFileBytes`,
   `SearchOutcome` gains `variant`. Failures name the module: "The 64-bit engine could not be loaded
   (…)", "… did not start within … s"; out-of-memory advice "a search can use at most the 16 GB of the
-  64-bit engine".
+  64-bit engine". Until the 64-bit engine has loaded once, its search's step reads "Loading the 64-bit
+  engine…" (`EngineClient.hasLoaded`).
 - **Fresh worker per search** (C-R13): `search()` starts a new worker unless the current one has run
   only init (and has the search's threads and module). The worker keeps the `ProSEResultSet` until replaced (idXML is stored lazily; `delete()` is
   pointless, memory never shrinks and the worker is discarded). `EngineClient.hasSearchResult` is false
@@ -921,7 +925,8 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
   and the final tables are silent: measured at most 5.8 s (3 × 733 MB TMT, 3 × 78 MB human
   semi-tryptic in chunks, 4 threads, Chromium).
 - **Cancel** (C4b): a no-op unless a search is in flight; terminates the search worker at once and
-  starts a new one with the threads and module of the cancelled search (no cooperative stop: the worker is never
+  starts a new one with the threads and module of the cancelled search (not for a 64-bit search: its
+  module may still be downloading, the next search that needs it starts one, W64 r1) (no cooperative stop: the worker is never
   reused after a search and holds nothing that outlives it); pending calls reject "The search was
   cancelled." / "The request was cancelled." (`EngineError.kind` `cancelled`), also those of a search
   whose worker trapped and is being restarted. Late answers of replaced workers are ignored. Load
@@ -1065,8 +1070,8 @@ threads = threadsForSearch(engine threads, files, peptdeep)   (§5.2)
 | LIMIT / WARN | 4 GB / 3 GB | 16 GB / 14 GB |
 | MODULE | 0.20 GB | 0.40 GB |
 | INDEX per 1,000 proteins, tryptic | 0.03 GB (fit 28.4 MB) | 0.025 GB (fit 21.9 MB) |
-| SPECIFICITY full / semi / none | 1 / 10 / 50 | 1 / 15 / 75 |
-| CHUNKED full / semi / none | 2 / 20 / 100 | 32⁄15 / 32 / 160 |
+| SPECIFICITY full / semi / none | 1 / 10 / 85 | 1 / 15 / 125 |
+| CHUNKED full / semi / none | 2 / 20 / 180 | 32⁄15 / 32 / 310 |
 | MOD per further variable modification | 2 | 2 |
 | G_SMALL / G_LARGE | 0.05 / 0.15 GB | 0.06 / 0.15 GB |
 | THREAD per thread above 4 | 0.025 GB | 0.035 GB |
@@ -1076,7 +1081,9 @@ threads = threadsForSearch(engine threads, files, peptdeep)   (§5.2)
 Semi measured (human needs 14.2 in wasm64; Erwinia 8.7/10.7), CHUNKED semi measured (a chunk costs
 about twice the unchunked index per protein: every chunk builds its index again, and the memory is
 not handed back between chunks; so a chunk size near the protein count gains nothing, which the min()
-covers); non-specific and the other CHUNKED values are in proportion, unmeasured. MB/GB binary.
+covers); non-specific measured in fix round 1 (Erwinia: chunks of 250, 500, 1000 in both modules,
+unchunked in wasm64, 4 and 16 threads; decisions "W64 r1 non-specific"), its wasm32 unchunked factor
+above both proportions of wasm64's (unmeasurable: it aborts); CHUNKED full in proportion. MB/GB binary.
 
 **Which module** (`chooseEngine`, `engine/variant.ts`; the user's rule): the estimate with the wasm32
 constants (`estimate32`); above 3 GB (`SWITCH_BYTES`), or a file too large for wasm32, the search runs
@@ -1084,7 +1091,8 @@ in wasm64 if the browser has Memory64 (`supportsMemory64`: `WebAssembly.validate
 module with a shared 64-bit memory, once per page) and the footer shows the estimate with the wasm64
 constants. `?debug=wasm64` forces wasm64 (where supported). What the calibration's searches do:
 human semi-tryptic in chunks of 5000, 6000, 7000, 8000 and unchunked switch (3.36, 3.96, 4.56, 5.16 and
-6.55 GB in wasm32); everything else stays, the largest 12 × 733 MB (2.63 GB) and human with 3 variable
+6.55 GB in wasm32), and Erwinia non-specific in chunks of 500 and 1000 (3.35 and 6.05 GB; chunks of 250,
+2.0 GB, stay); everything else stays, the largest 12 × 733 MB (2.63 GB) and human with 3 variable
 modifications (2.84 GB). The estimate is at or above every measured peak (by 0.03–1.1 GB), and above
 4 GB for every wasm32 search that failed.
 
@@ -1095,7 +1103,10 @@ term (the calibration found neither). No storage mode and no `INPUT_BUDGET` (B9 
 streaming): only a file above the module's MAX_FILE is refused.
 
 The plan line: wasm32 "… · estimated memory 2.6 GB of 4 GB"; wasm64 "… · estimated memory 8.1 GB ·
-64-bit engine (up to 16 GB)". Advice (amber `warn`, red `over`), by module and cause:
+64-bit engine (up to 16 GB)", its title adding "Estimated 6.4 GB in the standard 32-bit engine, above 3
+GB: the search runs in the 64-bit engine." While the proteins are counted the line has no estimate
+("… · counting proteins…"); a search started then waits for the count ("Counting proteins…" as its
+step) and its engine is chosen on it (W64 r1). Advice (amber `warn`, red `over`), by module and cause:
 
 - wasm32 (only without Memory64 above 3 GB): "Close to the 4 GB limit: consider database:chunk_size
   (e.g. 2000) under All parameters." / "…, mostly for the files: search fewer files at once.";
@@ -1110,9 +1121,9 @@ The plan line: wasm32 "… · estimated memory 2.6 GB of 4 GB"; wasm64 "… · e
 
 Start stays enabled over budget (C-R15 accepted).
 
-Tests (`memory.test.ts`): the calibration table (23 searches, 56 measured peaks in both modules at
-4–16 threads: estimate ≥ peak and within 1.15 GB; every failed wasm32 search above 4 GB; exactly the
-five named searches cross 3 GB, `chooseEngine` agrees), the constants, each term, chunking, the growth
+Tests (`memory.test.ts`): the calibration table (27 searches, 65 measured peaks in both modules at
+4–16 threads, the non-specific ones of fix round 1 included: estimate ≥ peak and within 1.15 GB; every
+failed wasm32 search above 4 GB; exactly the seven named searches cross 3 GB, `chooseEngine` agrees), the constants, each term, chunking, the growth
 schedule, the levels of both modules, a file too large in each. `plan.test.ts`: the module, the line and
 the advice with and without Memory64, the forced switch, `slowSteps`. Real large case (on demand,
 §5.9): human semi-tryptic unchunked in Chromium, 16 threads: estimate 8.8 GB, 8.66 GiB measured.
@@ -1296,11 +1307,12 @@ cache when results close; a 1 % debug variant. A read-only investigation compare
 OpenMS PR #10659 (draft, stacked on #10575) builds the module also for wasm64 (Memory64, at most 16 GB,
 files up to 16 GiB − 64 MiB) with one JavaScript API for both builds, and makes OpenMS' own build of
 mimalloc (`openms-mimalloc`) the allocator of every WebAssembly build. The app ships both packages of
-fd807dc89a and uses wasm64 only where a search needs it. Rulings: decisions §4.9.
+fd807dc89a (since fix round 1 76607e6451) and uses wasm64 only where a search needs it. Rulings:
+decisions §4.9.
 
 | Part | What |
 |---|---|
-| Packages | `public/openms/` `@openms/openms-wasm-mt@3.7.0-pre.fd807dc89a` (replaces 7abcb280e2), `public/openms64/` `@openms/openms-wasm64-mt@3.7.0-pre.fd807dc89a` (no models: both use `openms/models/`). Ids `__OPENMS_ID__`/`__OPENMS64_ID__` = `MODULE_ID`/`MODULE64_ID` (SHA-256 of each directory). |
+| Packages | `public/openms/` `@openms/openms-wasm-mt@3.7.0-pre.76607e6451` (first fd807dc89a, replacing 7abcb280e2), `public/openms64/` `@openms/openms-wasm64-mt@3.7.0-pre.76607e6451` (no models: both use `openms/models/`). Ids `__OPENMS_ID__`/`__OPENMS64_ID__` = `MODULE_ID`/`MODULE64_ID` (SHA-256 of each directory). |
 | Choice | `engine/variant.ts`: `supportsMemory64()` (`WebAssembly.validate(MEMORY64_PROBE)`, a shared 64-bit memory), `chooseEngine({ estimate32, fileTooLarge32, memory64, force })`: wasm64 above 3 GB (wasm32 constants) where supported; `?debug=wasm64` forces it. `search/plan.svelte.ts`: `memory64`, `forceWasm64`, `estimate32`, `engine`, `estimate` (in the chosen module), the line and the advice (§5.3.5); `startSearch` sends `engine` and `slowSteps`. |
 | Engine | §5.2: the search worker of the search's module, restarts keep it, the viewer stays wasm32, per-build start timeout, messages that name the module, the module's own file limit. |
 | Shown | Footer ("· 64-bit engine (up to 16 GB)", or why this browser cannot), progress ("· 64-bit"), Overview ("Engine"), History (a "64-bit" tag), the record and project file (`moduleVariant`), the chip's title (whether the 64-bit engine is stored). The status chip itself is unchanged. |
@@ -1341,18 +1353,19 @@ Costs: wasm64 is 8–22 % slower without PeptDeep at 4 threads (4–8 % with), 8
 
 ### 5.8 App tests
 
+At W64 fix round 1 (packages 76607e6451): vitest 47 files, 556 tests (new since W64: `session.test.ts`;
+the counted proteins in `plan.test.ts`, the non-specific measurements in `memory.test.ts`, the lazy
+64-bit restart in `client.test.ts`); `npm run check` 1052 files, 0 errors, 0 warnings; e2e 100 tests (98
+pass, 2 on demand: `PROSE_BIG_MZML`, `PROSE_LARGE_MZML`), with `engine64.spec.ts` ×4 (+ a search started
+while the proteins are counted) and `deploy.spec.ts` ×22 (+ an update over a stored 64-bit engine; the
+room note survives a stopped worker). The formerly flaky `an engine error names the stage and the file…`
+passes 20 of 20 on 76607e6451 (decisions "W64 r1 packages").
+
 At W64 (the 64-bit engine, 2026-10-20): vitest 46 files, 549 tests (new: `variant.test.ts`,
 `core64.test.ts` with the real 64-bit module in Node 24, `sw-stamp.test.ts`; the calibration table in
 `memory.test.ts`; the module in `client.test.ts`, `plan.test.ts`, `record.test.ts`, `history.test.ts`);
-`npm run check` 1051 files, 0 errors, 0 warnings; e2e 98 tests (96 run, 2 on demand: `PROSE_BIG_MZML`,
-`PROSE_LARGE_MZML`): `engine64.spec.ts` ×3 (the forced example in wasm64 = wasm32's 1,790 PSMs and 47
-protein groups, its `?v=`, progress, Overview, History; the footer above 3 GB; Memory64 unsupported),
-`deploy.spec.ts` ×21 (+2: wasm64 stored only on first use with its `?v=` and then offline; no room for
-it), the update test extended (an update does not install wasm64; the previous generation's goes with
-it). Each commit of the series passes check and vitest on its own. One pre-existing flake: `an engine
-error names the stage and the file…` attributes the parse error of the last file to "Pooling the files"
-when that file's step end arrives first (1 of 24 runs on da0c786 with the old module, 1 of 12 with the
-new one; follow-up).
+`npm run check` 1051 files, 0 errors, 0 warnings; e2e 98 tests (96 run, 2 on demand). Each commit of the
+series passes check and vitest on its own.
 
 At C12 fix round 3: vitest 43 files, 516 tests; `npm run check` 1046 files, 0 errors, 0 warnings; e2e
 92 tests (91 pass, 1 on-demand skipped: `PROSE_BIG_MZML`), with `deploy.spec.ts` ×19: round 3 added
@@ -1408,7 +1421,7 @@ choice of per-file streaming (§4.11).
 | 15 | `wasmfs_node.js` override must be dropped once emscripten#27825 is fixed (the `#warning` fires on other Emscripten versions) | follow-up |
 | 16 | `package.json` of the copied package lists `openms.data` and `README.md`, which the app copy does not ship (inherited) | deferred minor |
 | 17 | 63 MB per package update lands in git history of prose-web (with wasm64 about 110 MB per update of both) | accepted (C4 review minor) |
-| 18 | **Memory estimate calibrated on one spectra file and two databases** (W64): the index depends on the precursor masses of the spectra; non-specific searches and modifications other than Oxidation/Deamidated unmeasured; of the terminal ones only Acetyl (Protein N-term) measured (adds nothing: protein-terminal entries are not counted, decisions "W64 terminal modifications") | follow-up: calibrate with more varied spectra and other modifications |
+| 18 | **Memory estimate calibrated on one spectra file and two databases** (W64): the index depends on the precursor masses of the spectra; non-specific searches measured on Erwinia only (W64 r1; wasm32 unchunked unmeasurable), modifications other than Oxidation/Deamidated unmeasured; of the terminal ones only Acetyl (Protein N-term) measured (adds nothing: protein-terminal entries are not counted, decisions "W64 terminal modifications") | follow-up: calibrate with more varied spectra and other modifications |
 | 19 | **wasm64 is slower** (8–22 %) and a 46 MB download on first use; offline only after a first use; Safari has no Memory64 (above 4 GB the footer says so) | accepted (the user's rule: wasm32 by default) |
 | 20 | The thread cap for many files (> 4, or > 2 with PeptDeep) was justified by Emscripten's allocator (12 × 75 MB: 2.9 GB at 4 threads, 4.0 GB at 16); with openms-mimalloc 0.66 vs 0.80 GB | kept as it was (W64 changed only the chunked cap); a decision for the user |
 
@@ -1634,6 +1647,12 @@ xvfb-run -a sh -c './prose-linux_x64 --chrome-browser-binary=/ms-playwright/chro
   --chrome-args="--remote-debugging-port=9333 --no-sandbox --no-first-run" & node desktop-check3.mjs 9333 search'
 ```
 
+Checked on 2026-10-20 after W64 fix round 1 (packages 76607e6451), not deployed: the same `_site`
+checks (26 manifest files over HTTP, ids `e95c352237b7`/`38f10ad8bd3b`, the shell without either
+module; in Chromium the first visit stores only wasm32, the forced 64-bit example 1,790 PSMs and its two
+`?v=` files in `openms64-module-38f10ad8bd3b`); desktop linux_x64 0.4.0: works offline at the first
+start, the example with PeptDeep in wasm64 1,790 PSMs in 25.7 s; the large case again 8.66 GiB, 53 s.
+
 Checked on 2026-10-20 after W64 (6b099e7), not deployed: the local `_site` (`assemble-site.sh`, plain
 static server under `/prose-web/`) serves all 26 files of `sw.js`'s manifest with their size and SHA-256,
 both module ids are the hashes of their directories, the shell (11 files) holds neither module, both
@@ -1711,7 +1730,7 @@ Commit ranges are `base..head` on the task's branch (OpenMS: `claude/prose-merge
 | C10 | Overview, Samples, QC, open search | planned (C10) | — |
 | C11 | History and project files | done (review approved after fix round 1) | 67d35c0..0048e06 |
 | C12 | Service worker, Pages deployment, desktop | deployed 2026-10-20: Pages switched to the workflow, `main` = ce51dae (build 4d0e6fd34b7e), desktop 0.3.0 released; live checks passed (first visit isolated, 16 threads, works offline; example 1,790 PSMs; offline search; upgrade from 0.2.0) | 3b943ec..0fbde6b; fix round 1 0fbde6b..f576241; round 2 ..78d4743; round 3 (commit "app: service worker fix round 3") |
-| W64 | The 64-bit engine: packages 3.7.0-pre.fd807dc89a (wasm32 + wasm64), the choice above 3 GB with Memory64, the estimate of both modules recalibrated (no `uncertain`), the engine shown and recorded, the service worker storing wasm64 on first use, desktop 0.4.0 (§5.9, decisions §4.9) | done locally (not pushed, not deployed; screenshots for the user) | da0c786..6b099e7 (5 commits) and this docs commit, `prose-app` |
+| W64 | The 64-bit engine: packages 3.7.0-pre.fd807dc89a, then 76607e6451 (wasm32 + wasm64), the choice above 3 GB with Memory64, the estimate of both modules recalibrated (no `uncertain`), the engine shown and recorded, the service worker storing wasm64 on first use, desktop 0.4.0 (§5.9, decisions §4.9) | done locally, fix round 1 done (not pushed, not deployed; screenshots for the user) | da0c786..6b099e7 and 5746fe6 (docs); fix round 1 5746fe6..e0a5704 and the packages-and-docs commit after it, `prose-app` |
 | — | This as-built specification | snapshot; to be updated at the end (user request 2026-10-17) | this commit |
 
 Execution order (C-R2): A1–A5, C1, C2, C3, C5, B1–B7, C4, C6–C12; one implementer at a time per
