@@ -104,7 +104,7 @@ describe('the 64-bit module', () => {
     const xml = new TextDecoder().decode(idXML(w64, b.results))
     expect(xml.startsWith('<?xml')).toBe(true)
     expect(xml.trimEnd().endsWith('</IdXML>')).toBe(true)
-  })
+  }, 120_000) // two real searches: 8.8 s on a 4-core CI runner
 
   test('PeptDeep with the shared models', async () => {
     const model = async (file: string) => new Blob([readFile(w64, `/public/openms/models/${file}`)])
@@ -113,5 +113,5 @@ describe('the 64-bit module', () => {
     const ions = predict(w64, 'PEPTIDEK', 2, 30, 'QE')
     expect(ions.length).toBeGreaterThan(5)
     expect(ions).toEqual(predict(w32, 'PEPTIDEK', 2, 30, 'QE'))
-  })
+  }, 60_000)
 })
