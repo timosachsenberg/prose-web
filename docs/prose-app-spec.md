@@ -246,7 +246,8 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   is answered from the network, unstored, and STATUS says `module64Full` (not `storageFull`: the app
   still works offline), also after the worker restarts (kept in the generation marker, W64 r1). An
   update's installation without room for its module drops the 64-bit stores that no open page uses
-  (W64 r2: a tab of the previous build keeps its own), if that makes room (a check first, no credit
+  (W64 r2: a tab of the previous build keeps its own; a single tab reloaded into the new build no
+  longer counts as one, and its old store goes: the update's Reload resolves it), if that makes room (a check first, no credit
   after it: Chrome frees deleted entries at once), entry by entry (the worker checks them by their keys
   and never holds their responses), and tries again (W64 r1). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
 - **Updates (fix rounds 1–2).** A new version's worker installs **completely before it waits**: the
@@ -1124,7 +1125,9 @@ no estimate ("… · counting proteins…"); a search started then waits for tha
 proteins…" as its step; the count is held at Start, whatever the database is by then) and its engine is
 chosen on it (W64 r1, r2). A database that cannot be read: "… · the database cannot be read", the card
 says "cannot be read" (the reason in its title), and Start is disabled: "<name> cannot be read (…).
-Choose it again, or another FASTA file." (W64 r2; it counted as 0 proteins before). Advice (amber `warn`, red `over`), by module and cause:
+Choose it again, or another FASTA file." (W64 r2; it counted as 0 proteins before); a count that
+fails after Start: "While counting the proteins of large.fasta: …" (W64 r3). The footer's advice points
+a search in chunks to smaller chunks, an unchunked non-specific one to "e.g. 250" (W64 r3). Advice (amber `warn`, red `over`), by module and cause:
 
 - wasm32 (only without Memory64 above 3 GB): "Close to the 4 GB limit: consider database:chunk_size
   (e.g. 2000) under All parameters." / "…, mostly for the files: search fewer files at once.";

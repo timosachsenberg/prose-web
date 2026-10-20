@@ -166,12 +166,19 @@ class SearchPlan {
     } else {
       const more = wide ? 'More than the 16 GB the 64-bit engine can use' : 'More than the 4 GB of the 32-bit engine'
       const close = wide ? 'Close to the 16 GB limit of the 64-bit engine' : 'Close to the 4 GB limit'
+      // the index in parts: smaller chunks for a search in chunks already; else a chunk size, of a few
+      // hundred proteins for a non-specific search (2000 would still be far too large for it)
+      const { chunkSize, specificity, proteins } = this.index
+      const parts =
+        chunkSize > 0 && chunkSize < proteins
+          ? 'use smaller chunks (database:chunk_size under All parameters)'
+          : `${wide || over ? 'set' : 'consider'} database:chunk_size (e.g. ${specificity === 'none' ? 250 : 2000}) under All parameters`
       if (estimate.cause === 'inputs') {
         text = `${over ? more : close}, mostly for the files: search fewer files at once.`
       } else if (over) {
-        text = `${more}: set database:chunk_size (e.g. 2000) under All parameters, or use fewer variable modifications or a narrower specificity.`
+        text = `${more}: ${parts}, or use fewer variable modifications or a narrower specificity.`
       } else {
-        text = `${close}: ${wide ? 'set' : 'consider'} database:chunk_size (e.g. 2000) under All parameters.`
+        text = `${close}: ${parts}.`
       }
     }
     return { text, over }

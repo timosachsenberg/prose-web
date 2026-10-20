@@ -174,6 +174,18 @@ describe('the module of a search', () => {
     expect(sent[0].engine).toBe('wasm64')
   })
 
+  test('a search already in chunks, or a non-specific one, is pointed to smaller chunks', () => {
+    // semi-tryptic in chunks of 9000 (14.8 GB in wasm64): smaller chunks, not "e.g. 2000"
+    fill(40000, { ...semi, 'database:chunk_size': 9000, 'modifications:variable': ['Oxidation (M)', 'Deamidated (N)'] })
+    expect(searchPlan.estimate?.variant).toBe('wasm64')
+    expect(searchPlan.advice?.text).toMatch(/: use smaller chunks \(database:chunk_size under All parameters\)/)
+    expect(searchPlan.advice?.text).not.toMatch(/e\.g\. 2000/)
+    // non-specific, not chunked: chunks of a few hundred proteins
+    fill(20652, { 'peptide:enzyme_specificity': 'none' })
+    expect(searchPlan.estimate?.level).not.toBe('ok')
+    expect(searchPlan.advice?.text).toMatch(/set database:chunk_size \(e\.g\. 250\) under All parameters/)
+  })
+
   test('wasm64 warns above 14 GB and suggests database:chunk_size', () => {
     // 0.4 + 0.025 × 40 × 15 = 15.4 GB
     fill(40000, semi)

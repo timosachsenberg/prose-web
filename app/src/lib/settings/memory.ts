@@ -79,7 +79,11 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
     chunked: { full: 2, semi: 20 },
     // chunkResidues: Erwinia and human in chunks of 250 and 500, 4 and 16 threads (the threads add
     // little here: human in chunks of 250 took 2.87 GiB at 4, 2.92 at 16); residues: not measurable
-    // (Erwinia aborts), above both proportions of wasm64's
+    // (it aborts on both databases). 7.5 is above two proportions of wasm64's 9.6 (× 18.5 / 24.5 =
+    // 7.25, × 10 / 15 = 6.4), not above every one (the review's 7.68). It only has to send such searches
+    // to wasm64: with it an unchunked non-specific search crosses 3 GB from about 0.31 million residues
+    // on and 4 GB from about 0.45 million (Erwinia has 1.46 million); the review found the same
+    // searches switch for any value up to about 10.2.
     none: { residues: 7.5, chunkResidues: 18.5 },
     mod: 2,
     growthSmall: 0.05 * GB,

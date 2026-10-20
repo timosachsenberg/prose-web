@@ -39,6 +39,13 @@ describe('describeFailure', () => {
     expect(f.detail).toBeNull()
   })
 
+  it('names the database whose count failed after Start', () => {
+    const f = describeFailure({ label: 'Counting proteins...', file: -1, files, silentMs: 0 }, 'large.fasta cannot be read (NotReadableError).')
+    expect(f.context).toBe('While counting the proteins of large.fasta')
+    expect(f.summary).toBe('large.fasta cannot be read (NotReadableError).')
+    expect(describeFailure({ label: 'Counting proteins...', file: -1, files, silentMs: 0 }, 'x').context).toBe('While counting the proteins')
+  })
+
   it('shortens OpenMS exceptions to their message', () => {
     const invalid =
       'InvalidValue: the value of FDR:PSM is out of range - due to that error of type InvalidValue in: /a.cpp@1-f()'

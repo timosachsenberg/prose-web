@@ -360,7 +360,10 @@ async function install() {
     }
     if (!complete) {
       // the 64-bit module is optional (stored again when a search needs it): the stores no open page
-      // uses go, if that makes room, before the update has to arrive without its module (online only)
+      // uses go, if that makes room, before the update has to arrive without its module (online only).
+      // A single tab that reloaded into the new build no longer counts as a page of the old one: the
+      // old build's 64-bit store, in use by that tab before, goes; the tab is on the new build, and
+      // the update's Reload brings it to the new build's own engine (stored again when used).
       const droppable = await droppableModule64Stores()
       if (droppable.bytes > 0 && (await room(MODULE_BYTES, droppable.bytes))) {
         await dropModule64Stores(droppable.names)

@@ -53,6 +53,11 @@ function stageOf(stage: FailureStage, message: string): string {
     return `While searching ${file}${silent}`
   }
   const label = stage.label.trim().replace(/(\.\.\.|…)$/, '')
+  // the count of the database's proteins, which a search started during it waits for
+  if (/^Counting proteins/.test(label)) {
+    const database = /^(.+?) cannot be read \(/.exec(message)?.[1]
+    return database ? `While counting the proteins of ${database}` : 'While counting the proteins'
+  }
   return steps.find(([pattern]) => pattern.test(label))?.[1] ?? (label ? `During “${label}”` : 'During the search')
 }
 
