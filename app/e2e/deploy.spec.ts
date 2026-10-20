@@ -605,6 +605,44 @@ test("an update without room for its module drops a stored 64-bit engine rather 
   }
 })
 
+test('an update without room keeps the 64-bit engine that an open tab of the previous version uses', async ({ page, context }) => {
+  test.setTimeout(300_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(server.url).origin, quotaSize: 130e6 })
+    await firstVisit(page, server.url)
+    await expect(page.getByTestId('engine-status')).toContainText('works offline')
+    await expect.poll(() => stored(page, `prose-app-${a.build}`, '__data-stored__'), { timeout: 30_000 }).toBe(true)
+    expect(await fetchModule64(page, a.module64)).toEqual([200, 200])
+    await expect.poll(() => storeKeys(page, `openms64-module-${a.module64}`)).toHaveLength(2)
+    await cdp.send('ServiceWorker.enable')
+    await cdp.send('ServiceWorker.stopAllWorkers')
+    await page.reload()
+    await engineReady(page)
+
+    // B is deployed and installs from another tab, while this tab of A stays open
+    server.phase('B')
+    const other = await context.newPage()
+    await other.goto(server.url)
+    await engineReady(other)
+    await expect(other.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+    // A's tab may start its 64-bit engine again: its store stays, and B arrives without its module
+    expect(await storeKeys(page, `openms64-module-${a.module64}`)).toHaveLength(2)
+    const marker = await page.evaluate(
+      async (name) => (await (await caches.open(name)).match(new URL('__generation__', location.href).href))?.json(),
+      `prose-app-${B_IDS.build}`,
+    )
+    expect(marker.moduleSkipped).toBe('storage full')
+    expect(await fetchModule64(page, a.module64)).toEqual([200, 200])
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
+  }
+})
+
 test('works offline after the first visit', async ({ page, context }) => {
   test.setTimeout(240_000)
   // Offline emulation does not reach the service worker's own requests, so this test has a server of

@@ -22,18 +22,20 @@
 //     names) come from a kept store that has exactly that URL, else from the network, unstored.
 //  3. Offline. The hashed assets (assets/) come from a store if there (their names change with their
 //     content), else from the network; the page, the example and fasta/ from the network
-//     (network-first). Either is stored if it is of this build; offline, or if the server has a file no
-//     more (an older tab after a deployment), it comes from a store. Installation stores the shell (index.html, assets/), all of it or the
-//     installation fails, and only if the server's index.html is of this build; the installation of
-//     an update stores the module (openms.mjs, openms.wasm) as well, so that the new version is
-//     complete before it waits. The example and the cRAP database (DATA) are stored when the app asks.
-//     The 64-bit module is stored only when a search first uses it (never on installation), and then
-//     works offline too; an update without room for its module drops it first (it is optional). The worker reports what is stored (STATUS): "works offline" = this build's
-//     shell and module (wasm32); besides, whether the 64-bit module is stored.
+//     (network-first). Either is stored if it is of this build; offline, or if the server has a file
+//     no more (an older tab after a deployment), it comes from a store. Installation stores the shell
+//     (index.html, assets/), all of it or the installation fails, and only if the server's index.html
+//     is of this build; the installation of an update stores the module (openms.mjs, openms.wasm) as
+//     well, so that the new version is complete before it waits. The example and the cRAP database
+//     (DATA) are stored when the app asks. The 64-bit module is stored only when a search first uses
+//     it (never on installation), and then works offline too; an update without room for its module
+//     drops the 64-bit stores no open page uses, if that makes room (they are optional). The worker
+//     reports what is stored (STATUS): "works offline" = this build's shell and module (wasm32);
+//     besides, whether the 64-bit module is stored.
 //  4. Generations. A generation = this build's app store prose-app-<BUILD_ID> and its module stores
 //     openms-module-<MODULE_ID> and openms64-module-<MODULE64_ID>; a marker in the app store records
-//     when it was installed and activated. A new version's worker waits until the app tells it to take over (SKIP_WAITING: the
-//     user chose "Reload"; or no tab of the old version is left). Once active and complete, it keeps
+//     when it was installed and activated. A new version's worker waits until the app tells it to
+//     take over (SKIP_WAITING: the user chose "Reload"; or no tab of the old version is left). Once active and complete, it keeps
 //     the previous generation while pages of that build are open (it asks them), so they can still
 //     start workers and load their module; then, or at the next activation, it is dropped. Never more
 //     than one previous generation is kept.
@@ -119,13 +121,12 @@ let storageFull = false
  */
 let module64Full = false
 
-/** The bytes of the module's files (openms.mjs, openms.wasm), and of the 64-bit module's. */
+/** The bytes of the module's files (openms.mjs, openms.wasm). */
 const MODULE_BYTES = MODULE.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
-const MODULE64_BYTES = MODULE64.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
 
 /**
  * Whether the browser's storage for the site has room for `bytes` more (with a margin); true if it
- * cannot tell. `freed`: bytes just deleted, which the browser's estimate may still count for a while.
+ * cannot tell. `freed`: bytes that dropping something would free (a check before dropping it).
  */
 async function room(bytes, freed = 0) {
   try {
@@ -317,12 +318,9 @@ async function storeVerified(cache, path, url, key) {
   if (!(await store(cache, key, response))) throw new DOMException(`${path}: no room to store it`, 'QuotaExceededError')
 }
 
-/**
- * Stores the module (openms.mjs, openms.wasm), verified; false where the storage has no room for it.
- * `freed`: bytes just deleted to make room (see `room`).
- */
-async function storeModule(freed = 0) {
-  if (!(await room(MODULE_BYTES, freed))) return false
+/** Stores the module (openms.mjs, openms.wasm), verified; false where the storage has no room for it. */
+async function storeModule() {
+  if (!(await room(MODULE_BYTES))) return false
   const module = await caches.open(MODULE_STORE)
   try {
     for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path))
@@ -361,9 +359,13 @@ async function install() {
       complete = await storeModule()
     }
     if (!complete) {
-      // the 64-bit module is optional (stored again when a search needs it): its stores, also the one
-      // in use, go before the update has to arrive without its module (online only)
-      complete = await storeModule(await dropModule64Stores())
+      // the 64-bit module is optional (stored again when a search needs it): the stores no open page
+      // uses go, if that makes room, before the update has to arrive without its module (online only)
+      const droppable = await droppableModule64Stores()
+      if (droppable.bytes > 0 && (await room(MODULE_BYTES, droppable.bytes))) {
+        await dropModule64Stores(droppable.names)
+        complete = await storeModule()
+      }
     }
     if (complete) await carryOver(app, await caches.open(MODULE_STORE))
     else await store(app, GENERATION_KEY, Response.json({ ...marker, moduleSkipped: 'storage full' }))
@@ -371,21 +373,34 @@ async function install() {
 }
 
 /**
- * Drops every store of the 64-bit module (any version), entry by entry first: Chrome frees a deleted
- * entry's bytes at once (unless a response of it is still alive), a deleted store's only once no handle
- * to it is left. Returns about how many bytes that frees (the entries' sizes in this build's manifest).
+ * The 64-bit stores (any version) that may go to make room, and about how many bytes they hold (their
+ * entries' sizes in this build's manifest): all but those of a generation with an open page (also this
+ * build's own, which pages of this build served by the previous worker may use when the version is the
+ * same): such a tab may start its 64-bit engine again.
  */
-async function dropModule64Stores() {
-  let freed = 0
-  for (const name of await caches.keys()) {
-    if (!MODULE64_STORE_NAME.test(name)) continue
+async function droppableModule64Stores() {
+  const builds = await openBuilds()
+  const open = (build) => builds.includes(build) || builds.includes(null)
+  const inUse = new Set(open(BUILD_ID) ? [MODULE64_STORE] : [])
+  for (const g of await generations()) if (g.module64 && open(g.build)) inUse.add(`openms64-module-${g.module64}`)
+  const names = (await caches.keys()).filter((name) => MODULE64_STORE_NAME.test(name) && !inUse.has(name))
+  let bytes = 0
+  for (const name of names) {
+    for (const request of await (await caches.open(name)).keys()) bytes += MANIFEST[relative(new URL(request.url))]?.[0] ?? 0
+  }
+  return { names, bytes }
+}
+
+/**
+ * Drops the 64-bit stores `names`, entry by entry first: Chrome frees a deleted entry's bytes at once
+ * (unless a response of it is still alive), a deleted store's only once no handle to it is left.
+ */
+async function dropModule64Stores(names) {
+  for (const name of names) {
     const cache = await caches.open(name)
-    for (const request of await cache.keys()) {
-      if (await cache.delete(request)) freed += MANIFEST[relative(new URL(request.url))]?.[0] ?? 0
-    }
+    for (const request of await cache.keys()) await cache.delete(request)
     await caches.delete(name)
   }
-  return freed
 }
 
 /**
