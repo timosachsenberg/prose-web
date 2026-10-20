@@ -69,6 +69,17 @@ function storeKeys(page: Page, name: string): Promise<string[]> {
   )
 }
 
+/**
+ * Fetches the 64-bit module's files (version `v`) from the page, through the service worker, as a
+ * search's worker does: their statuses.
+ */
+function fetchModule64(page: Page, v: string): Promise<number[]> {
+  return page.evaluate(
+    (v) => Promise.all(['openms.mjs', 'openms.wasm'].map((f) => fetch(`openms64/${f}?v=${v}`).then((r) => r.arrayBuffer().then(() => r.status)))),
+    v,
+  )
+}
+
 /** The ids of a build; a fake later deployment B of `dist` (see pages-server.ts), removed after the test. */
 const A = () => stampedIds('dist')
 const B_IDS = { module: 'bbbbbbbbbbbb', module64: 'bbbbbbbbbb64', build: 'bbbbbbbbbb02' }
@@ -144,6 +155,9 @@ test('a module update pairs the new module with its own wasm, and the new worker
   try {
     await firstVisit(page, server.url)
     expect(await loadedModule(page)).toEqual({ mjs: a.module, wasm: a.module })
+    // A's 64-bit module, as a search above 4 GB uses it (stored on first use)
+    expect(await fetchModule64(page, a.module64)).toEqual([200, 200])
+    await expect.poll(() => storeKeys(page, `openms64-module-${a.module64}`)).toHaveLength(2)
 
     // B is deployed; the first load of B runs under A's worker: B's module with B's wasm, which A's
     // worker passes on and does not store (nor B's page or chunks)
@@ -162,6 +176,9 @@ test('a module update pairs the new module with its own wasm, and the new worker
     expect(await storeKeys(page, `openms-module-${b.module}`)).toEqual(
       expect.arrayContaining([`openms/openms.mjs?v=${b.module}`, `openms/openms.wasm?v=${b.module}`]),
     )
+    // not its 64-bit module: that is stored when a search first uses it
+    expect(await page.evaluate((name) => caches.has(name), `openms64-module-${b.module64}`)).toBe(false)
+    expect(server.log.filter((l) => l.includes(`/openms64/`) && l.includes(b.module64))).toEqual([])
 
     // Reload: B's worker takes over; A's stores go (no page of A is open)
     const reloaded = page.waitForEvent('load')
@@ -179,7 +196,10 @@ test('a module update pairs the new module with its own wasm, and the new worker
     )
     expect(stores.wasm).toBe(wasmBytes)
     expect(stores.names).toContain(`prose-app-${b.build}`)
-    await expect.poll(async () => (await page.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.build))).toEqual([])
+    // (A's 64-bit module with them)
+    await expect
+      .poll(async () => (await page.evaluate(() => caches.keys())).filter((n) => n.includes(a.module) || n.includes(a.module64) || n.includes(a.build)))
+      .toEqual([])
     await expect(page.getByTestId('update-notice')).toHaveCount(0)
     await expect(page.getByTestId('engine-status')).toContainText('works offline')
 
@@ -450,6 +470,90 @@ test('a module of this version that is no longer on the server: a clear message'
   } finally {
     await server.close()
     rmSync(distB, { recursive: true, force: true })
+  }
+})
+
+test('the 64-bit engine is stored only when a search first uses it, by its own ?v=, and then works offline', async ({ page, context }) => {
+  test.setTimeout(420_000)
+  const a = A()
+  const server = await pagesServer({ A: 'dist' })
+  /** The example, searched (PeptDeep off) on the page as it is; ends on the results. */
+  const searchExample = async () => {
+    await page.getByRole('button', { name: 'Try the example' }).click()
+    await expect(page.getByText('DatabaseSuitability_database.fasta').first()).toBeVisible({ timeout: 30_000 })
+    const peptdeep = page.getByRole('switch', { name: 'PeptDeep predictions' })
+    if ((await peptdeep.getAttribute('aria-checked')) === 'true') await peptdeep.click()
+    await expect(page.getByTestId('search-plan')).toContainText('64-bit engine (up to 16 GB)')
+    await page.getByRole('button', { name: /^Start search/ }).click()
+    await expect(page.getByTestId('search-engine')).toHaveText('64-bit', { timeout: 60_000 })
+    await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 180_000 })
+  }
+  /** The ?v= of the 64-bit module files the page's workers loaded. */
+  const loaded64 = async () => {
+    const out = new Set<string>()
+    // (the engine workers only: the module's threads, Blob workers, may be blocked in a wait)
+    for (const worker of page.workers().filter((w) => w.url().includes('/assets/worker-'))) {
+      const names = await worker.evaluate(() => performance.getEntriesByType('resource').map((e) => e.name)).catch(() => [])
+      for (const n of names) if (new URL(n).pathname.includes('/openms64/')) out.add(new URL(n).pathname.replace('/prose-web/', '') + new URL(n).search)
+    }
+    return [...out].sort()
+  }
+  const status = page.getByTestId('engine-status')
+  try {
+    await firstVisit(page, server.url)
+    await expect(status).toContainText('works offline')
+    await expect.poll(() => stored(page, `prose-app-${a.build}`, '__data-stored__'), { timeout: 30_000 }).toBe(true)
+    // the first visit neither downloads nor stores it
+    expect(await page.evaluate((name) => caches.has(name), `openms64-module-${a.module64}`)).toBe(false)
+    expect(server.log.filter((l) => l.includes('/openms64/'))).toEqual([])
+    await expect(status).toHaveAttribute('title', /The 64-bit engine for large searches not stored yet \(stored when first used\)\./)
+
+    // a search in it (?debug=wasm64): its files with its own id, stored in a store of their own
+    await page.goto(`${server.url}?debug=wasm64`)
+    await engineReady(page)
+    await searchExample()
+    const v = a.module64
+    expect(await loaded64()).toEqual([`openms64/openms.mjs?v=${v}`, `openms64/openms.wasm?v=${v}`])
+    const requested = server.log.filter((l) => l.includes('/openms64/'))
+    expect(requested).toContain(`A /prose-web/openms64/openms.wasm?v=${v}`)
+    expect(requested.filter((l) => !l.endsWith(`?v=${v}`))).toEqual([])
+    expect((await storeKeys(page, `openms64-module-${v}`)).sort()).toEqual([`openms64/openms.mjs?v=${v}`, `openms64/openms.wasm?v=${v}`])
+    expect((await storeKeys(page, `openms-module-${a.module}`)).filter((k) => k.includes('openms64'))).toEqual([])
+    await expect(status).toHaveAttribute('title', /The 64-bit engine for large searches too\./, { timeout: 30_000 })
+  } finally {
+    await server.close()
+  }
+  // offline (the server is gone): the 64-bit engine starts from the store
+  await context.setOffline(true)
+  await page.goto(`${server.url}?debug=wasm64`)
+  await engineReady(page)
+  await searchExample()
+  expect(await loaded64()).toEqual([`openms64/openms.mjs?v=${a.module64}`, `openms64/openms.wasm?v=${a.module64}`])
+})
+
+test('with no room for the 64-bit engine it still runs, online, and the chip says why it is not stored', async ({ page, context }) => {
+  test.setTimeout(240_000)
+  const a = A()
+  const server = await pagesServer({ A: 'dist' })
+  try {
+    // room for the app, its module (≈ 45 MB) and the example, not for the 64-bit module (≈ 46 MB)
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(server.url).origin, quotaSize: 80e6 })
+    await firstVisit(page, server.url)
+    const status = page.getByTestId('engine-status')
+    await expect(status).toContainText('works offline')
+    // a search's worker loads it: answered from the network, whole, and not stored
+    expect(await fetchModule64(page, a.module64)).toEqual([200, 200])
+    const size = await page.evaluate(async (v) => (await (await fetch(`openms64/openms.wasm?v=${v}`)).arrayBuffer()).byteLength, a.module64)
+    expect(size).toBe(statSync('dist/openms64/openms.wasm').size)
+    expect(await storeKeys(page, `openms64-module-${a.module64}`)).not.toContain(`openms64/openms.wasm?v=${a.module64}`)
+    // the app still works offline (its module is stored); the chip says why the 64-bit engine is not
+    await expect(status).toContainText('works offline')
+    await expect(status).toHaveAttribute('title', /The 64-bit engine for large searches not stored: the browser's storage for this site is full\./, {
+      timeout: 30_000,
+    })
+  } finally {
+    await server.close()
   }
 })
 

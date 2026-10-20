@@ -11,14 +11,15 @@
 //     Blob inside the engine worker and inherit its isolation.
 //  2. Only bytes of its own build. The build gives the worker a MANIFEST (path → size, SHA-256) of its
 //     files; it stores a response only if its bytes are those (verified on a copy), else it stores
-//     nothing. Files of its own module version (?v=MODULE_ID: openms.mjs, openms.wasm, the PeptDeep
-//     models) come from its store, cache-first, and on the first request are stored and answered from
-//     the store, so Chrome keeps the compiled code of openms.wasm (the stored response itself is
-//     given: a response the worker wraps with new headers is never code-cached, so openms.wasm is
-//     passed on untouched). If the server has other bytes under such a URL (a newer version was
-//     deployed), the answer is an error (409), never the other bytes. Files of another version
-//     (another ?v=, other hashed asset names) come from a kept store that has exactly that URL, else
-//     from the network, unstored.
+//     nothing. There are two module packages: openms/ (wasm32, ?v=MODULE_ID: openms.mjs, openms.wasm,
+//     the PeptDeep models, which both modules use) and openms64/ (the 64-bit module for searches above
+//     4 GB, ?v=MODULE64_ID), each with a store of its own. Files of its own module versions come from
+//     its stores, cache-first, and on the first request are stored and answered from the store, so
+//     Chrome keeps the compiled code of openms.wasm (the stored response itself is given: a response
+//     the worker wraps with new headers is never code-cached, so openms.wasm is passed on untouched).
+//     If the server has other bytes under such a URL (a newer version was deployed), the answer is an
+//     error (409), never the other bytes. Files of another version (another ?v=, other hashed asset
+//     names) come from a kept store that has exactly that URL, else from the network, unstored.
 //  3. Offline. The hashed assets (assets/) come from a store if there (their names change with their
 //     content), else from the network; the page, the example and fasta/ from the network
 //     (network-first). Either is stored if it is of this build; offline, or if the server has a file no
@@ -26,10 +27,12 @@
 //     installation fails, and only if the server's index.html is of this build; the installation of
 //     an update stores the module (openms.mjs, openms.wasm) as well, so that the new version is
 //     complete before it waits. The example and the cRAP database (DATA) are stored when the app asks.
-//     The worker reports what is stored (STATUS): "works offline" = this build's shell and module.
-//  4. Generations. A generation = this build's app store prose-app-<BUILD_ID> and its module store
-//     openms-module-<MODULE_ID>; a marker in the app store records when it was installed and
-//     activated. A new version's worker waits until the app tells it to take over (SKIP_WAITING: the
+//     The 64-bit module is stored only when a search first uses it (never on installation), and then
+//     works offline too. The worker reports what is stored (STATUS): "works offline" = this build's
+//     shell and module (wasm32); besides, whether the 64-bit module is stored.
+//  4. Generations. A generation = this build's app store prose-app-<BUILD_ID> and its module stores
+//     openms-module-<MODULE_ID> and openms64-module-<MODULE64_ID>; a marker in the app store records
+//     when it was installed and activated. A new version's worker waits until the app tells it to take over (SKIP_WAITING: the
 //     user chose "Reload"; or no tab of the old version is left). Once active and complete, it keeps
 //     the previous generation while pages of that build are open (it asks them), so they can still
 //     start workers and load their module; then, or at the next activation, it is dropped. Never more
@@ -41,7 +44,6 @@
 
 const BUILD_ID = '__BUILD_ID__'
 const MODULE_ID = '__MODULE_ID__'
-/** The 64-bit module package (openms64/); stored by the worker from a later version on. */
 const MODULE64_ID = '__MODULE64_ID__'
 /** The app's shell, relative to the scope, stored on installation (all or nothing). */
 const SHELL = /* __SHELL__ */ []
@@ -52,12 +54,28 @@ const MANIFEST = /* __MANIFEST__ */ {}
 
 /** The module's files the app cannot start without (stored with ?v=MODULE_ID). */
 const MODULE = ['openms/openms.mjs', 'openms/openms.wasm']
+/** The 64-bit module's files (?v=MODULE64_ID): stored when a search first uses them. */
+const MODULE64 = ['openms64/openms.mjs', 'openms64/openms.wasm']
 const MODELS = Object.keys(MANIFEST).filter((path) => path.startsWith('openms/models/'))
 
 const MODULE_STORE = `openms-module-${MODULE_ID}`
+const MODULE64_STORE = `openms64-module-${MODULE64_ID}`
 const APP_STORE = `prose-app-${BUILD_ID}`
 const APP_STORE_NAME = /^prose-app-([0-9a-f]{12})$/
 const MODULE_STORE_NAME = /^openms-module-([0-9a-f]{12})$/
+const MODULE64_STORE_NAME = /^openms64-module-([0-9a-f]{12})$/
+
+/**
+ * The module packages: their directory, this build's id (?v=) and store, and the field of the
+ * generations' markers that names their version.
+ */
+const PACKAGES = [
+  { dir: 'openms/', id: MODULE_ID, store: MODULE_STORE, field: 'module' },
+  { dir: 'openms64/', id: MODULE64_ID, store: MODULE64_STORE, field: 'module64' },
+]
+
+/** The package of a module path (relative to the scope). */
+const packageOf = (rest) => PACKAGES.find((p) => rest.startsWith(p.dir))
 /** The stores of the earlier site's demos, named after the module version (openms-demo/ uses them too). */
 const DEMO_STORE = /^openms-(module|app)-\d+\.\d+\.\d+/
 
@@ -74,7 +92,7 @@ function relative(url) {
 /** What a path is to the worker: "module", "app", or null (the site's other pages, data/, ...). */
 function kindOf(rest) {
   if (rest === null) return null
-  if (rest.startsWith('openms/')) return 'module'
+  if (rest.startsWith('openms/') || rest.startsWith('openms64/')) return 'module'
   if (rest === '' || rest === 'index.html' || /^(assets|example|fasta)\//.test(rest)) return 'app'
   return null
 }
@@ -90,11 +108,13 @@ function appKey(url) {
   return at(url.pathname === SCOPE.pathname ? 'index.html' : relative(url))
 }
 
-/** The key of a file of this module version. */
-const moduleKey = (path) => `${at(path)}?v=${MODULE_ID}`
+/** The key of a file of this module version (of its package: openms/ by default). */
+const moduleKey = (path, pkg = PACKAGES[0]) => `${at(path)}?v=${pkg.id}`
 
 /** Set when a store failed for lack of room (this worker's life; an update's marker records it too). */
 let storageFull = false
+/** Set when the 64-bit module could not be stored for lack of room (it works online then). */
+let module64Full = false
 
 /** The bytes of the module's files (openms.mjs, openms.wasm). */
 const MODULE_BYTES = MODULE.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
@@ -109,13 +129,16 @@ async function room(bytes) {
   }
 }
 
-/** cache.put that never fails its caller: false when it could not store (the storage is full). */
-async function store(cache, key, response) {
+/**
+ * cache.put that never fails its caller: false when it could not store (the storage is full: `full()`
+ * notes it, by default for the app and the wasm32 module).
+ */
+async function store(cache, key, response, full = () => (storageFull = true)) {
   try {
     await cache.put(key, response)
     return true
   } catch (error) {
-    if (error?.name === 'QuotaExceededError') storageFull = true
+    if (error?.name === 'QuotaExceededError') full()
     return false
   }
 }
@@ -135,9 +158,12 @@ async function isOwn(response, path, manifest = MANIFEST) {
   return bytes.byteLength === expected[0] && (await sha256(bytes)) === expected[1]
 }
 
+/** Whether `name` is a store of a module package (any build): openms-module-…, openms64-module-…. */
+const isModuleStore = (name) => MODULE_STORE_NAME.test(name) || MODULE64_STORE_NAME.test(name)
+
 /** The stores of this worker's kind (any build): app and module stores. */
 async function ownStores() {
-  return (await caches.keys()).filter((name) => APP_STORE_NAME.test(name) || MODULE_STORE_NAME.test(name))
+  return (await caches.keys()).filter((name) => APP_STORE_NAME.test(name) || isModuleStore(name))
 }
 
 /** `request` (exact URL) from any of the kept stores. */
@@ -149,12 +175,15 @@ async function fromKept(request) {
   return undefined
 }
 
-/** The manifest of the generation (of any kept build) with module version `module`, if one is stored. */
-async function manifestOfModule(module) {
+/**
+ * The manifest of the generation (of any kept build) whose package `pkg` has version `module`, if one
+ * is stored.
+ */
+async function manifestOfModule(module, pkg) {
   for (const name of await caches.keys()) {
     if (!APP_STORE_NAME.test(name)) continue
     const marker = await (await (await caches.open(name)).match(GENERATION_KEY))?.json().catch(() => null)
-    if (marker?.module === module && marker.manifest) return marker.manifest
+    if (marker?.[pkg.field] === module && marker.manifest) return marker.manifest
   }
   return null
 }
@@ -164,11 +193,11 @@ async function manifestOfModule(module) {
  * from a store that has exactly that URL; else from the network, unstored, and verified against that
  * version's manifest where a generation of it is stored (else as the server has it).
  */
-async function otherModuleFile(request, path, version) {
+async function otherModuleFile(request, path, version, pkg) {
   const hit = await fromKept(request)
   if (hit) return hit
   const response = await fromServer(request)
-  const manifest = response.ok ? await manifestOfModule(version) : null
+  const manifest = response.ok ? await manifestOfModule(version, pkg) : null
   if (manifest && !(await isOwn(response.clone(), path, manifest))) return conflict(path)
   return response
 }
@@ -182,13 +211,14 @@ function conflict(path) {
 }
 
 /**
- * A file of this module version: from the store; the first time from the network, verified, stored
- * and answered from the store (the stored response: Chrome code-caches openms.wasm only for it). Where
- * the storage has no room it is answered from the network, unstored.
+ * A file of this module version (of package `pkg`): from its store; the first time from the network,
+ * verified, stored and answered from the store (the stored response: Chrome code-caches openms.wasm
+ * only for it). Where the storage has no room it is answered from the network, unstored (the 64-bit
+ * module's lack of room is noted apart: the app still works offline without it).
  */
-async function ownModuleFile(request, path) {
-  const cache = await caches.open(MODULE_STORE)
-  const key = moduleKey(path)
+async function ownModuleFile(request, path, pkg) {
+  const cache = await caches.open(pkg.store)
+  const key = moduleKey(path, pkg)
   const hit = await cache.match(key)
   if (hit) return hit
   const response = await fromServer(request)
@@ -199,12 +229,13 @@ async function ownModuleFile(request, path) {
     void forPage.body?.cancel()
     return conflict(path)
   }
-  if (fits && (await store(cache, key, response))) {
+  const full = pkg.store === MODULE64_STORE ? () => (module64Full = true) : () => (storageFull = true)
+  if (fits && (await store(cache, key, response, full))) {
     void forPage.body?.cancel()
     void reportStatus()
     return (await cache.match(key)) ?? fromServer(request)
   }
-  if (!fits) storageFull = true
+  if (!fits) full()
   void response.body?.cancel()
   void reportStatus()
   return forPage
@@ -279,11 +310,11 @@ async function storeModule() {
  * The installation: the shell, all of it or nothing (a failure fails the installation; the browser
  * tries again later), verified against the manifest, so also only with an index.html of this build (a
  * deployment landing during the installation aborts it). An update (a worker of another version is
- * active) also stores the module, so it is complete before it waits.
+ * active) also stores the module (wasm32), so it is complete before it waits; never the 64-bit one.
  */
 async function install() {
   const app = await caches.open(APP_STORE)
-  const marker = { build: BUILD_ID, module: MODULE_ID, installed: Date.now(), activated: null, manifest: MANIFEST }
+  const marker = { build: BUILD_ID, module: MODULE_ID, module64: MODULE64_ID, installed: Date.now(), activated: null, manifest: MANIFEST }
   if (!(await store(app, GENERATION_KEY, Response.json(marker)))) throw new Error('no room for the shell')
   const responses = await Promise.all(
     SHELL.map(async (path) => {
@@ -353,13 +384,19 @@ async function storeData() {
   return complete
 }
 
-/** What this worker has stored: the shell and the module (= works offline), the models, the data. */
+/**
+ * What this worker has stored: the shell and the module (= works offline), the 64-bit module, the
+ * models, the data.
+ */
 async function status() {
   const app = await caches.open(APP_STORE)
   const module = await caches.open(MODULE_STORE)
   const all = async (cache, keys) => (await Promise.all(keys.map((key) => cache.match(key)))).every(Boolean)
   const shell = await all(app, SHELL.map(at))
-  const moduleStored = await all(module, MODULE.map(moduleKey))
+  const moduleStored = await all(module, MODULE.map((path) => moduleKey(path)))
+  // (not opened when it is not there: it is made when a search first uses the 64-bit module)
+  const module64Stored =
+    (await caches.has(MODULE64_STORE)) && (await all(await caches.open(MODULE64_STORE), MODULE64.map((path) => moduleKey(path, PACKAGES[1]))))
   const models = {}
   for (const path of MODELS) models[path.split('/').pop()] = Boolean(await module.match(moduleKey(path)))
   const previous = (await generations()).find((g) => g.kept)
@@ -374,6 +411,9 @@ async function status() {
     offline,
     // not stored for lack of room (the app then works online only)
     storageFull: !offline && (storageFull || Boolean(marker?.moduleSkipped) || !(await room(MODULE_BYTES))),
+    module64Stored,
+    // the 64-bit module could not be stored for lack of room (it works online then)
+    module64Full: !module64Stored && module64Full,
     models,
     data: Boolean(await app.match(DATA_MARK)),
     kept: previous?.build ?? null,
@@ -394,7 +434,7 @@ async function generations() {
     const build = APP_STORE_NAME.exec(name)?.[1]
     if (!build || build === BUILD_ID) continue
     const marker = await (await (await caches.open(name)).match(GENERATION_KEY))?.json().catch(() => null)
-    out.push({ build, store: name, module: marker?.module ?? null, marker, kept: false })
+    out.push({ build, store: name, module: marker?.module ?? null, module64: marker?.module64 ?? null, marker, kept: false })
   }
   // previous = activated before this one; newer = installed after it (installing or waiting: not ours to drop)
   const previous = out.filter((g) => g.marker?.activated && (!own?.activated || g.marker.activated < own.activated))
@@ -444,19 +484,7 @@ function cleanGenerations() {
       // goes as soon as no page needs it, to make room) or a page of its build is open
       const settled = own.offline || own.storageFull
       const builds = settled ? await openBuilds() : null
-      const keepModules = new Set([MODULE_ID])
-      for (const g of await generations()) {
-        const keep = g.newer || (g.kept && (!settled || builds.includes(g.build) || builds.includes(null)))
-        if (keep) {
-          if (g.module) keepModules.add(g.module)
-          continue
-        }
-        await caches.delete(g.store)
-      }
-      for (const name of await caches.keys()) {
-        const module = MODULE_STORE_NAME.exec(name)?.[1]
-        if (module && !keepModules.has(module)) await caches.delete(name)
-      }
+      await dropGenerations((g) => g.newer || (g.kept && (!settled || builds.includes(g.build) || builds.includes(null))))
     } finally {
       cleaning = null
     }
@@ -470,18 +498,24 @@ function cleanGenerations() {
  */
 async function freeGenerations() {
   const builds = await openBuilds()
-  const keepModules = new Set([MODULE_ID])
+  await dropGenerations((g) => g.newer || g.kept || builds.includes(g.build) || builds.includes(null))
+}
+
+/**
+ * Drops the other generations that `keep` does not keep: their app stores, and every module store
+ * (wasm32, wasm64) that neither this generation nor a kept one names.
+ */
+async function dropGenerations(keep) {
+  const keepStores = new Set([MODULE_STORE, MODULE64_STORE])
   for (const g of await generations()) {
-    if (g.newer || g.kept || builds.includes(g.build) || builds.includes(null)) {
-      if (g.module) keepModules.add(g.module)
+    if (keep(g)) {
+      if (g.module) keepStores.add(`openms-module-${g.module}`)
+      if (g.module64) keepStores.add(`openms64-module-${g.module64}`)
       continue
     }
     await caches.delete(g.store)
   }
-  for (const name of await caches.keys()) {
-    const module = MODULE_STORE_NAME.exec(name)?.[1]
-    if (module && !keepModules.has(module)) await caches.delete(name)
-  }
+  for (const name of await caches.keys()) if (isModuleStore(name) && !keepStores.has(name)) await caches.delete(name)
 }
 
 /** What the earlier site left in the demos' stores (the entries of openms-demo/ stay). */
@@ -507,7 +541,12 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const app = await caches.open(APP_STORE)
-      const marker = (await (await app.match(GENERATION_KEY))?.json().catch(() => null)) ?? { build: BUILD_ID, module: MODULE_ID, installed: Date.now() }
+      const marker = (await (await app.match(GENERATION_KEY))?.json().catch(() => null)) ?? {
+        build: BUILD_ID,
+        module: MODULE_ID,
+        module64: MODULE64_ID,
+        installed: Date.now(),
+      }
       await store(app, GENERATION_KEY, Response.json({ ...marker, activated: Date.now() }))
       await dropEarlierSite()
       await self.clients.claim()
@@ -540,8 +579,9 @@ self.addEventListener('fetch', (event) => {
   if (kind === null && !isolate) return
   let response
   if (kind === 'module') {
+    const pkg = packageOf(rest)
     const version = url.searchParams.get('v')
-    response = version === MODULE_ID ? ownModuleFile(request, rest) : otherModuleFile(request, rest, version)
+    response = version === pkg.id ? ownModuleFile(request, rest, pkg) : otherModuleFile(request, rest, version, pkg)
   } else if (kind === 'app') {
     response = rest.startsWith('assets/') ? asset(request, url) : networkFirst(request, url)
   } else {

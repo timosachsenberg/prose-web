@@ -128,10 +128,14 @@ export interface StoreStatus {
   /** the worker's build and module */
   build: string
   module: string
-  /** this build's shell and module are stored and verified: the app works offline */
+  /** this build's shell and module (wasm32) are stored and verified: the app works offline */
   offline: boolean
   shell: boolean
   moduleStored: boolean
+  /** the 64-bit module (for searches above 4 GB) is stored: stored when a search first uses it */
+  module64Stored: boolean
+  /** the 64-bit module could not be stored for lack of room (it works online) */
+  module64Full: boolean
   /** the PeptDeep models by file name: stored or not (they are stored on first use) */
   models: Record<string, boolean>
   /** the example and the cRAP database */

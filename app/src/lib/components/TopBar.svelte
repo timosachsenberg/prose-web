@@ -10,6 +10,7 @@
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
   import { applyUpdate, pageBuild, watchStatus, watchUpdate, type StoreStatus } from '$lib/sw-client'
+  import { supportsMemory64 } from '$lib/engine/variant'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
 
@@ -49,6 +50,7 @@
 
   // what the service worker has stored: "works offline" once this build's shell and module are (lib/sw-client.ts)
   let stored = $state<StoreStatus | null>(null)
+  const memory64 = supportsMemory64()
   $effect(() => watchStatus((s) => (stored = s)))
   // the browser's storage for the site (for the note when it is full)
   let estimate = $state<{ usage: number; quota: number } | null>(null)
@@ -72,6 +74,16 @@
       models.length > 0 && models.every(Boolean) ? 'The PeptDeep models too.' : 'PeptDeep models not stored yet (stored when first used).',
       stored.data ? 'The example too.' : 'The example not stored yet.',
     ]
+    // the 64-bit engine, for searches above 4 GB, where the browser can run it
+    if (memory64) {
+      parts.push(
+        stored.module64Stored
+          ? 'The 64-bit engine for large searches too.'
+          : stored.module64Full
+            ? "The 64-bit engine for large searches not stored: the browser's storage for this site is full."
+            : 'The 64-bit engine for large searches not stored yet (stored when first used).',
+      )
+    }
     return parts.join(' ')
   })
   // a new version is installed and waits, or has taken over while this page is of the previous one:
