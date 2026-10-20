@@ -28,7 +28,7 @@
 //     an update stores the module (openms.mjs, openms.wasm) as well, so that the new version is
 //     complete before it waits. The example and the cRAP database (DATA) are stored when the app asks.
 //     The 64-bit module is stored only when a search first uses it (never on installation), and then
-//     works offline too. The worker reports what is stored (STATUS): "works offline" = this build's
+//     works offline too; an update without room for its module drops it first (it is optional). The worker reports what is stored (STATUS): "works offline" = this build's
 //     shell and module (wasm32); besides, whether the 64-bit module is stored.
 //  4. Generations. A generation = this build's app store prose-app-<BUILD_ID> and its module stores
 //     openms-module-<MODULE_ID> and openms64-module-<MODULE64_ID>; a marker in the app store records
@@ -113,20 +113,38 @@ const moduleKey = (path, pkg = PACKAGES[0]) => `${at(path)}?v=${pkg.id}`
 
 /** Set when a store failed for lack of room (this worker's life; an update's marker records it too). */
 let storageFull = false
-/** Set when the 64-bit module could not be stored for lack of room (it works online then). */
+/**
+ * Set when the 64-bit module could not be stored for lack of room (it works online then); also in this
+ * generation's marker (`module64Full`), which outlives the worker (`noteModule64Full`).
+ */
 let module64Full = false
 
-/** The bytes of the module's files (openms.mjs, openms.wasm). */
+/** The bytes of the module's files (openms.mjs, openms.wasm), and of the 64-bit module's. */
 const MODULE_BYTES = MODULE.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
+const MODULE64_BYTES = MODULE64.reduce((sum, path) => sum + (MANIFEST[path]?.[0] ?? 0), 0)
 
-/** Whether the browser's storage for the site has room for `bytes` more (with a margin); true if it cannot tell. */
-async function room(bytes) {
+/**
+ * Whether the browser's storage for the site has room for `bytes` more (with a margin); true if it
+ * cannot tell. `freed`: bytes just deleted, which the browser's estimate may still count for a while.
+ */
+async function room(bytes, freed = 0) {
   try {
     const { quota, usage } = await navigator.storage.estimate()
-    return quota === undefined || usage === undefined || quota - usage > bytes * 1.1 + 4e6
+    return quota === undefined || usage === undefined || quota - (usage - freed) > bytes * 1.1 + 4e6
   } catch {
     return true
   }
+}
+
+/**
+ * Notes whether the 64-bit module did not fit (`full`) in this worker and in this generation's marker,
+ * so that a worker started again later still reports it; written only when it changes.
+ */
+async function noteModule64Full(full) {
+  module64Full = full
+  const app = await caches.open(APP_STORE)
+  const marker = await (await app.match(GENERATION_KEY))?.json().catch(() => null)
+  if (marker && Boolean(marker.module64Full) !== full) await store(app, GENERATION_KEY, Response.json({ ...marker, module64Full: full }), () => {})
 }
 
 /**
@@ -166,10 +184,13 @@ async function ownStores() {
   return (await caches.keys()).filter((name) => APP_STORE_NAME.test(name) || isModuleStore(name))
 }
 
-/** `request` (exact URL) from any of the kept stores. */
+/**
+ * `request` (exact URL) from any of the kept stores (looked up without opening them: an open store is
+ * not freed when it is dropped, see `dropModule64Stores`).
+ */
 async function fromKept(request) {
   for (const name of await ownStores()) {
-    const hit = await (await caches.open(name)).match(request)
+    const hit = await caches.match(request, { cacheName: name })
     if (hit) return hit
   }
   return undefined
@@ -229,13 +250,16 @@ async function ownModuleFile(request, path, pkg) {
     void forPage.body?.cancel()
     return conflict(path)
   }
-  const full = pkg.store === MODULE64_STORE ? () => (module64Full = true) : () => (storageFull = true)
-  if (fits && (await store(cache, key, response, full))) {
+  const is64 = pkg.store === MODULE64_STORE
+  let full = !fits
+  if (fits && (await store(cache, key, response, () => (full = true)))) {
     void forPage.body?.cancel()
+    if (is64) await noteModule64Full(false)
     void reportStatus()
     return (await cache.match(key)) ?? fromServer(request)
   }
-  if (!fits) full()
+  if (full && is64) await noteModule64Full(true)
+  else if (full) storageFull = true
   void response.body?.cancel()
   void reportStatus()
   return forPage
@@ -293,9 +317,12 @@ async function storeVerified(cache, path, url, key) {
   if (!(await store(cache, key, response))) throw new DOMException(`${path}: no room to store it`, 'QuotaExceededError')
 }
 
-/** Stores the module (openms.mjs, openms.wasm), verified; false where the storage has no room for it. */
-async function storeModule() {
-  if (!(await room(MODULE_BYTES))) return false
+/**
+ * Stores the module (openms.mjs, openms.wasm), verified; false where the storage has no room for it.
+ * `freed`: bytes just deleted to make room (see `room`).
+ */
+async function storeModule(freed = 0) {
+  if (!(await room(MODULE_BYTES, freed))) return false
   const module = await caches.open(MODULE_STORE)
   try {
     for (const path of MODULE) await storeVerified(module, path, moduleKey(path), moduleKey(path))
@@ -333,9 +360,32 @@ async function install() {
       await freeGenerations()
       complete = await storeModule()
     }
+    if (!complete) {
+      // the 64-bit module is optional (stored again when a search needs it): its stores, also the one
+      // in use, go before the update has to arrive without its module (online only)
+      complete = await storeModule(await dropModule64Stores())
+    }
     if (complete) await carryOver(app, await caches.open(MODULE_STORE))
     else await store(app, GENERATION_KEY, Response.json({ ...marker, moduleSkipped: 'storage full' }))
   }
+}
+
+/**
+ * Drops every store of the 64-bit module (any version), entry by entry first: Chrome frees a deleted
+ * entry's bytes at once (unless a response of it is still alive), a deleted store's only once no handle
+ * to it is left. Returns about how many bytes that frees (the entries' sizes in this build's manifest).
+ */
+async function dropModule64Stores() {
+  let freed = 0
+  for (const name of await caches.keys()) {
+    if (!MODULE64_STORE_NAME.test(name)) continue
+    const cache = await caches.open(name)
+    for (const request of await cache.keys()) {
+      if (await cache.delete(request)) freed += MANIFEST[relative(new URL(request.url))]?.[0] ?? 0
+    }
+    await caches.delete(name)
+  }
+  return freed
 }
 
 /**
@@ -394,9 +444,10 @@ async function status() {
   const all = async (cache, keys) => (await Promise.all(keys.map((key) => cache.match(key)))).every(Boolean)
   const shell = await all(app, SHELL.map(at))
   const moduleStored = await all(module, MODULE.map((path) => moduleKey(path)))
-  // (not opened when it is not there: it is made when a search first uses the 64-bit module)
-  const module64Stored =
-    (await caches.has(MODULE64_STORE)) && (await all(await caches.open(MODULE64_STORE), MODULE64.map((path) => moduleKey(path, PACKAGES[1]))))
+  // (by its keys, not its responses: a response kept alive keeps its bytes when an update drops the
+  // store, see dropModule64Stores)
+  const keys64 = (await caches.has(MODULE64_STORE)) ? (await (await caches.open(MODULE64_STORE)).keys()).map((r) => r.url) : []
+  const module64Stored = MODULE64.every((path) => keys64.includes(moduleKey(path, PACKAGES[1])))
   const models = {}
   for (const path of MODELS) models[path.split('/').pop()] = Boolean(await module.match(moduleKey(path)))
   const previous = (await generations()).find((g) => g.kept)
@@ -413,7 +464,7 @@ async function status() {
     storageFull: !offline && (storageFull || Boolean(marker?.moduleSkipped) || !(await room(MODULE_BYTES))),
     module64Stored,
     // the 64-bit module could not be stored for lack of room (it works online then)
-    module64Full: !module64Stored && module64Full,
+    module64Full: !module64Stored && (module64Full || Boolean(marker?.module64Full)),
     models,
     data: Boolean(await app.match(DATA_MARK)),
     kept: previous?.build ?? null,

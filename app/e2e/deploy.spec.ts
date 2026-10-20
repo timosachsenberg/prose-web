@@ -549,11 +549,59 @@ test('with no room for the 64-bit engine it still runs, online, and the chip say
     expect(await storeKeys(page, `openms64-module-${a.module64}`)).not.toContain(`openms64/openms.wasm?v=${a.module64}`)
     // the app still works offline (its module is stored); the chip says why the 64-bit engine is not
     await expect(status).toContainText('works offline')
-    await expect(status).toHaveAttribute('title', /The 64-bit engine for large searches not stored: the browser's storage for this site is full\./, {
-      timeout: 30_000,
-    })
+    const full = /The 64-bit engine for large searches not stored: the browser's storage for this site is full\./
+    await expect(status).toHaveAttribute('title', full, { timeout: 30_000 })
+    // and still after the service worker was stopped (as the browser stops an idle one) and started again
+    await cdp.send('ServiceWorker.enable')
+    await cdp.send('ServiceWorker.stopAllWorkers')
+    await page.reload()
+    await engineReady(page)
+    await expect(status).toContainText('works offline')
+    await expect(status).toHaveAttribute('title', full, { timeout: 30_000 })
   } finally {
     await server.close()
+  }
+})
+
+test("an update without room for its module drops a stored 64-bit engine rather than staying online-only", async ({ page, context }) => {
+  test.setTimeout(300_000)
+  const a = A()
+  const distB = fakeUpdate('dist', B_IDS)
+  const server = await pagesServer({ A: 'dist', B: distB })
+  try {
+    // room for A (≈ 52 MB) with its 64-bit engine (≈ 46 MB), not for B's module beside them
+    const cdp = await context.newCDPSession(page)
+    await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(server.url).origin, quotaSize: 130e6 })
+    await firstVisit(page, server.url)
+    await expect(page.getByTestId('engine-status')).toContainText('works offline')
+    await expect.poll(() => stored(page, `prose-app-${a.build}`, '__data-stored__'), { timeout: 30_000 }).toBe(true)
+    expect(await fetchModule64(page, a.module64)).toEqual([200, 200])
+    await expect.poll(() => storeKeys(page, `openms64-module-${a.module64}`)).toHaveLength(2)
+    // a later session: the browser stopped the worker that served it (Chrome frees a dropped store's
+    // bytes only once no worker or page holds its responses)
+    await cdp.send('ServiceWorker.enable')
+    await cdp.send('ServiceWorker.stopAllWorkers')
+    await page.reload()
+    await engineReady(page)
+
+    // B installs: no room for its module while A's 64-bit engine is stored, so that goes (it is stored
+    // again when a search needs it), and B stores its module before it waits: complete
+    server.phase('B')
+    await page.reload()
+    await engineReady(page)
+    await expect(page.getByTestId('update-notice')).toBeVisible({ timeout: 60_000 })
+    expect(await storeKeys(page, `openms-module-${B_IDS.module}`)).toEqual(
+      expect.arrayContaining([`openms/openms.mjs?v=${B_IDS.module}`, `openms/openms.wasm?v=${B_IDS.module}`]),
+    )
+    expect(await page.evaluate((n) => caches.has(n), `openms64-module-${a.module64}`)).toBe(false)
+    const marker = await page.evaluate(
+      async (name) => (await (await caches.open(name)).match(new URL('__generation__', location.href).href))?.json(),
+      `prose-app-${B_IDS.build}`,
+    )
+    expect(marker.moduleSkipped).toBeUndefined()
+  } finally {
+    await server.close()
+    rmSync(distB, { recursive: true, force: true })
   }
 })
 
