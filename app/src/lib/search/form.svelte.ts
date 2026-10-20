@@ -8,7 +8,7 @@ import type { ParamEntry } from '../engine/protocol'
 import { changedParameters, copyValue, copyValues, defaultsOf, sameValue } from '../settings/parameters'
 import { BUILTIN_PRESETS, DEFAULT_PRESET_ID, loadPresets, savePreset, type Preset } from '../settings/presets'
 import { formatBytes } from '../format/bytes'
-import { countProteins, countSpectra, isFasta, isMzML } from './files'
+import { countFasta, countSpectra, isFasta, isMzML, type FastaCount } from './files'
 
 export type FileRow = DesignFields & {
   id: string
@@ -17,10 +17,15 @@ export type FileRow = DesignFields & {
   spectra: number | null
 }
 
-export type DatabaseChoice = { file: File; proteins: number | null }
+/**
+ * The database: its proteins and residues once counted (null while counting), or why it could not be
+ * read (`error`; the search cannot start then).
+ */
+export type DatabaseChoice = { file: File; proteins: number | null; residues: number | null; error: string | null }
 
-/** The entries of the bundled cRAP FASTA (`public/fasta/crap.fasta`). */
+/** The entries of the bundled cRAP FASTA (`public/fasta/crap.fasta`), and their residues. */
 export const CRAP_PROTEINS = 116
+export const CRAP_RESIDUES = 38459
 
 /**
  * The example: one mzML searched twice as two replicates of condition "example", with its FASTA. Its
@@ -156,28 +161,30 @@ class SearchForm {
     }
   }
 
-  /** The count of the database's proteins (setDatabase); null if the file cannot be read. */
-  #counting: { file: File; count: Promise<number | null> } | null = null
+  /** The count of each database chosen (setDatabase), by file: a search started during it awaits it. */
+  #counts = new WeakMap<File, Promise<FastaCount>>()
 
   setDatabase(file: File) {
-    this.database = { file, proteins: null }
-    const count = countProteins(file).then(
-      (n) => n,
-      () => null,
+    this.database = { file, proteins: null, residues: null, error: null }
+    const count = countFasta(file)
+    this.#counts.set(file, count)
+    count.then(
+      ({ proteins, residues }) => {
+        if (this.database?.file === file) Object.assign(this.database, { proteins, residues })
+      },
+      (e: unknown) => {
+        if (this.database?.file === file) this.database.error = String((e as Error)?.message || e)
+      },
     )
-    this.#counting = { file, count }
-    void count.then((n) => {
-      if (this.database?.file === file && n !== null) this.database.proteins = n
-    })
   }
 
   /**
-   * The proteins of the database `file`: at once if counted, else when its count is done (a search
-   * started meanwhile waits for it); null if it cannot be read or is not the database any more.
+   * The count of the database `file` (its proteins and residues), when it is done: a search started
+   * during the count holds this promise (whatever the database is by then). Rejects if the file cannot
+   * be read.
    */
-  async proteinsOf(file: File): Promise<number | null> {
-    if (this.database?.file === file && this.database.proteins !== null) return this.database.proteins
-    return this.#counting?.file === file ? this.#counting.count : null
+  countOf(file: File): Promise<FastaCount> {
+    return this.#counts.get(file) ?? countFasta(file)
   }
 
   /** Loads the example (two replicates of one file and its FASTA) in place of the current files. */

@@ -11,9 +11,10 @@ const MiB = 2 ** 20
 // prose-bench/bench.sh (one variable modification, Oxidation (M); "3 mods" = Oxidation (M), Deamidated
 // (N), Deamidated (Q)). The chunks of 5000 and 6000 ran in Node 24 with the same module.
 const SPECTRA = { erwinia: 78149584, big: 768833771 } // erwinia_tmt.mzML (6,103 MS2), big733.mzML (48,824)
+// residues: the letters of their sequences (human's proteins are 1.7 times as long: 555 against 324)
 const DATABASES = {
-  erwinia: { proteins: 4499, bytes: 1648617 },
-  human: { proteins: 20652, bytes: 13735313 },
+  erwinia: { proteins: 4499, residues: 1455924, bytes: 1648617 },
+  human: { proteins: 20652, residues: 11456418, bytes: 13735313 },
 }
 
 type Search = {
@@ -28,6 +29,11 @@ type Search = {
   peptdeep?: boolean
   chunk?: number
 }
+
+// fix round 2: the human proteome, non-specific (measured as above, 16 threads)
+const HUMAN_NONE_C250 = { name: 'human, non-specific, chunks of 250', db: 'human', none: true, chunk: 250, wasm32: { 4: 2937, 16: 2989 }, wasm64: { 16: 4144 } } as const
+const HUMAN_NONE_C500 = { name: 'human, non-specific, chunks of 500', db: 'human', none: true, chunk: 500, wasm64: { 4: 6911, 16: 7493 } } as const
+const HUMAN_NONE_C1000 = { name: 'human, non-specific, chunks of 1000', db: 'human', none: true, chunk: 1000, wasm64: { 16: 13490 } } as const
 
 /** The searches of the calibration: the measured peak heaps in MiB (the largest of the runs), by module and threads; `failed`: wasm32 ran out of memory or aborted. */
 const CALIBRATION: (Search & { wasm32?: Record<number, number | 'failed'>; wasm64?: Record<number, number> })[] = [
@@ -58,13 +64,29 @@ const CALIBRATION: (Search & { wasm32?: Record<number, number | 'failed'>; wasm6
   { name: 'Erwinia, non-specific, chunks of 250', db: 'erwinia', none: true, chunk: 250, wasm32: { 16: 1977 }, wasm64: { 16: 2847 } },
   { name: 'Erwinia, non-specific, chunks of 500', db: 'erwinia', none: true, chunk: 500, wasm32: { 4: 2937, 16: 2922 }, wasm64: { 4: 4495, 16: 4848 } },
   { name: 'Erwinia, non-specific, chunks of 1000', db: 'erwinia', none: true, chunk: 1000, wasm32: { 16: 'failed' }, wasm64: { 4: 8343, 16: 8849 } },
-  { name: 'Erwinia, non-specific, not chunked', db: 'erwinia', none: true, wasm64: { 16: 15017 } },
+  { name: 'Erwinia, non-specific, not chunked', db: 'erwinia', none: true, wasm32: { 16: 'failed' }, wasm64: { 16: 15017 } },
+  // fix round 2: the human proteome, non-specific (its index follows the residues, not the proteins)
+  HUMAN_NONE_C250,
+  { name: 'human, non-specific, chunks of 400', db: 'human', none: true, chunk: 400, wasm32: { 16: 'failed' } },
+  HUMAN_NONE_C500,
+  HUMAN_NONE_C1000,
 ]
+
+/**
+ * Where the threads decide: human non-specific in chunks of 250 switches at 16 threads (3.22 GB in
+ * wasm32), not at 4 (2.92 GB; it took 2.92 and 2.87 GiB in wasm32).
+ */
+const SWITCH_AT_16_ONLY = ['human, non-specific, chunks of 250']
 
 /** The searches the calibration says switch to wasm64 (estimate in wasm32 above 3 GB). */
 const SWITCH = [
   'Erwinia, non-specific, chunks of 500',
   'Erwinia, non-specific, chunks of 1000',
+  'Erwinia, non-specific, not chunked',
+  'human, non-specific, chunks of 250',
+  'human, non-specific, chunks of 400',
+  'human, non-specific, chunks of 500',
+  'human, non-specific, chunks of 1000',
   'human, semi, chunks of 5000 (Node)',
   'human, semi, chunks of 6000 (Node)',
   'human, semi, chunks of 7000 (Node)',
@@ -84,6 +106,7 @@ function input(s: Search, threads: number, variant: 'wasm32' | 'wasm64'): Memory
     databaseBytes: db.bytes,
     threads,
     proteins: db.proteins,
+    residues: db.residues,
     specificity: s.none ? 'none' : s.semi ? 'semi' : 'full',
     variableMods: s.mods ?? 1,
     peptdeep: s.peptdeep ?? false,
@@ -100,13 +123,14 @@ describe('estimateMemory: the calibration', () => {
           if (heap === 'failed') continue
           const estimate = estimateMemory(input(s, Number(threads), variant))
           expect(estimate.bytes / MiB, `${s.name}, ${variant}, ${threads} threads`).toBeGreaterThanOrEqual(heap)
-          // and not far above (the calibration: at most 1.1 GB, human with 3 modifications in wasm32)
-          expect(estimate.bytes - heap * MiB, `${s.name}, ${variant}, ${threads} threads`).toBeLessThan(1.15 * GB)
+          // and not far above (at most 1.5 GB: human non-specific in chunks of 1000 in wasm64, whose
+          // per-residue constant also covers Erwinia's; human with 3 modifications in wasm32, 1.1 GB)
+          expect(estimate.bytes - heap * MiB, `${s.name}, ${variant}, ${threads} threads`).toBeLessThan(1.5 * GB)
           checked++
         }
       }
     }
-    expect(checked).toBe(65)
+    expect(checked).toBe(71)
   })
 
   it('is above 4 GB for every wasm32 search that failed', () => {
@@ -120,14 +144,14 @@ describe('estimateMemory: the calibration', () => {
         failed++
       }
     }
-    expect(failed).toBe(4)
+    expect(failed).toBe(6)
   })
 
   it('crosses 3 GB in wasm32 exactly for the searches that switch to wasm64', () => {
     for (const s of CALIBRATION) {
       for (const threads of Object.keys(s.wasm32 ?? {}).map(Number)) {
         const estimate32 = estimateMemory(input(s, threads, 'wasm32'))
-        const switches = SWITCH.includes(s.name)
+        const switches = SWITCH.includes(s.name) && (threads === 16 || !SWITCH_AT_16_ONLY.includes(s.name))
         expect(estimate32.bytes > 3 * GB, `${s.name}, ${threads} threads: ${(estimate32.bytes / GB).toFixed(2)} GB`).toBe(switches)
         expect(chooseEngine({ estimate32: estimate32.bytes, memory64: true }), s.name).toBe(switches ? 'wasm64' : 'wasm32')
       }
@@ -155,11 +179,10 @@ describe('estimateMemory: the calibration', () => {
     expect(estimate.level).toBe('ok')
   })
 
-  it('in wasm64, the searches that switch fit well below 16 GB', () => {
+  it('in wasm64, the searches that switch fit below 16 GB', () => {
     for (const name of SWITCH) {
       const estimate = estimateMemory(input(CALIBRATION.find((s) => s.name === name)!, 16, 'wasm64'))
-      expect(estimate.level, name).toBe('ok')
-      expect(estimate.bytes, name).toBeLessThan(10 * GB)
+      expect(estimate.level, name).not.toBe('over')
     }
   })
 })
@@ -170,12 +193,13 @@ describe('estimateMemory: the formula', () => {
 
   it('has the constants of both modules', () => {
     expect(MODULES.wasm32).toMatchObject({ limit: 4 * GB, warn: 3 * GB, module: 0.2 * GB, index: 0.03 * GB, mod: 2, thread: 0.025 * GB, peptdeep: 0.35 * GB, maxFile: MAX_FILE_BYTES })
-    expect(MODULES.wasm32.specificity).toEqual({ full: 1, semi: 10, none: 85 })
-    expect(MODULES.wasm32.chunked).toEqual({ full: 2, semi: 20, none: 180 })
+    expect(MODULES.wasm32.specificity).toEqual({ full: 1, semi: 10 })
+    expect(MODULES.wasm32.chunked).toEqual({ full: 2, semi: 20 })
+    expect(MODULES.wasm32.none).toEqual({ residues: 7.5, chunkResidues: 18.5 })
     expect(MODULES.wasm64).toMatchObject({ limit: 16 * GB, warn: 14 * GB, module: 0.4 * GB, index: 0.025 * GB, mod: 2, thread: 0.035 * GB, peptdeep: 0.25 * GB, maxFile: MAX_FILE_BYTES_64 })
-    expect(MODULES.wasm64.specificity).toEqual({ full: 1, semi: 15, none: 125 })
+    expect(MODULES.wasm64.specificity).toEqual({ full: 1, semi: 15 })
     expect(MODULES.wasm64.chunked.semi).toBe(32)
-    expect(MODULES.wasm64.chunked.none).toBe(310)
+    expect(MODULES.wasm64.none).toEqual({ residues: 9.6, chunkResidues: 24.5 })
     // wasm32 is the default
     expect(estimateMemory(human)).toEqual(estimateMemory({ ...human, variant: 'wasm32' }))
     expect(estimateMemory(human).variant).toBe('wasm32')
@@ -220,10 +244,27 @@ describe('estimateMemory: the formula', () => {
   it('scales the index by the specificity', () => {
     const full = estimateMemory(erwinia).database
     expect(estimateMemory({ ...erwinia, specificity: 'semi' }).database / full).toBeCloseTo(10)
-    expect(estimateMemory({ ...erwinia, specificity: 'none' }).database / full).toBeCloseTo(85)
+    expect(estimateMemory({ ...erwinia, specificity: 'semi' }).database).toBeGreaterThan(full)
     const full64 = estimateMemory({ ...erwinia, variant: 'wasm64' }).database
     expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'semi' }).database / full64).toBeCloseTo(15)
-    expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'none' }).database / full64).toBeCloseTo(125)
+  })
+
+  it('grows a non-specific index with the residues, not the proteins', () => {
+    const MB_RESIDUES = 1e6
+    // 7.5 GB (wasm32) and 9.6 GB (wasm64) per million residues
+    expect(estimateMemory({ ...erwinia, specificity: 'none', residues: MB_RESIDUES }).database).toBeCloseTo(7.5 * GB, -3)
+    expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'none', residues: MB_RESIDUES }).database).toBeCloseTo(9.6 * GB, -3)
+    // the same proteins, twice as long: twice the index
+    const short = estimateMemory({ ...erwinia, specificity: 'none', residues: 4499 * 300 }).database
+    expect(estimateMemory({ ...erwinia, specificity: 'none', residues: 4499 * 600 }).database / short).toBeCloseTo(2)
+    // residues not known: 555 per protein (human's, the longer of the two databases)
+    expect(estimateMemory({ ...erwinia, specificity: 'none' }).database).toBeCloseTo(estimateMemory({ ...erwinia, specificity: 'none', residues: 4499 * 555 }).database)
+    // a chunk: its proteins × the residues per protein, 18.5 (wasm32) and 24.5 (wasm64) GB per million
+    const human = { ...erwinia, proteins: 20652, residues: 11456418, specificity: 'none', chunkSize: 500 } as const
+    expect(estimateMemory(human).database).toBeCloseTo(((18.5 * GB) / 1e6) * 500 * (11456418 / 20652), -3)
+    expect(estimateMemory({ ...human, variant: 'wasm64' }).database).toBeCloseTo(((24.5 * GB) / 1e6) * 500 * (11456418 / 20652), -3)
+    // at most the unchunked index
+    expect(estimateMemory({ ...human, chunkSize: 20000 }).database).toBeCloseTo(((7.5 * GB) / 1e6) * 11456418, -3)
   })
 
   it('builds a chunked index one chunk at a time, at twice the cost per protein, at most the unchunked index', () => {
@@ -239,7 +280,7 @@ describe('estimateMemory: the formula', () => {
     expect(estimateMemory({ ...semi, variant: 'wasm64', chunkSize: 2000 }).database).toBeCloseTo((0.025 * GB * 2000 * 32) / 1000, -3)
     // tryptic and non-specific likewise
     expect(estimateMemory({ ...human, chunkSize: 2000 }).database).toBeCloseTo((0.03 * GB * 2000 * 2) / 1000, -3)
-    expect(estimateMemory({ ...human, specificity: 'none', chunkSize: 200 }).database).toBeCloseTo((0.03 * GB * 200 * 180) / 1000, -3)
+    expect(estimateMemory({ ...human, specificity: 'none', residues: 20652 * 555, chunkSize: 200 }).database).toBeCloseTo(((18.5 * GB) / 1e6) * 200 * 555, -3)
   })
 
   it('grows with each further file: the 2nd to 5th by a quarter as much from the 6th on, more for larger files', () => {

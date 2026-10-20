@@ -9,10 +9,11 @@ import { fileTooLargeMessage, maxFileBytes, threadsForSearch } from '../engine/p
 import { chooseEngine, supportsMemory64, SWITCH_BYTES } from '../engine/variant'
 import { formatPercent } from '../format/fdr'
 import { navigate } from '../route.svelte'
-import { estimateMemory, formatMemory, indexModifications, type MemoryInput, type Specificity } from '../settings/memory'
+import { estimateMemory, formatMemory, GB, indexModifications, type MemoryInput, type Specificity } from '../settings/memory'
 import { unknownModifications } from '../settings/modifications'
 import { copyValues, requestParameters } from '../settings/parameters'
-import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
+import type { FastaCount } from './files'
+import { CRAP_PROTEINS, CRAP_RESIDUES, searchForm as form } from './form.svelte'
 import { runSearch, searchRun, type OpenResult, type Prelude } from './session.svelte'
 
 /** What to do instead where the browser has no Memory64 (Safari) and a search needs more than 4 GB. */
@@ -31,13 +32,14 @@ class SearchPlan {
   /** PeptDeep features need Percolator and ONNX Runtime (the app's package has it; unknown while OpenMS loads). */
   peptdeep = $derived(form.rescore && form.peptdeep && (engineState.info?.onnx ?? true))
 
-  /** What the size of the search's index depends on: the proteins, the specificity, the chunks. */
+  /** What the size of the search's index depends on: the proteins and their residues, the specificity, the chunks. */
   index = $derived.by(() => {
     const enzyme = String(form.value('enzyme'))
     const specificity: Specificity =
       enzyme === 'unspecific cleavage' ? 'none' : ((form.value('peptide:enzyme_specificity') ?? 'full') as Specificity)
     return {
       proteins: (form.database?.proteins ?? 0) + (form.contaminants ? CRAP_PROTEINS : 0),
+      residues: (form.database?.residues ?? 0) + (form.contaminants ? CRAP_RESIDUES : 0),
       specificity,
       chunkSize: Number(form.value('database:chunk_size') ?? 0),
     }
@@ -109,7 +111,8 @@ class SearchPlan {
       const proteins = form.database.proteins
       const decoys = form.value('decoys') === 'ignore' ? '' : ' + decoys'
       const crap = form.contaminants ? ` + ${CRAP_PROTEINS} cRAP` : ''
-      parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap}${decoys}`)
+      if (form.database.error) parts.push('the database cannot be read')
+      else parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap}${decoys}`)
       if (proteins === null) {
         // no estimate before the count: it would be one of 0 proteins (a search started now waits for it)
       } else if (this.estimate?.variant === 'wasm64') {
@@ -125,17 +128,24 @@ class SearchPlan {
   })
 
   /**
-   * The line in full (the footer may cut it) and, for the 64-bit engine, the 32-bit estimate that chose
-   * it (the 64-bit one, shown, can be lower: "2.8 GB · 64-bit engine" for 3.1 GB in 32-bit).
+   * The line in full (the footer may cut it) and, for the 64-bit engine, why: the 32-bit estimate that
+   * chose it (the 64-bit one, shown, can be lower: "2.8 GB · 64-bit engine" for 3.1 GB in 32-bit; two
+   * decimals, rounded up, so that it never reads "3.0 GB, above 3 GB"), a file too large for the 32-bit
+   * engine, or the debug switch.
    */
   lineTitle = $derived.by(() => {
     const e32 = this.estimate32
     if (this.estimate?.variant !== 'wasm64' || !e32 || form.database?.proteins == null) return this.line
-    const estimated = `Estimated ${formatMemory(e32.bytes)} in the standard 32-bit engine`
-    const why =
-      e32.bytes > SWITCH_BYTES || e32.fileTooLarge
-        ? `${estimated}, above 3 GB: the search runs in the 64-bit engine.`
-        : `${estimated}; ?debug=wasm64 runs it in the 64-bit engine.`
+    let why: string
+    if (e32.fileTooLarge) {
+      const max = maxFileBytes('wasm32')
+      const file = [...form.files.map((r) => r.file), form.database.file].find((f) => f.size > max)
+      why = `${file?.name ?? 'A file'} is larger than the 32-bit engine takes (${(Math.floor((max / GB) * 100) / 100).toFixed(2)} GiB): the search runs in the 64-bit engine.`
+    } else if (e32.bytes > SWITCH_BYTES) {
+      why = `Estimated ${(Math.ceil((e32.bytes / GB) * 100) / 100).toFixed(2)} GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine.`
+    } else {
+      why = `Estimated ${formatMemory(e32.bytes)} in the standard 32-bit engine; ?debug=wasm64 runs it in the 64-bit engine.`
+    }
     return `${this.line}\n${why}`
   })
 
@@ -174,6 +184,7 @@ class SearchPlan {
   problem = $derived.by(() => {
     if (form.files.length === 0) return 'Add mzML files to start.'
     if (!form.database) return 'Choose a FASTA database to start.'
+    if (form.database.error) return `${form.database.file.name} cannot be read (${form.database.error}). Choose it again, or another FASTA file.`
     if (!(Number(form.value('FDR:PSM')) > 0)) return 'Set a PSM FDR above 0 %.'
     if (!(Number(form.value('FDR:protein')) > 0)) return 'Set a protein FDR above 0 %.'
     if (this.unknownMods.length > 0) return unknownMessage(this.unknownMods)
@@ -209,19 +220,25 @@ export async function startSearch(): Promise<void> {
     const unknown = unknownModifications(values, info.parameters)
     return unknown.length > 0 ? unknownMessage(unknown) : null
   }
-  // started while the proteins are counted: the search waits for the count ("Counting proteins…"), and
-  // its engine is chosen on it (the form's estimate had 0 proteins)
+  // started while the proteins are counted: the search waits for that count ("Counting proteins…"; held
+  // now, whatever the database is by then), and its engine is chosen on it (the form's estimate had 0)
   const input = $state.snapshot(searchPlan.memoryInput)
-  const database = form.database.file
+  const counting = form.database.proteins === null ? form.countOf(form.database.file) : null
+  const databaseName = form.database.file.name
   const prelude: Prelude | undefined =
-    form.database.proteins === null && input
+    counting && input
       ? {
           label: 'Counting proteins...',
           run: async (r) => {
-            const proteins = await form.proteinsOf(database)
-            if (proteins === null) return r
-            const crap = r.contaminants ? CRAP_PROTEINS : 0
-            return { ...r, engine: searchPlan.engineFor({ ...input, proteins: proteins + crap }) }
+            let count: FastaCount
+            try {
+              count = await counting
+            } catch (e) {
+              throw new Error(`${databaseName} cannot be read (${String((e as Error)?.message || e)}).`)
+            }
+            const proteins = count.proteins + (r.contaminants ? CRAP_PROTEINS : 0)
+            const residues = count.residues + (r.contaminants ? CRAP_RESIDUES : 0)
+            return { ...r, engine: searchPlan.engineFor({ ...input, proteins, residues }) }
           },
         }
       : undefined

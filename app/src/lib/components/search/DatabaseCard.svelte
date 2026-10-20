@@ -33,9 +33,13 @@
         onclick={() => input?.click()}>
         {#if form.database}
           <span id="fasta-chosen" class="min-w-0 truncate font-mono text-[12.5px]">{form.database.file.name}</span>
-          <span class="ml-auto shrink-0 text-xs text-muted-foreground" data-testid="fasta-proteins">
-            {proteins === null ? 'counting…' : `${proteins.toLocaleString('en-US')} proteins`}
-          </span>
+          {#if form.database.error}
+            <span class="ml-auto shrink-0 text-xs text-destructive" data-testid="fasta-proteins" title={form.database.error}>cannot be read</span>
+          {:else}
+            <span class="ml-auto shrink-0 text-xs text-muted-foreground" data-testid="fasta-proteins">
+              {proteins === null ? 'counting…' : `${proteins.toLocaleString('en-US')} proteins`}
+            </span>
+          {/if}
         {:else}
           <span id="fasta-chosen" class="text-muted-foreground">Choose a FASTA file…</span>
         {/if}

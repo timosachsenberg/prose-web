@@ -30,7 +30,8 @@ const { searchPlan, startSearch } = await import('./plan.svelte')
 function fill(proteins: number | null, parameters: Record<string, unknown>, mzmlBytes = 7) {
   form.files = []
   form.addFiles([new File([new Uint8Array(mzmlBytes)], 'run.mzML')])
-  form.database = { file: new File(['>p\nPEPTIDEK\n'], 'db.fasta'), proteins }
+  // (human-length proteins: 555 residues each)
+  form.database = { file: new File(['>p\nPEPTIDEK\n'], 'db.fasta'), proteins, residues: proteins === null ? null : proteins * 555, error: null }
   form.contaminants = false
   form.overrides = { 'FDR:PSM': 0.01, 'FDR:protein': 0.01, ...parameters }
 }
@@ -98,7 +99,7 @@ describe('the module of a search', () => {
     // the number that chose it, in the line's title
     expect(searchPlan.lineTitle).toBe(
       '1 file · 20,652 proteins + decoys · estimated memory 8.1 GB · 64-bit engine (up to 16 GB)\n' +
-        'Estimated 6.4 GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine.',
+        'Estimated 6.40 GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine.',
     )
     expect(searchPlan.advice).toBeNull()
     expect(searchPlan.canStart).toBe(true)
@@ -139,6 +140,38 @@ describe('the module of a search', () => {
     form.setDatabase(new File(['>p\nPEPTIDEK\n'.repeat(100)], 'small.fasta'))
     expect((await request()).engine).toBe('wasm32')
     expect(preludes).toEqual(['Counting proteins...'])
+  })
+
+  test('a database that cannot be read: the footer says so, and Start waits for another', async () => {
+    fill(1000, {})
+    const broken = new File(['>p\nK\n'], 'broken.fasta')
+    // (as a file removed or changed on disk since it was chosen)
+    Object.defineProperty(broken, 'slice', { value: () => ({ arrayBuffer: () => Promise.reject(new Error('NotReadableError')) }) })
+    form.setDatabase(broken)
+    await vi.waitFor(() => expect(form.database?.error).toBe('NotReadableError'))
+    expect(form.database?.proteins).toBeNull()
+    expect(searchPlan.line).toBe('1 file · the database cannot be read')
+    expect(searchPlan.problem).toBe('broken.fasta cannot be read (NotReadableError). Choose it again, or another FASTA file.')
+    expect(searchPlan.canStart).toBe(false)
+    // another database: it can start again
+    form.setDatabase(new File(['>p\nPEPTIDEK\n'], 'good.fasta'))
+    expect(form.database?.error).toBeNull()
+    await vi.waitFor(() => expect(form.database?.proteins).toBe(1))
+    expect(searchPlan.canStart).toBe(true)
+  })
+
+  test('the count held at Start decides, even when the database changes while the search waits for it', async () => {
+    fill(1000, semi)
+    const human = new File(['>p\nPEPTIDEK\n'.repeat(20652)], 'human.fasta')
+    form.setDatabase(human)
+    sent.length = 0
+    const started = startSearch()
+    // the user picks a small database right after Start
+    form.setDatabase(new File(['>p\nPEPTIDEK\n'], 'small.fasta'))
+    await started
+    expect(sent).toHaveLength(1)
+    expect(sent[0].database).toBe(human)
+    expect(sent[0].engine).toBe('wasm64')
   })
 
   test('wasm64 warns above 14 GB and suggests database:chunk_size', () => {

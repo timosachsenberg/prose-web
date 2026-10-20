@@ -30,7 +30,7 @@
         >{/if}{#if p.engine}
         · <span
           data-testid="search-engine"
-          title="The 64-bit engine (64-bit WebAssembly, up to 16 GB): this search's memory is estimated above 3 GB."
+          title="The 64-bit engine (64-bit WebAssembly, up to 16 GB), for the searches estimated above 3 GB."
           >{p.engine}</span
         >{/if}
     </span>

@@ -6,9 +6,10 @@
 // The formula and its constants are the calibration of both modules with OpenMS' allocator
 // (openms-mimalloc; OpenMS PR #10659, wasm-logs/wasm64/packages/calibration.md): Chromium, file by
 // file as the app searches, 1–12 files of 75 and 733 MB, Erwinia and human, 4 to 16 threads, with and
-// without PeptDeep, tryptic, semi-tryptic and in chunks; non-specific (Erwinia, in chunks of 250–1000
-// and unchunked) measured for the app afterwards. The estimate is at or above every measured peak (by
-// 0.03–1.1 GB).
+// without PeptDeep, tryptic, semi-tryptic and in chunks; non-specific (Erwinia and human, in chunks of
+// 250–1000, Erwinia unchunked) measured for the app afterwards. The estimate is at or above every peak
+// of that table (memory.test.ts: by 0.03–1.1 GB); it is a calibration of one spectra file against two
+// databases, not a bound.
 //
 //   bytes = MODULE
 //         + INDEX per 1,000 proteins × SPECIFICITY × MOD^max(0, variable modifications − 1)
@@ -17,6 +18,10 @@
 //         + growth(files, the mean mzML size)           (each further file; it levels off)
 //         + THREAD × max(0, threads − 4)                (once, not per file)
 //         + (PeptDeep ? PEPTDEEP : 0)                   (its models and sessions, whatever the files)
+//
+// A non-specific index holds every subsequence of the proteins, so it grows with their residues, not
+// their number (human's proteins are 1.7 times as long as Erwinia's, and need 1.7 times as much):
+//   index = NONE × residues × MOD^…, chunked: min(NONE_CHUNK × chunk × residues per protein, unchunked).
 //
 // A chunked search (database:chunk_size below the proteins) builds the index of one chunk at a time.
 // A chunk costs about twice the unchunked index per protein (every chunk builds its index again, and
@@ -42,10 +47,15 @@ export interface ModuleConstants {
   module: number
   /** The fragment index per 1,000 proteins of a tryptic search with one variable modification. */
   index: number
-  /** The unchunked index relative to a tryptic one. */
-  specificity: Record<Specificity, number>
-  /** The index per protein of a chunk, relative to INDEX (semi and none measured; full: twice). */
-  chunked: Record<Specificity, number>
+  /** The unchunked index relative to a tryptic one (per protein). */
+  specificity: { full: number; semi: number }
+  /** The index per protein of a chunk, relative to INDEX (semi measured; full: twice). */
+  chunked: { full: number; semi: number }
+  /**
+   * Non-specific: the index per million residues (GB), unchunked and per residue of a chunk (its
+   * proteins × the database's residues per protein).
+   */
+  none: { residues: number; chunkResidues: number }
   /** Each further variable modification (ProSE's single-residue entries) multiplies the index by this. */
   mod: number
   /** The heap growth of a further file of 75 MiB or less, and of 733 MiB or more (linear between). */
@@ -65,11 +75,12 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
     warn: 3 * GB,
     module: 0.2 * GB,
     index: 0.03 * GB, // fit: 28.4 MB
-    // none: not measurable unchunked (Erwinia aborts); above both proportions of wasm64's 125 (310 × 180,
-    // 125 × 10 / 15)
-    specificity: { full: 1, semi: 10, none: 85 },
-    // none: Erwinia in chunks of 250 and 500, 4 and 16 threads (147–171 needed)
-    chunked: { full: 2, semi: 20, none: 180 },
+    specificity: { full: 1, semi: 10 },
+    chunked: { full: 2, semi: 20 },
+    // chunkResidues: Erwinia and human in chunks of 250 and 500, 4 and 16 threads (the threads add
+    // little here: human in chunks of 250 took 2.87 GiB at 4, 2.92 at 16); residues: not measurable
+    // (Erwinia aborts), above both proportions of wasm64's
+    none: { residues: 7.5, chunkResidues: 18.5 },
     mod: 2,
     growthSmall: 0.05 * GB,
     growthLarge: 0.15 * GB,
@@ -82,10 +93,11 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
     warn: 14 * GB,
     module: 0.4 * GB,
     index: 0.025 * GB, // fit: 21.9 MB
-    // none: Erwinia unchunked, 16 threads (122 needed)
-    specificity: { full: 1, semi: 15, none: 125 },
-    // none: Erwinia in chunks of 250, 500 and 1000, 4 and 16 threads (290–307 needed)
-    chunked: { full: 32 / 15, semi: 32, none: 310 },
+    specificity: { full: 1, semi: 15 },
+    chunked: { full: 32 / 15, semi: 32 },
+    // chunkResidues: Erwinia and human in chunks of 250 to 1000, 4 and 16 threads; residues: Erwinia
+    // unchunked, 16 threads
+    none: { residues: 9.6, chunkResidues: 24.5 },
     mod: 2,
     growthSmall: 0.06 * GB,
     growthLarge: 0.15 * GB,
@@ -104,6 +116,9 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
 export function indexModifications(names: readonly string[]): number {
   return names.filter((name) => !/\(Protein [NC]-term\)$/.test(name)).length
 }
+
+/** Residues per protein where a database's are not known: human's (the longer of the two calibrated). */
+export const DEFAULT_RESIDUES_PER_PROTEIN = 555
 
 /** The file sizes between which the growth per file goes from `growthSmall` to `growthLarge`. */
 const SMALL_FILE = 75 * MB
@@ -140,6 +155,8 @@ export type MemoryInput = {
   threads?: number
   /** Target proteins of the database (contaminants included, decoys not). */
   proteins: number
+  /** Their residues (a non-specific index grows with them; default: 555 per protein). */
+  residues?: number
   specificity: Specificity
   /** The variable modifications that enlarge the index (`indexModifications`). */
   variableMods: number
@@ -176,10 +193,21 @@ export function estimateMemory(i: MemoryInput): MemoryEstimate {
   const threads = Math.max(1, i.threads ?? 4)
   const mzmlBytes = i.mzmlBytes ?? i.largestMzmlBytes * files
   const databaseBytes = i.databaseBytes ?? 0
-  const perProtein = (c.index / 1000) * c.mod ** Math.max(0, i.variableMods - 1)
-  const whole = perProtein * i.proteins * c.specificity[i.specificity]
+  const mods = c.mod ** Math.max(0, i.variableMods - 1)
   const chunk = i.chunkSize ?? 0
-  const database = chunk > 0 && chunk < i.proteins ? Math.min(perProtein * chunk * c.chunked[i.specificity], whole) : whole
+  const chunked = chunk > 0 && chunk < i.proteins
+  let database: number
+  if (i.specificity === 'none') {
+    const residues = i.residues ?? i.proteins * DEFAULT_RESIDUES_PER_PROTEIN
+    const perResidue = (GB / 1e6) * mods
+    const whole = perResidue * c.none.residues * residues
+    const chunkResidues = chunk * (residues / Math.max(1, i.proteins))
+    database = chunked ? Math.min(perResidue * c.none.chunkResidues * chunkResidues, whole) : whole
+  } else {
+    const perProtein = (c.index / 1000) * mods
+    const whole = perProtein * i.proteins * c.specificity[i.specificity]
+    database = chunked ? Math.min(perProtein * chunk * c.chunked[i.specificity], whole) : whole
+  }
   const growth = growthOf(files, mzmlBytes / files, c)
   const inputs = 2 * i.largestMzmlBytes + databaseBytes + growth
   const bytes = c.module + database + inputs + c.thread * Math.max(0, threads - 4) + (i.peptdeep ? c.peptdeep : 0)

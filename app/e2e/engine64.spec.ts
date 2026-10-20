@@ -57,7 +57,7 @@ test('the example in the 64-bit engine finds the same PSMs as in the standard on
   await expect(page.getByTestId('search-plan')).toContainText(/estimated memory \d\.\d GB · 64-bit engine \(up to 16 GB\)/)
   await page.getByRole('button', { name: /^Start search/ }).click()
   await expect(page.getByTestId('search-engine')).toHaveText('64-bit', { timeout: 60_000 })
-  await expect(page.getByTestId('search-engine')).toHaveAttribute('title', /64-bit engine \(64-bit WebAssembly, up to 16 GB\): this search's memory is estimated above 3 GB/)
+  await expect(page.getByTestId('search-engine')).toHaveAttribute('title', /^The 64-bit engine \(64-bit WebAssembly, up to 16 GB\), for the searches estimated above 3 GB\.$/)
   await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 150_000 })
   expect(await count(page, 'psm-count')).toBe(psms32)
   expect(await count(page, 'protein-count')).toBe(proteins32)
@@ -111,7 +111,7 @@ test('a search above 3 GB runs in the 64-bit engine, said in the footer', async 
   const plan = page.getByTestId('search-plan')
   await expect(plan).toContainText(/140,000 proteins \+ 116 cRAP \+ decoys · estimated memory \d\.\d GB · 64-bit engine \(up to 16 GB\)/)
   // the number that chose it (the 64-bit estimate shown can be lower)
-  await expect(plan).toHaveAttribute('title', /\nEstimated \d\.\d GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine\.$/)
+  await expect(plan).toHaveAttribute('title', /\nEstimated \d\.\d\d GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine\.$/)
   await expect(page.getByRole('button', { name: /^Start search/ })).toBeEnabled()
 })
 
