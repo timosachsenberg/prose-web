@@ -18,6 +18,7 @@
 // outlives it.
 
 import type { AnnotationOptions, MemoryInfo, PeakAnnotationResult, PredictedIon } from './openms-types'
+import { supportsMemory64 } from './variant'
 import {
   isOutOfMemoryMessage,
   isTrapMessage,
@@ -33,6 +34,7 @@ import {
   type EngineResponse,
   type EngineStage,
   type EngineVariant,
+  type SearchContext,
   type SearchOutcome,
   type SearchProgress,
   type SearchRequest,
@@ -109,6 +111,8 @@ export interface EngineClientOptions {
   /** The same for the workers after that (the module comes from the cache); default 30 s. */
   restartTimeoutMs?: number
   watchdog?: Partial<WatchdogOptions>
+  /** The browser has the 64-bit engine (for the advice after running out of memory); default: it is tested. */
+  memory64?: boolean
 }
 
 const WATCHDOG: WatchdogOptions = {
@@ -158,6 +162,8 @@ interface Session {
   watchdog: { timer: ReturnType<typeof setTimeout> | undefined; memory: MemoryInfo | null } | null
   /** The search in flight has long silent steps (`slowSteps`): the watchdog's longer budgets. */
   slowSearch: boolean
+  /** The search in flight searches the database in chunks (for the advice). */
+  chunked: boolean
 }
 
 function cancelled(type: EngineCall): string {
@@ -183,6 +189,7 @@ export class EngineClient {
   readonly #startTimeoutMs: number
   readonly #restartTimeoutMs: number
   readonly #watchdog: WatchdogOptions
+  readonly #memory64: boolean
   /** The modules a worker has loaded (later starts of the same module use the restart timeout). */
   readonly #loaded = new Set<EngineVariant>()
   #search: Session | null = null
@@ -198,6 +205,7 @@ export class EngineClient {
     this.#startTimeoutMs = options.startTimeoutMs ?? 30_000
     this.#restartTimeoutMs = options.restartTimeoutMs ?? 30_000
     this.#watchdog = { ...WATCHDOG, ...options.watchdog }
+    this.#memory64 = options.memory64 ?? supportsMemory64()
   }
 
   /** Loads OpenMS for the searches with `threads` threads (again, in a new worker, if it runs already). */
@@ -227,6 +235,7 @@ export class EngineClient {
     session.used = true
     session.searchStage = 'reading'
     session.slowSearch = req.slowSteps === true
+    session.chunked = Number(req.parameters['database:chunk_size'] ?? 0) > 0
     session.searches++
     try {
       const outcome = await this.#call(session, 'search', { request: req }, onProgress)
@@ -343,6 +352,7 @@ export class EngineClient {
       holdsResult: false,
       watchdog: null,
       slowSearch: false,
+      chunked: false,
     }
     if (role === 'search') this.#search = session
     else this.#viewer = session
@@ -471,10 +481,15 @@ export class EngineClient {
         pending.type === 'init'
           ? loadFailure(data.error, session.variant)
           : isOutOfMemoryMessage(data.error)
-            ? outOfMemoryMessage(data.stage, data.error, session.variant)
+            ? outOfMemoryMessage(data.stage, data.error, this.#context(session))
             : data.error
       pending.reject(new EngineError('failed', message))
     }
+  }
+
+  /** What the advice after running out of memory knows of the search of `session`. */
+  #context(session: Session): SearchContext {
+    return { variant: session.variant, chunked: session.chunked, memory64: this.#memory64 }
   }
 
   /** What the worker of `session` is doing: its first pending call (or the stage of its search). */
@@ -496,7 +511,7 @@ export class EngineClient {
     session: Session,
     detail: string,
     stage: EngineStage,
-    message: (restarted: boolean) => string = (restarted) => trapMessage(stage, detail, restarted, session.variant),
+    message: (restarted: boolean) => string = (restarted) => trapMessage(stage, detail, restarted, this.#context(session)),
   ) {
     if (this.#current(session.role) !== session || session.state === 'failed') return
     const loaded = session.state === 'ready'

@@ -208,31 +208,46 @@ const interrupted: Record<EngineStage, string> = {
   predict: 'while predicting the spectrum',
 }
 
-/** What to do when a search ran out of memory, in the module of `variant`. */
-function searchMemory(variant: EngineVariant): string {
+/** What the advice after running out of memory knows of the search. */
+export interface SearchContext {
+  /** The engine it ran in (default wasm32). */
+  variant?: EngineVariant
+  /** It searched the database in chunks (database:chunk_size). */
+  chunked?: boolean
+  /** The browser has the 64-bit engine (default true). */
+  memory64?: boolean
+}
+
+/**
+ * What to do when a search ran out of memory: the engine's limit, then fewer files, the index in parts
+ * (smaller parts for a search in chunks already), fewer modifications or a narrower specificity, and
+ * without the 64-bit engine in this browser, where larger searches run.
+ */
+function searchMemory({ variant = 'wasm32', chunked = false, memory64 = true }: SearchContext): string {
   const limit =
     variant === 'wasm64'
       ? 'a search can use at most the 16 GB of the 64-bit engine.'
       : 'a search can use at most the 4 GB of the standard 32-bit engine.'
-  return (
-    `${limit} Search fewer files at a time, or set database:chunk_size (e.g. 2000) under All parameters to build ` +
-    'and search the index in parts, or use fewer variable modifications or a narrower enzyme specificity.'
-  )
+  const index = chunked
+    ? 'use smaller chunks (database:chunk_size under All parameters)'
+    : 'set database:chunk_size (e.g. 2000) under All parameters to build and search the index in parts'
+  const elsewhere = variant === 'wasm32' && !memory64 ? ' Chrome, Edge or Firefox run larger searches in the 64-bit engine.' : ''
+  return `${limit} Search fewer files at a time, or ${index}, or use fewer variable modifications or a narrower enzyme specificity.${elsewhere}`
 }
 
-const advice: Record<EngineStage, (variant: EngineVariant) => string> = {
+const advice: Record<EngineStage, (context: SearchContext) => string> = {
   loading: () => '.',
   reading: () => ', most likely out of memory: search fewer or smaller files at a time.',
-  searching: (variant) => `, most likely out of memory: ${searchMemory(variant)}`,
+  searching: (context) => `, most likely out of memory: ${searchMemory(context)}`,
   idXML: () => ', most likely out of memory. The idXML of this search is no longer available.',
   annotate: () => '.',
   predict: () => '.',
 }
 
-const outOfMemoryAdvice: Record<EngineStage, (variant: EngineVariant) => string> = {
+const outOfMemoryAdvice: Record<EngineStage, (context: SearchContext) => string> = {
   loading: () => '',
   reading: () => ' Search fewer or smaller files at a time.',
-  searching: (variant) => ` ${searchMemory(variant)[0].toUpperCase()}${searchMemory(variant).slice(1)}`,
+  searching: (context) => ` ${searchMemory(context)[0].toUpperCase()}${searchMemory(context).slice(1)}`,
   idXML: () => ' The idXML of this search is too large for the memory that is left.',
   annotate: () => '',
   predict: () => '',
@@ -240,10 +255,10 @@ const outOfMemoryAdvice: Record<EngineStage, (variant: EngineVariant) => string>
 
 /**
  * The message of an OpenMS out-of-memory error (`isOutOfMemoryMessage`; the module lives on, no restart),
- * with what to do about it at the stage it happened, in the module of `variant`.
+ * with what to do about it at the stage it happened, for the search of `context`.
  */
-export function outOfMemoryMessage(stage: EngineStage, detail: string, variant: EngineVariant = 'wasm32'): string {
-  return `OpenMS ran out of memory ${interrupted[stage]} (${detail.trim()}).${outOfMemoryAdvice[stage](variant)}`
+export function outOfMemoryMessage(stage: EngineStage, detail: string, context: SearchContext = {}): string {
+  return `OpenMS ran out of memory ${interrupted[stage]} (${detail.trim()}).${outOfMemoryAdvice[stage](context)}`
 }
 
 /** What the watchdog says when it ends a search that stopped reporting (an abort on a pthread can hang the module). */
@@ -259,12 +274,12 @@ export const RELOAD = 'Reload the page to start OpenMS again.'
 export const NEWER_VERSION = 'A newer version of ProSE was deployed: reload the page.'
 
 /**
- * The message of the calls that a trap ended, by what the worker was doing (in the module of
- * `variant`); `restarted`: a new worker is ready (else the page has to be reloaded).
+ * The message of the calls that a trap ended, by what the worker was doing (for the search of
+ * `context`); `restarted`: a new worker is ready (else the page has to be reloaded).
  */
-export function trapMessage(stage: EngineStage, detail: string, restarted: boolean, variant: EngineVariant = 'wasm32'): string {
+export function trapMessage(stage: EngineStage, detail: string, restarted: boolean, context: SearchContext = {}): string {
   return (
-    `OpenMS stopped ${interrupted[stage]} (${detail || 'a WebAssembly trap'})${advice[stage](variant)} ` +
+    `OpenMS stopped ${interrupted[stage]} (${detail || 'a WebAssembly trap'})${advice[stage](context)} ` +
     (restarted ? 'OpenMS was restarted.' : RELOAD)
   )
 }

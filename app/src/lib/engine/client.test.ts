@@ -967,3 +967,33 @@ describe('the first use of the 64-bit module', () => {
     expect(lastSearchWorker().variant).toBe('wasm32')
   })
 })
+
+describe('the advice after running out of memory', () => {
+  test('a chunked search is told to use smaller chunks, not to set database:chunk_size', async () => {
+    await client.init(4)
+    const chunked: SearchRequest = { ...searchRequest, parameters: { 'database:chunk_size': 2000 } }
+    const oom = await startSearch(() => {}, chunked)
+    oom.worker.reply({ id: oom.id, type: 'error', error: 'OutOfMemory: unable to allocate', trap: false, stage: 'searching' })
+    const message = (await rejection(oom.search)).message
+    expect(message).toMatch(/use smaller chunks \(database:chunk_size under All parameters\)/)
+    expect(message).not.toMatch(/set database:chunk_size \(e\.g\. 2000\)/)
+    // a trap of a chunked search in wasm64 likewise
+    const big = await startSearch(() => {}, { ...chunked, engine: 'wasm64' })
+    big.worker.reply({ id: big.id, type: 'stage', stage: 'searching' })
+    big.worker.crash('RuntimeError: unreachable')
+    const trap = (await rejection(big.search)).message
+    expect(trap).toMatch(/the 16 GB of the 64-bit engine\. Search fewer files at a time, or use smaller chunks/)
+    // not chunked: build the index in parts
+    const plain = await startSearch()
+    plain.worker.reply({ id: plain.id, type: 'error', error: 'OutOfMemory: x', trap: false, stage: 'searching' })
+    expect((await rejection(plain.search)).message).toMatch(/set database:chunk_size \(e\.g\. 2000\) under All parameters/)
+  })
+
+  test('without the 64-bit engine in this browser, the 32-bit advice says where larger searches run', async () => {
+    client = makeClient(1000, { memory64: false })
+    await client.init(4)
+    const oom = await startSearch()
+    oom.worker.reply({ id: oom.id, type: 'error', error: 'OutOfMemory: x', trap: false, stage: 'searching' })
+    expect((await rejection(oom.search)).message).toMatch(/Chrome, Edge or Firefox run larger searches in the 64-bit engine\.$/)
+  })
+})
