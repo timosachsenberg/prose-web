@@ -14,6 +14,12 @@ import type {
 
 export type { ParamEntry }
 
+/**
+ * The two builds of the module (`variant.ts`): wasm32 (`public/openms/`, at most 4 GB, the default) and
+ * wasm64 (`public/openms64/`, Memory64, at most 16 GB), for searches that need more than wasm32 has.
+ */
+export type EngineVariant = 'wasm32' | 'wasm64'
+
 export interface EngineInfo {
   /** OpenMS' version (`getVersion()`). */
   version: string
@@ -27,6 +33,10 @@ export interface EngineInfo {
   onnx: boolean
   /** ProSE's parameters with their defaults, types, descriptions, allowed values and limits. */
   parameters: ParamEntry[]
+  /** The build of the module the worker runs. */
+  variant: EngineVariant
+  /** The largest file its file system holds (`getMemoryInfo().maxFileSize`). */
+  maxFileBytes: number
 }
 
 export interface SearchRequest {
@@ -42,11 +52,13 @@ export interface SearchRequest {
   rescore: boolean
   /** PeptDeep features for Percolator (`peptdeep:enable`, with the models of the package). */
   peptdeep: boolean
+  /** The module to search in (default wasm32; `chooseEngine` in variant.ts). */
+  engine?: EngineVariant
   /**
-   * The memory estimate cannot bound the search (a chunked semi- or non-specific search, `uncertain`):
-   * it runs with fewer threads (`threadsForSearch`).
+   * A semi- or non-specific search: building its index (of the database, or of each chunk) is a long
+   * step without progress reports, so the watchdog waits longer (`WatchdogOptions.slow…`).
    */
-  uncertainMemory?: boolean
+  slowSteps?: boolean
 }
 
 export interface SearchProgress {
@@ -68,11 +80,13 @@ export interface SearchOutcome {
   spectra: StoredSpectra
   /** The time of the search proper (without loading the files and the models). */
   seconds: number
+  /** The module that searched. */
+  variant: EngineVariant
 }
 
 /** The requests of the page to the worker: their arguments and results. */
 export interface EngineCalls {
-  init: { args: { threads: number; baseUrl: string }; result: EngineInfo }
+  init: { args: { threads: number; baseUrl: string; variant: EngineVariant }; result: EngineInfo }
   search: { args: { request: SearchRequest }; result: SearchOutcome }
   annotate: {
     args: { mz: Float32Array; intensity: Float32Array; peptide: string; charge: number; options: AnnotationOptions }
@@ -135,24 +149,32 @@ export function isOutOfMemoryMessage(message: string): boolean {
   return /\bOutOfMemory\b|bad_alloc/.test(message)
 }
 
-/** The largest file the module's file system holds (2 GiB − 64 MiB, README "Files in parts"). */
+/** The largest file the file system of the wasm32 module holds (2 GiB − 64 MiB, README "Files in parts"). */
 export const MAX_FILE_BYTES = 2080374784
 
-/** Whether a file of `bytes` is larger than the module's file system holds (MAX_FILE_BYTES). */
-export function isTooLarge(bytes: number): boolean {
-  return bytes > MAX_FILE_BYTES
+/** The same for the wasm64 module (16 GiB − 64 MiB, its `getMemoryInfo().maxFileSize`). */
+export const MAX_FILE_BYTES_64 = 17112760320
+
+/** The largest file of a module. */
+export function maxFileBytes(variant: EngineVariant): number {
+  return variant === 'wasm64' ? MAX_FILE_BYTES_64 : MAX_FILE_BYTES
 }
 
-/** "big.mzML is too large (2.5 GiB); a file can be at most 1.93 GiB." (for sizes above MAX_FILE_BYTES). */
-export function fileTooLargeMessage(name: string, bytes: number): string {
+/** Whether a file of `bytes` is larger than the module's file system holds (`max`, default wasm32's). */
+export function isTooLarge(bytes: number, max = MAX_FILE_BYTES): boolean {
+  return bytes > max
+}
+
+/** "big.mzML is too large (2.5 GiB); a file can be at most 1.93 GiB." (for sizes above `max`, default wasm32's). */
+export function fileTooLargeMessage(name: string, bytes: number, max = MAX_FILE_BYTES): string {
   const gib = bytes / 2 ** 30
-  // two decimals near the limit: "1.94 GiB", not "1.9 GiB", for a file that is too large; the limit
-  // rounded down (1.9375 GiB)
-  const limit = Math.floor((MAX_FILE_BYTES / 2 ** 30) * 100) / 100
-  return `${name} is too large (${gib.toFixed(gib < 2.05 ? 2 : 1)} GiB); a file can be at most ${limit.toFixed(2)} GiB.`
+  // the limit rounded down (1.9375 GiB → 1.93); two decimals near the limit: "1.94 GiB", not "1.9 GiB",
+  // for a file that is too large
+  const limit = Math.floor((max / 2 ** 30) * 100) / 100
+  return `${name} is too large (${gib.toFixed(gib < limit + 0.12 ? 2 : 1)} GiB); a file can be at most ${limit.toFixed(2)} GiB.`
 }
 
-/** The threads a search of many files (or a chunked semi- or non-specific one) uses at most: the heap grows with each file, the more, the more threads. */
+/** The threads a search of many files uses at most: the heap grows with each file, the more, the more threads. */
 export const MULTI_FILE_THREADS = 4
 
 /** The threads of a search; `capped`: fewer than the engine has, for the memory. */
@@ -162,14 +184,12 @@ export interface SearchThreads {
 }
 
 /**
- * The threads of a search of `files` files when `available` are there: at most 4 for more than 4 files,
- * for more than 2 with PeptDeep, and for a search the memory estimate cannot bound (`uncertainMemory`:
- * chunked semi- or non-specific, whose heap grows by 0.05–0.75 GB per file); else all. Part B measured
- * 12 files of 75 MB, file by file: 2.9 GB at 4 threads, 3.0 GB at 8 and 4.0 GB at 16; with PeptDeep
- * 3.3 GB at 4, 4.1 GB at 8, the 4 GB limit at 16.
+ * The threads of a search of `files` files when `available` are there: at most 4 for more than 4 files
+ * and for more than 2 with PeptDeep; else all. (Part B measured 12 files of 75 MB, file by file, with
+ * Emscripten's allocator: 2.9 GB at 4 threads, 4.0 GB at 16; with PeptDeep the 4 GB limit at 16.)
  */
-export function threadsForSearch(available: number, files: number, peptdeep: boolean, uncertainMemory = false): SearchThreads {
-  const capped = files > 4 || (peptdeep && files > 2) || uncertainMemory
+export function threadsForSearch(available: number, files: number, peptdeep: boolean): SearchThreads {
+  const capped = files > 4 || (peptdeep && files > 2)
   const threads = capped ? Math.min(available, MULTI_FILE_THREADS) : available
   return { threads, capped: threads < available }
 }
@@ -188,35 +208,42 @@ const interrupted: Record<EngineStage, string> = {
   predict: 'while predicting the spectrum',
 }
 
-const SEARCH_MEMORY =
-  'a search can use at most the 4 GB a WebAssembly module can address. Search fewer files at a time, or set ' +
-  'database:chunk_size (e.g. 2000) under All parameters to build and search the index in parts, or use fewer ' +
-  'variable modifications or a narrower enzyme specificity.'
-
-const advice: Record<EngineStage, string> = {
-  loading: '.',
-  reading: ', most likely out of memory: search fewer or smaller files at a time.',
-  searching: `, most likely out of memory: ${SEARCH_MEMORY}`,
-  idXML: ', most likely out of memory. The idXML of this search is no longer available.',
-  annotate: '.',
-  predict: '.',
+/** What to do when a search ran out of memory, in the module of `variant`. */
+function searchMemory(variant: EngineVariant): string {
+  const limit =
+    variant === 'wasm64'
+      ? 'a search can use at most the 16 GB of the 64-bit engine.'
+      : 'a search can use at most the 4 GB a WebAssembly module can address.'
+  return (
+    `${limit} Search fewer files at a time, or set database:chunk_size (e.g. 2000) under All parameters to build ` +
+    'and search the index in parts, or use fewer variable modifications or a narrower enzyme specificity.'
+  )
 }
 
-const outOfMemoryAdvice: Record<EngineStage, string> = {
-  loading: '',
-  reading: ' Search fewer or smaller files at a time.',
-  searching: ` ${SEARCH_MEMORY[0].toUpperCase()}${SEARCH_MEMORY.slice(1)}`,
-  idXML: ' The idXML of this search is too large for the memory that is left.',
-  annotate: '',
-  predict: '',
+const advice: Record<EngineStage, (variant: EngineVariant) => string> = {
+  loading: () => '.',
+  reading: () => ', most likely out of memory: search fewer or smaller files at a time.',
+  searching: (variant) => `, most likely out of memory: ${searchMemory(variant)}`,
+  idXML: () => ', most likely out of memory. The idXML of this search is no longer available.',
+  annotate: () => '.',
+  predict: () => '.',
+}
+
+const outOfMemoryAdvice: Record<EngineStage, (variant: EngineVariant) => string> = {
+  loading: () => '',
+  reading: () => ' Search fewer or smaller files at a time.',
+  searching: (variant) => ` ${searchMemory(variant)[0].toUpperCase()}${searchMemory(variant).slice(1)}`,
+  idXML: () => ' The idXML of this search is too large for the memory that is left.',
+  annotate: () => '',
+  predict: () => '',
 }
 
 /**
  * The message of an OpenMS out-of-memory error (`isOutOfMemoryMessage`; the module lives on, no restart),
- * with what to do about it at the stage it happened.
+ * with what to do about it at the stage it happened, in the module of `variant`.
  */
-export function outOfMemoryMessage(stage: EngineStage, detail: string): string {
-  return `OpenMS ran out of memory ${interrupted[stage]} (${detail.trim()}).${outOfMemoryAdvice[stage]}`
+export function outOfMemoryMessage(stage: EngineStage, detail: string, variant: EngineVariant = 'wasm32'): string {
+  return `OpenMS ran out of memory ${interrupted[stage]} (${detail.trim()}).${outOfMemoryAdvice[stage](variant)}`
 }
 
 /** What the watchdog says when it ends a search that stopped reporting (an abort on a pthread can hang the module). */
@@ -232,12 +259,12 @@ export const RELOAD = 'Reload the page to start OpenMS again.'
 export const NEWER_VERSION = 'A newer version of ProSE was deployed: reload the page.'
 
 /**
- * The message of the calls that a trap ended, by what the worker was doing; `restarted`: a new worker
- * is ready (else the page has to be reloaded).
+ * The message of the calls that a trap ended, by what the worker was doing (in the module of
+ * `variant`); `restarted`: a new worker is ready (else the page has to be reloaded).
  */
-export function trapMessage(stage: EngineStage, detail: string, restarted: boolean): string {
+export function trapMessage(stage: EngineStage, detail: string, restarted: boolean, variant: EngineVariant = 'wasm32'): string {
   return (
-    `OpenMS stopped ${interrupted[stage]} (${detail || 'a WebAssembly trap'})${advice[stage]} ` +
+    `OpenMS stopped ${interrupted[stage]} (${detail || 'a WebAssembly trap'})${advice[stage](variant)} ` +
     (restarted ? 'OpenMS was restarted.' : RELOAD)
   )
 }

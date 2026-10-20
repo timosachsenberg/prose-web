@@ -3,12 +3,13 @@
 // and the ProSE app"): the database and the PeptDeep models are written to the module's file system
 // (WasmFS, in memory, read directly by every thread), and the mzML files are searched file by file
 // (`searchFiles` with provideFile/releaseFile): each is written when its turn comes and removed after
-// its search, so that only the file being searched is in the module's memory (at most 4 GB, shared with
-// the search).
+// its search, so that only the file being searched is in the module's memory (at most 4 GB in wasm32,
+// 16 GB in wasm64, shared with the search). Both modules have one API: this file serves either.
 //
 // Memory: every file goes in and out in bounded chunks (`allocateFile` at its final size, then
 // `writeFileChunk`; `readFileChunk`), so that JavaScript never holds a whole file next to the module's
-// copy. A file can be at most 2 GiB − 64 MiB (MAX_FILE_BYTES): larger ones are refused before the search.
+// copy. A file can be at most what the module's file system holds (`getMemoryInfo().maxFileSize`: 2 GiB −
+// 64 MiB in wasm32, 16 GiB − 64 MiB in wasm64): larger ones are refused before the search.
 //
 // After a fatal error (`isFatal`: a trap, an abort, a C++ exception the module did not catch) the module
 // is not called again, not even to clean up (README "What is not guarded"): the worker is replaced.
@@ -25,7 +26,7 @@ import type {
   ResultTables,
   StoredSpectra,
 } from './openms-types'
-import { fileTooLargeMessage, isFatal, isTooLarge, type EngineInfo, type SearchProgress } from './protocol'
+import { fileTooLargeMessage, isFatal, type EngineInfo, type EngineVariant, type SearchProgress } from './protocol'
 
 /** The accession prefix of the contaminants the app appends (the results model reads it). */
 export const CONTAMINANT_PREFIX = 'CON__'
@@ -245,10 +246,11 @@ export async function loadModels(
   }
 }
 
-/** Refuses a file the module's file system cannot hold (MAX_FILE_BYTES), before anything is written. */
-function checkSizes(files: { name: string; size: number }[]): void {
-  const tooLarge = files.find((f) => isTooLarge(f.size))
-  if (tooLarge) throw new Error(fileTooLargeMessage(tooLarge.name, tooLarge.size))
+/** Refuses a file the module's file system cannot hold (`maxFileSize`), before anything is written. */
+function checkSizes(OpenMS: MainModule, files: { name: string; size: number }[]): void {
+  const max = OpenMS.getMemoryInfo().maxFileSize
+  const tooLarge = files.find((f) => f.size > max)
+  if (tooLarge) throw new Error(fileTooLargeMessage(tooLarge.name, tooLarge.size, max))
 }
 
 const FILES_SHARE = 0.95
@@ -317,7 +319,8 @@ export function searchError(e: unknown): unknown {
 /**
  * Searches the files of `req` against its database with ProSE, file by file:
  *
- * 1. refuses a file larger than MAX_FILE_BYTES (the database too) before anything is written;
+ * 1. refuses a file larger than the module holds (`maxFileSize`; the database too) before anything is
+ *    written;
  * 2. writes the database (with the contaminants) to `/input/db/<name>` (`reading`);
  * 3. searches (`searching`) with `searchFiles(…, { provideFile, releaseFile })`: provideFile(i) writes
  *    file i to `/input/<i>/<name>` (`reading` while it does: `allocateFile` with the size of the largest
@@ -337,7 +340,7 @@ export async function runSearch(OpenMS: MainModule, req: CoreSearchRequest, hook
   }
   const database =
     req.contaminants === null ? req.database.data : await withContaminants(req.database.data, req.contaminants)
-  checkSizes([...req.files.map((f) => ({ name: f.name, size: f.data.size })), { name: req.database.name, size: database.size }])
+  checkSizes(OpenMS, [...req.files.map((f) => ({ name: f.name, size: f.data.size })), { name: req.database.name, size: database.size }])
 
   const paths = req.files.map((f, i) => `/input/${i}/${f.name}`)
   const databasePath = `/input/db/${req.database.name}`
@@ -433,8 +436,8 @@ export function transferList(values: object[], strict: boolean): ArrayBuffer[] {
   return [...buffers]
 }
 
-/** What the page needs to know of the module. */
-export function engineInfo(OpenMS: MainModule, isolated: boolean): EngineInfo {
+/** What the page needs to know of the module (of build `variant`). */
+export function engineInfo(OpenMS: MainModule, isolated: boolean, variant: EngineVariant): EngineInfo {
   const threading = OpenMS.getThreadingInfo()
   const prose = new OpenMS.ProSEAlgorithm()
   const defaults = prose.getDefaults()
@@ -446,6 +449,8 @@ export function engineInfo(OpenMS: MainModule, isolated: boolean): EngineInfo {
       isolated,
       onnx: OpenMS.hasONNXRuntime(),
       parameters: defaults.getEntries(),
+      variant,
+      maxFileBytes: OpenMS.getMemoryInfo().maxFileSize,
     }
   } finally {
     tryDelete(defaults)

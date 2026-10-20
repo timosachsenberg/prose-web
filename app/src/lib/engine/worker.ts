@@ -1,5 +1,6 @@
-// The engine worker: OpenMS (the threaded module of `public/openms`) in a module Web Worker, so that
-// the page never waits for it. `EngineClient` (client.ts) starts two kinds: a search worker (a new one
+// The engine worker: OpenMS (the threaded module of `public/openms`, or the 64-bit one of
+// `public/openms64` for a search that needs more than 4 GB, see variant.ts) in a module Web Worker, so
+// that the page never waits for it. `EngineClient` (client.ts) starts two kinds: a search worker (a new one
 // for every search; it keeps the results for idXML) and a viewer worker (annotate, predict). The page
 // sends requests {id, type, ...arguments}; the worker answers {id, type: "result" | "error"}, and during
 // a search sends {id, type: "progress"} (with the module's heap) and {id, type: "stage"} (writing the
@@ -21,6 +22,7 @@ import {
   type EngineRequest,
   type EngineResponse,
   type EngineStage,
+  type EngineVariant,
   type SearchProgress,
 } from './protocol'
 
@@ -35,7 +37,9 @@ interface WorkerScope {
 const scope = self as unknown as WorkerScope
 
 let OpenMS: MainModule | null = null
-/** Where the app's files are (the base URL of the build): `openms/`, `fasta/`. */
+/** The build of the module this worker loads (init). */
+let variant: EngineVariant = 'wasm32'
+/** Where the app's files are (the base URL of the build): `openms/`, `openms64/`, `fasta/`. */
 let baseUrl = ''
 /** The results of the search of this worker. */
 let results: ProSEResultSet | null = null
@@ -54,29 +58,47 @@ async function fetchAsset(path: string): Promise<Response> {
   return response
 }
 
+/** The packages of the two builds: their directories and ids (the content hashes the build stamps). */
+const PACKAGES: Record<EngineVariant, { dir: string; id: string; name: string }> = {
+  wasm32: { dir: 'openms/', id: __OPENMS_ID__, name: 'OpenMS' },
+  wasm64: { dir: 'openms64/', id: __OPENMS64_ID__, name: 'The 64-bit engine' },
+}
+
 /**
- * A file of the module package (`openms/`), always with the package's id: the service worker stores
- * only files of its own module version, and a module never meets another version's wasm or models.
+ * A file of a module package (`openms/`, `openms64/`), always with that package's id: the service
+ * worker stores only files of its own module versions, and a module never meets another version's wasm.
  */
-function moduleFile(path: string): string {
-  return new URL(`openms/${path}?v=${__OPENMS_ID__}`, baseUrl).href
+function packageFile(path: string, of: EngineVariant): string {
+  const { dir, id } = PACKAGES[of]
+  return new URL(`${dir}${path}?v=${id}`, baseUrl).href
 }
 
-/** Whether the service worker answers 409 for this version's module (another version is on the server). */
-async function anotherVersionOnServer(): Promise<boolean> {
+/** A file of this worker's module. */
+const moduleFile = (path: string) => packageFile(path, variant)
+
+/**
+ * Why this worker's module could not be loaded, where the service worker or the network says more than
+ * the import's "Failed to fetch dynamically imported module": another version on the server (409), or
+ * no connection with the module not stored. Null otherwise.
+ */
+async function whyNotLoaded(): Promise<string | null> {
   for (const file of ['openms.mjs', 'openms.wasm']) {
-    const status = await fetch(moduleFile(file)).then(
-      (r) => (void r.body?.cancel(), r.status),
-      () => 0,
-    )
-    if (status === 409) return true
+    let status: number
+    try {
+      const response = await fetch(moduleFile(file))
+      void response.body?.cancel()
+      status = response.status
+    } catch {
+      return `${PACKAGES[variant].dir}${file} is not stored on this computer, and there is no connection.`
+    }
+    if (status === 409) return `${PACKAGES[variant].name} of this version is no longer on the server. ${NEWER_VERSION}`
   }
-  return false
+  return null
 }
 
-/** A PeptDeep model of the package (`openms/models/`). */
+/** A PeptDeep model of the package (`openms/models/`: both builds use the same files). */
 async function fetchModel(file: string): Promise<Blob> {
-  const response = await fetch(moduleFile(`models/${file}`))
+  const response = await fetch(packageFile(`models/${file}`, 'wasm32'))
   // 409: the service worker found another version's bytes on the server (public/sw.js)
   if (response.status === 409) throw new Error(`The PeptDeep model ${file} of this version is no longer on the server. ${NEWER_VERSION}`)
   if (!response.ok) throw new Error(`openms/models/${file} could not be loaded (${response.status} ${response.statusText}).`)
@@ -93,10 +115,11 @@ type Reply<K extends EngineCall> = { result: EngineCalls[K]['result']; transfer?
 type Handlers = { [K in EngineCall]: (request: RequestOf<K>) => Promise<Reply<K>> }
 
 const handlers: Handlers = {
-  async init({ threads, baseUrl: url }) {
+  async init({ threads, baseUrl: url, variant: build = 'wasm32' }) {
     stage = 'loading'
     if (!OpenMS) {
       baseUrl = url
+      variant = build
       // ?v= on the module and on its wasm (locateFile; the module would ask for openms.wasm without it):
       // the service worker keeps them of one version, and the module's threads, which import it again
       // past the service worker (from a Blob), never meet another version in the HTTP cache
@@ -111,12 +134,13 @@ const handlers: Handlers = {
       } catch (e) {
         // a failed import or wasm fetch says only "Failed to fetch dynamically imported module" or
         // "Aborted(NetworkError…)": the service worker's 409 means a newer version was deployed
-        if (await anotherVersionOnServer()) throw new Error(`OpenMS of this version is no longer on the server. ${NEWER_VERSION}`)
+        const why = await whyNotLoaded()
+        if (why !== null) throw new Error(why)
         throw e
       }
       OpenMS.setLogEnabled('info', false)
     }
-    return { result: engineInfo(OpenMS, scope.crossOriginIsolated === true) }
+    return { result: engineInfo(OpenMS, scope.crossOriginIsolated === true, variant) }
   },
 
   async search({ id, request }) {
@@ -157,7 +181,7 @@ const handlers: Handlers = {
     )
     results = outcome.results
     const { summary, tables, spectra, seconds } = outcome
-    return { result: { summary, tables, spectra, seconds }, transfer: transferList([tables, spectra], import.meta.env.DEV) }
+    return { result: { summary, tables, spectra, seconds, variant }, transfer: transferList([tables, spectra], import.meta.env.DEV) }
   },
 
   async annotate({ mz, intensity, peptide, charge, options }) {

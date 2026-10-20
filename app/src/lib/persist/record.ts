@@ -9,6 +9,7 @@
 
 import type { DesignResolution } from '../design/model'
 import type { ProSEMultiSummary, ResultTables, StoredSpectra } from '../engine/openms-types'
+import type { EngineVariant } from '../engine/protocol'
 import type { OpenResult } from '../search/session.svelte'
 // (only the version: a named import of a JSON module leaves the rest of package.json out of the bundle)
 import { version } from '../../../package.json'
@@ -45,6 +46,11 @@ export type SearchRecord = {
   appVersion: string
   /** OpenMS' version (`EngineInfo.version`), the module that searched. */
   moduleVersion: string
+  /**
+   * The build of that module: wasm32, or wasm64 (Memory64) for a search that needed more than 4 GB.
+   * Records saved before the 64-bit module have none: wasm32 (`variantOf`).
+   */
+  moduleVariant?: EngineVariant
   design: DesignResolution
   settings: RecordSettings
   /** The search's cutoffs (q-values). */
@@ -65,6 +71,8 @@ export type HistoryEntry = Pick<SearchRecord, 'id' | 'name' | 'createdAt' | 'sum
   psms: number
   /** What it takes in the browser's storage. */
   bytes: number
+  /** The build of the module that searched. */
+  variant: EngineVariant
 }
 
 /** A project file or a stored record that cannot be read. The message says what is wrong with it. */
@@ -94,6 +102,13 @@ export class ProjectVersionError extends ProjectError {
 // ---------------------------------------------------------------------------------------------------
 // The record of a result
 
+const VARIANTS: readonly string[] = ['wasm32', 'wasm64'] satisfies EngineVariant[]
+
+/** The module build of a record: wasm32 for one saved before the 64-bit module. */
+export function variantOf(record: Pick<SearchRecord, 'moduleVariant'>): EngineVariant {
+  return record.moduleVariant ?? 'wasm32'
+}
+
 /**
  * A record of `result` under `name`: a search of this session, or a stored one (which keeps the versions
  * that made it). `moduleVersion` (OpenMS' version) is that of a search of this session.
@@ -107,6 +122,7 @@ export function recordFromResult(result: OpenResult, name: string, moduleVersion
     createdAt: result.createdAt,
     appVersion: result.stored?.appVersion ?? APP_VERSION,
     moduleVersion: result.stored?.moduleVersion ?? moduleVersion,
+    moduleVariant: result.outcome.variant,
     design: result.design,
     settings: {
       parameters: s.parameters,
@@ -131,7 +147,7 @@ export function resultFromRecord(r: SearchRecord): Omit<OpenResult, 'id' | 'crea
   const s = r.settings
   return {
     stored: { name: r.name, appVersion: r.appVersion, moduleVersion: r.moduleVersion },
-    outcome: { summary: r.summary, tables: r.tables, spectra: r.spectra, seconds: r.seconds },
+    outcome: { summary: r.summary, tables: r.tables, spectra: r.spectra, seconds: r.seconds, variant: variantOf(r) },
     design: r.design,
     psmFdr: r.psmFdr,
     proteinFdr: r.proteinFdr,
@@ -165,6 +181,7 @@ export function entryOf(record: SearchRecord, bytes: number): HistoryEntry {
     files: record.design.rows.map((row) => row.fileName),
     psms: countPsms(record.tables, record.psmFdr),
     bytes,
+    variant: variantOf(record),
   }
 }
 
@@ -442,6 +459,9 @@ export function checkManifest(value: unknown, kind: RecordKind = 'project'): Man
   }
   for (const key of ['psmFdr', 'proteinFdr', 'seconds'] as const) {
     if (typeof value[key] !== 'number') throw new ProjectError(`The manifest has no "${key}".`)
+  }
+  if (value.moduleVariant !== undefined && !VARIANTS.includes(value.moduleVariant as string)) {
+    throw new ProjectError(`The manifest names an unknown module build (${JSON.stringify(value.moduleVariant)}).`)
   }
   const { design, settings, summary } = value
   if (!isObject(design) || !Array.isArray(design.rows) || !Array.isArray(design.samples)) throw new ProjectError('The manifest has no design.')

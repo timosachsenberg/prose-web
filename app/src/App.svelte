@@ -1,7 +1,7 @@
 <script lang="ts">
   import TopBar from '$lib/components/TopBar.svelte'
   import * as Tooltip from '$lib/components/ui/tooltip'
-  import { debugFlag, debugPeaks, debugSave } from '$lib/debug'
+  import { debugFlag, debugPeaks, debugSave, isDebugResult } from '$lib/debug'
   import { startEngine } from '$lib/engine/app-engine.svelte'
   import { initHistory, saveFinished } from '$lib/persist/history.svelte'
   import { openDebugResult } from '$lib/results/debug-result'
@@ -15,10 +15,10 @@
   readHash()
   // finished searches are saved to History as they come
   initHistory()
-  // ?debug=large|large1|dense|small: a stored synthetic result (?debug=engine is handled by the engine module);
-  // with &save it is also saved to History
+  // ?debug=large|large1|dense|small: a stored synthetic result (?debug=engine is handled by the engine
+  // module, ?debug=wasm64 by the search plan); with &save it is also saved to History
   const debug = debugFlag(location.search)
-  if (debug !== null && debug !== 'engine') {
+  if (isDebugResult(debug)) {
     openDebugResult(debug, debugPeaks(location.search))
     if (debugSave(location.search) && openResult.current) void saveFinished(openResult.current)
   }

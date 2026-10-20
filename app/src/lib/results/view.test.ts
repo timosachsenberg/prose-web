@@ -22,6 +22,7 @@ function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false): OpenResult 
       tables,
       spectra: {} as StoredSpectra,
       seconds: 1,
+      variant: 'wasm32',
       summary: {
         files: tables.files.map((path) => ({ path, ms2Spectra: 10, percolator: rescored ? { applied: true } : null })),
         proteinFdrApplied: true,

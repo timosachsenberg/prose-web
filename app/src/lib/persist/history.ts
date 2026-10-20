@@ -14,6 +14,7 @@ import {
   packRecord,
   ProjectError,
   unpackRecord,
+  variantOf,
   type HistoryEntry,
   type SearchRecord,
 } from './record'
@@ -127,6 +128,7 @@ const toEntry = (m: StoredMeta): HistoryEntry => ({
   files: m.files,
   psms: m.psms,
   bytes: m.bytes,
+  variant: variantOf(m.manifest),
 })
 
 /** The stored searches, the latest first. */

@@ -19,7 +19,16 @@ import {
 
 // EngineClient against fake workers: what the page sees of the workers' messages, traps and restarts.
 
-const info: EngineInfo = { version: '3.7.0', threads: 4, threaded: true, isolated: true, onnx: true, parameters: [] }
+const info: EngineInfo = {
+  version: '3.7.0',
+  threads: 4,
+  threaded: true,
+  isolated: true,
+  onnx: true,
+  parameters: [],
+  variant: 'wasm32',
+  maxFileBytes: MAX_FILE_BYTES,
+}
 /** What the next workers' modules report (a module without threads: `threaded` false). */
 let workerInfo: EngineInfo
 
@@ -38,7 +47,7 @@ class FakeWorker implements WorkerLike {
   postMessage(message: EngineRequest, options?: StructuredSerializeOptions) {
     this.received.push({ message, transfer: options?.transfer ?? [] })
     if (message.type === 'init' && this.loads) {
-      queueMicrotask(() => this.reply({ id: message.id, type: 'result', result: this.loaded }))
+      queueMicrotask(() => this.reply({ id: message.id, type: 'result', result: { ...this.loaded, variant: message.variant } }))
     }
   }
 
@@ -49,6 +58,11 @@ class FakeWorker implements WorkerLike {
   /** The threads it was started with. */
   get threads() {
     return this.request('init').threads
+  }
+
+  /** The module it was started with. */
+  get variant() {
+    return this.request('init').variant
   }
 
   /** The last request of a type. */
@@ -90,7 +104,7 @@ const searchRequest: SearchRequest = {
   peptdeep: false,
 }
 
-const outcome = { summary: { files: [] }, tables: { files: [] }, spectra: {}, seconds: 1 } as unknown as SearchOutcome
+const outcome = { summary: { files: [] }, tables: { files: [] }, spectra: {}, seconds: 1, variant: 'wasm32' } as unknown as SearchOutcome
 
 /** Lets the client's awaits run. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -157,7 +171,7 @@ describe('EngineClient', () => {
   test('init loads OpenMS in a worker with the threads and the base URL', async () => {
     await expect(client.init(4)).resolves.toEqual(info)
     expect(workers).toHaveLength(1)
-    expect(workers[0].request('init')).toMatchObject({ threads: 4, baseUrl: 'http://localhost/prose-web/' })
+    expect(workers[0].request('init')).toMatchObject({ threads: 4, baseUrl: 'http://localhost/prose-web/', variant: 'wasm32' })
   })
 
   test('progress is forwarded with the file index', async () => {
@@ -626,16 +640,13 @@ describe('EngineClient', () => {
 })
 
 describe('threads of a search', () => {
-  test('at most 4 threads for more than 4 files, for more than 2 with PeptDeep, or for an uncertain estimate', () => {
+  test('at most 4 threads for more than 4 files and for more than 2 with PeptDeep', () => {
     expect(threadsForSearch(16, 1, false)).toEqual({ threads: 16, capped: false })
     expect(threadsForSearch(16, 4, false)).toEqual({ threads: 16, capped: false })
     expect(threadsForSearch(16, 5, false)).toEqual({ threads: 4, capped: true })
     expect(threadsForSearch(16, 2, true)).toEqual({ threads: 16, capped: false })
     expect(threadsForSearch(16, 3, true)).toEqual({ threads: 4, capped: true })
     expect(threadsForSearch(2, 12, true)).toEqual({ threads: 2, capped: false })
-    // a chunked semi- or non-specific search: whatever the files
-    expect(threadsForSearch(16, 1, false, true)).toEqual({ threads: 4, capped: true })
-    expect(threadsForSearch(16, 1, false, false)).toEqual({ threads: 16, capped: false })
     expect(threadsLabel({ threads: 4, capped: true })).toBe('4 threads (memory)')
     expect(threadsLabel({ threads: 16, capped: false })).toBe('16 threads')
     expect(threadsLabel({ threads: 1, capped: false })).toBe('1 thread')
@@ -646,7 +657,9 @@ describe('threads of a search', () => {
     expect(client.threadsFor(filesRequest(2))).toEqual({ threads: 16, capped: false })
     expect(client.threadsFor(filesRequest(6))).toEqual({ threads: 4, capped: true })
     expect(client.threadsFor(filesRequest(3, true))).toEqual({ threads: 4, capped: true })
-    expect(client.threadsFor({ ...filesRequest(1), uncertainMemory: true })).toEqual({ threads: 4, capped: true })
+    // a semi- or non-specific search (chunked or not) is not capped: its memory follows the estimate
+    const semi: SearchRequest = { ...filesRequest(1), slowSteps: true }
+    expect(client.threadsFor(semi)).toEqual({ threads: 16, capped: false })
 
     // two files: the worker of init(), with all threads
     const two = await startSearch(() => {}, filesRequest(2))
@@ -682,7 +695,7 @@ describe('threads of a search', () => {
 
 describe('watchdog', () => {
   const MiB = 2 ** 20
-  const watchdog = { silentMs: 80, nearMaxSilentMs: 25, uncertainSilentMs: 400, uncertainNearMaxSilentMs: 300, nearMaxBytes: 64 * MiB }
+  const watchdog = { silentMs: 80, nearMaxSilentMs: 25, slowSilentMs: 400, slowNearMaxSilentMs: 300, nearMaxBytes: 64 * MiB }
   const progress = (label: string, fraction: number): SearchProgress => ({ label, file: 0, fraction })
 
   test('ends a search that reports nothing for too long', async () => {
@@ -762,10 +775,10 @@ describe('watchdog', () => {
     expect(error.message).toMatch(/^OpenMS stopped responding/)
   })
 
-  test('gives a search with an uncertain memory estimate longer budgets', async () => {
+  test('gives a search with long silent steps (semi- or non-specific) longer budgets', async () => {
     client = makeClient(1000, { watchdog })
     await client.init(4)
-    const { search, worker, id } = await startSearch(() => {}, { ...searchRequest, uncertainMemory: true })
+    const { search, worker, id } = await startSearch(() => {}, { ...searchRequest, slowSteps: true })
     worker.reply({ id, type: 'stage', stage: 'searching' })
     // fully grown heap: 300 ms instead of 25; else 400 instead of 80
     worker.reply({ id, type: 'progress', progress: progress('Searching database chunk 3...', 0.1), memory: { heapSize: 4e9, heapMax: 4e9, maxFileSize: MAX_FILE_BYTES } })
@@ -798,5 +811,113 @@ describe('watchdog', () => {
     client.cancel()
     expect((await rejection(search)).kind).toBe('cancelled')
     expect(worker.terminated).toBe(true)
+  })
+})
+
+describe('the 64-bit module', () => {
+  const wasm64 = (request: SearchRequest = searchRequest): SearchRequest => ({ ...request, engine: 'wasm64' })
+
+  test('a search in wasm64 runs in a worker of the 64-bit module, the next wasm32 search in one of wasm32', async () => {
+    await client.init(16)
+    expect(workers[0].variant).toBe('wasm32')
+    const big = await startSearch(() => {}, wasm64())
+    expect(big.worker).not.toBe(workers[0]) // init()'s worker is wasm32
+    expect(big.worker.variant).toBe('wasm64')
+    expect(big.worker.threads).toBe(16)
+    big.worker.reply({ id: big.id, type: 'result', result: { ...outcome, variant: 'wasm64' } })
+    expect((await big.search).variant).toBe('wasm64')
+    expect(client.hasSearchResult).toBe(true)
+
+    const small = await startSearch()
+    expect(small.worker.variant).toBe('wasm32')
+    small.worker.reply({ id: small.id, type: 'result', result: outcome })
+    await small.search
+    // the threads cap applies to wasm64 too
+    const many = await startSearch(() => {}, wasm64(filesRequest(6)))
+    expect([many.worker.variant, many.worker.threads]).toEqual(['wasm64', 4])
+  })
+
+  test('a trap and a cancel restart the 64-bit module, and the advice names its 16 GB', async () => {
+    await client.init(16)
+    const first = await startSearch(() => {}, wasm64())
+    first.worker.reply({ id: first.id, type: 'stage', stage: 'searching' })
+    first.worker.crash('RuntimeError: unreachable')
+    const error = await rejection(first.search)
+    expect(error.kind).toBe('trap')
+    expect(error.message).toMatch(/a search can use at most the 16 GB of the 64-bit engine\./)
+    expect(error.message).toMatch(/OpenMS was restarted\.$/)
+    expect(lastSearchWorker().variant).toBe('wasm64')
+
+    // the restarted worker serves the same search again
+    const again = await startSearch(() => {}, wasm64())
+    expect(again.worker.variant).toBe('wasm64')
+    client.cancel()
+    expect((await rejection(again.search)).kind).toBe('cancelled')
+    expect(lastSearchWorker()).not.toBe(again.worker)
+    expect([lastSearchWorker().variant, lastSearchWorker().threads]).toEqual(['wasm64', 16])
+
+    // OpenMS' own out-of-memory error in wasm64
+    const oom = await startSearch(() => {}, wasm64())
+    expect(oom.worker).toBe(lastSearchWorker())
+    oom.worker.reply({ id: oom.id, type: 'error', error: 'OutOfMemory: unable to allocate', trap: false, stage: 'searching' })
+    expect((await rejection(oom.search)).message).toMatch(/^OpenMS ran out of memory while searching \(.*\)\. A search can use at most the 16 GB of the 64-bit engine\./)
+  })
+
+  test('the viewer stays in wasm32', async () => {
+    await client.init(16)
+    const big = await startSearch(() => {}, wasm64())
+    const annotation = client.annotate(new Float32Array([100]), new Float32Array([1]), 'PEPTIDEK', 2, null)
+    await settle()
+    const viewer = viewerWorkers()[0]
+    expect([viewer.variant, viewer.threads]).toEqual(['wasm32', VIEWER_THREADS])
+    viewer.reply({ id: viewer.request('annotate').id, type: 'result', result: { matches: [] } })
+    await annotation
+    big.worker.reply({ id: big.id, type: 'result', result: outcome })
+    await big.search
+  })
+
+  test('its first load has the start timeout (it is downloaded then), later ones the restart timeout', async () => {
+    client = makeClient(150, { restartTimeoutMs: 20 })
+    loading = [true, false]
+    await client.init(4)
+    const first = client.search(wasm64(), () => {})
+    await wait(60)
+    expect(lastSearchWorker().variant).toBe('wasm64')
+    expect(lastSearchWorker().terminated).toBe(false)
+    expect((await rejection(first)).message).toBe('The 64-bit engine did not start within 0.15 s. Reload the page to start OpenMS again.')
+    // once it has loaded, a restart has the restart timeout
+    const loaded = await startSearch(() => {}, wasm64())
+    loaded.worker.reply({ id: loaded.id, type: 'result', result: outcome })
+    await loaded.search
+    loading = [false]
+    const started = performance.now()
+    expect((await rejection(client.search(wasm64(), () => {}))).message).toMatch(/^The 64-bit engine did not start within 0\.02 s\./)
+    expect(performance.now() - started).toBeLessThan(120)
+  })
+
+  test('a 64-bit module that cannot be loaded says so, and is not restarted in a loop', async () => {
+    await client.init(4)
+    loading = [false]
+    const search = client.search(wasm64(), () => {})
+    await settle()
+    const worker = lastSearchWorker()
+    worker.reply({
+      id: worker.request('init').id,
+      type: 'error',
+      error: 'openms64/openms.mjs is not stored on this computer, and there is no connection.',
+      trap: false,
+      stage: 'loading',
+    })
+    const error = await rejection(search)
+    expect(error.kind).toBe('failed')
+    expect(error.message).toBe(
+      'The 64-bit engine could not be loaded (openms64/openms.mjs is not stored on this computer, and there is no connection). ' +
+        'Reload the page to start OpenMS again.',
+    )
+    expect(searchWorkers()).toHaveLength(2)
+    expect(client.hasSearchResult).toBe(false)
+    // a wasm32 search goes on in a wasm32 worker
+    const next = await startSearch()
+    expect(next.worker.variant).toBe('wasm32')
   })
 })

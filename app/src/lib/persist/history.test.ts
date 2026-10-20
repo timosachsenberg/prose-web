@@ -318,7 +318,7 @@ describe('automatic saving', () => {
 
   const outcome = () => {
     const r = smallRecord()
-    return { summary: r.summary, tables: r.tables, spectra: r.spectra, seconds: 3 }
+    return { summary: r.summary, tables: r.tables, spectra: r.spectra, seconds: 3, variant: 'wasm32' as const }
   }
 
   const list = async () => {
@@ -336,6 +336,17 @@ describe('automatic saving', () => {
     const record = await (await import('./history')).loadSearch(id!)
     expect(record).toMatchObject({ id, name: 'prose-results', moduleVersion: '3.6.0-test', seconds: 3, psmFdr: 0.01, proteinFdr: 0.05 })
     expect(record.settings.fixedMods).toEqual(['Carbamidomethyl (C)'])
+  })
+
+  it('saves a search of the 64-bit module as such, and History lists it so', async () => {
+    fakeEngine.search.mockResolvedValue({ ...outcome(), variant: 'wasm64' })
+    const id = (await page.session.runSearch(request(), meta()))!
+    await vi.waitFor(() => expect(page.state.history.save?.state).toBe('saved'))
+    expect((await (await import('./history')).loadSearch(id)).moduleVariant).toBe('wasm64')
+    expect(page.state.history.entries.find((e) => e.id === id)?.variant).toBe('wasm64')
+    page.session.openStoredResult({ design: meta().design, psmFdr: 1, proteinFdr: 1, outcome: outcome(), settings: meta().settings })
+    await page.state.openFromHistory(id)
+    expect(page.session.openResult.current?.outcome.variant).toBe('wasm64')
   })
 
   it('does not save a search that failed', async () => {

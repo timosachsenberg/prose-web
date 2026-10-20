@@ -25,6 +25,7 @@ export function openDebugResult(flag: DebugResultFlag, peaks = 0): void {
               collisionEnergy: new Float32Array(0),
             },
       seconds: 161,
+      variant: 'wasm32',
     },
     design,
     psmFdr,

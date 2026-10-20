@@ -12,6 +12,8 @@ import {
   packRecord,
   ProjectError,
   ProjectVersionError,
+  recordFromResult,
+  resultFromRecord,
   SCHEMA_VERSION,
   unpackRecord,
   validateRecord,
@@ -264,5 +266,39 @@ describe('what History lists', () => {
     const entry = entryOf(smallRecord(), 1234)
     expect(entry).toMatchObject({ id: 'k5x2j9ab', name: 'Ünïcode run · 2 files', bytes: 1234, files: ['ctrl_a.mzML', 'egf_a.mzML'] })
     expect(entry.summary.files).toHaveLength(2)
+  })
+
+  it('has the module that searched (a record without it: wasm32)', () => {
+    expect(entryOf(smallRecord(), 1).variant).toBe('wasm32')
+    expect(entryOf({ ...smallRecord(), moduleVariant: 'wasm64' }, 1).variant).toBe('wasm64')
+  })
+})
+
+describe('the module of a search', () => {
+  it('is recorded with the version, and comes back with the result', () => {
+    const r = smallRecord()
+    const outcome = { summary: r.summary, tables: r.tables, spectra: r.spectra, seconds: 2, variant: 'wasm64' as const }
+    const result = { id: 'x', createdAt: r.createdAt, outcome, design: r.design, psmFdr: 0.01, proteinFdr: 0.05, engineResult: true, settings: { ...r.settings } }
+    const record = recordFromResult(result, 'big search', '3.7.0-pre')
+    expect(record).toMatchObject({ moduleVersion: '3.7.0-pre', moduleVariant: 'wasm64' })
+    expect(roundTrip(record).moduleVariant).toBe('wasm64')
+    expect(resultFromRecord(roundTrip(record)).outcome.variant).toBe('wasm64')
+    // a stored search keeps what it was searched with
+    const reopened = { ...resultFromRecord(record), id: 'x', createdAt: r.createdAt, engineResult: false }
+    expect(recordFromResult(reopened, 'big search', 'other')).toMatchObject({ moduleVersion: '3.7.0-pre', moduleVariant: 'wasm64' })
+  })
+
+  it('is wasm32 for a record saved before there was a 64-bit module', () => {
+    const old = smallRecord()
+    expect('moduleVariant' in old).toBe(false)
+    const back = roundTrip(old)
+    expect(back.moduleVariant).toBeUndefined()
+    expect(resultFromRecord(back).outcome.variant).toBe('wasm32')
+  })
+
+  it('refuses a module the app does not know, saying so', () => {
+    const m = JSON.parse(manifestToJson(packRecord(smallRecord()).manifest))
+    expect(checkManifest({ ...m, moduleVariant: 'wasm32' }).moduleVariant).toBe('wasm32')
+    expect(() => checkManifest({ ...m, moduleVariant: 'wasm128' })).toThrow(/^The manifest names an unknown module build \("wasm128"\)\.$/)
   })
 })

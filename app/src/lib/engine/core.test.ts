@@ -230,8 +230,11 @@ describe('the module', () => {
   })
 
   test('reports the engine', () => {
-    const info = engineInfo(OpenMS, false)
+    const info = engineInfo(OpenMS, false, 'wasm32')
     expect(info.version).toMatch(/^3\.7/)
+    expect(info.variant).toBe('wasm32')
+    // the largest file of the module's file system (2 GiB − 64 MiB), from the module
+    expect(info.maxFileBytes).toBe(MAX_FILE_BYTES)
     expect(info.threaded).toBe(true)
     expect(info.threads).toBeGreaterThan(0)
     expect(info.onnx).toBe(true)
