@@ -13,7 +13,11 @@ the browser profile, see below) and project files (.prose) that open in the web 
 With "PeptDeep predictions" switched on (under Rescoring, next to Percolator), PeptDeep predicts the
 fragment intensities and retention time of every PSM, and their agreement with the spectrum becomes
 more Percolator features. The models are included (resources.neu); a search with them needs about
-0.6 GB more memory.
+0.35 GB more memory.
+
+A search that needs more than 3 GB of memory (e.g. a large database searched semi-tryptically) runs
+in the 64-bit engine, which can use up to 16 GB; New search says so. It needs Chrome, Chromium or Edge
+133 or newer.
 
 Requirements: Google Chrome, Chromium or Microsoft Edge (Edge is part of Windows).
 
@@ -45,6 +49,6 @@ The browser profile, its caches and the History of searches are in the user's ap
 directory (org.openms.prose in ~/.local/share, ~/Library/Application Support or %APPDATA%). History
 belongs to the port: on another --port the app starts with an empty History.
 
-Version 0.3.0: the ProSE app with the OpenMS module 3.7.0-pre.7abcb280e2 of OpenMS pull request
-#10604 (the threaded module with ONNX Runtime), a preview, not an OpenMS release.
+Version 0.4.0: the ProSE app with the OpenMS modules 3.7.0-pre.fd807dc89a of OpenMS pull request
+#10659 (the threaded modules with ONNX Runtime, 32-bit and 64-bit), a preview, not an OpenMS release.
 OpenMS: BSD 3-Clause license. Neutralinojs: MIT license.

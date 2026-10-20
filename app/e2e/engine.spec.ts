@@ -37,6 +37,8 @@ type WorkerRecord = {
   /** "openms-search" or "openms-viewer" (the Worker's name). */
   name: string
   threads: number
+  /** The module of its `init`: "wasm32" or "wasm64". */
+  variant: string
   maxHeap: number
   maxSilentMs: number
   /** When it was terminated (performance.now()). */
@@ -56,7 +58,7 @@ async function recordWorkers(page: Page) {
     window.Worker = class extends Native {
       constructor(url: string | URL, options?: WorkerOptions) {
         super(url, options)
-        const record: WorkerRecord = { name: options?.name ?? '', threads: 0, maxHeap: 0, maxSilentMs: 0, terminated: null }
+        const record: WorkerRecord = { name: options?.name ?? '', threads: 0, variant: '', maxHeap: 0, maxSilentMs: 0, terminated: null }
         records.push(record)
         let searchingSince: number | null = null
         this.addEventListener('message', (event: MessageEvent) => {
@@ -71,8 +73,11 @@ async function recordWorkers(page: Page) {
         })
         const post = this.postMessage.bind(this) as (message: unknown, options?: StructuredSerializeOptions) => void
         this.postMessage = ((message: unknown, options?: StructuredSerializeOptions) => {
-          const m = message as { type?: string; threads?: number }
-          if (m.type === 'init') record.threads = m.threads ?? 0
+          const m = message as { type?: string; threads?: number; variant?: string }
+          if (m.type === 'init') {
+            record.threads = m.threads ?? 0
+            record.variant = m.variant ?? ''
+          }
           post(message, options)
         }) as Worker['postMessage']
         const terminate = this.terminate.bind(this)
@@ -149,10 +154,10 @@ async function searchCopies(
   init: number,
   parameters: Record<string, unknown>,
   rescore: boolean,
-  uncertainMemory = false,
+  slowSteps = false,
 ) {
   return page.evaluate(
-    async ({ copies, init, parameters, rescore, uncertainMemory }) => {
+    async ({ copies, init, parameters, rescore, slowSteps }) => {
       const w = window as unknown as { __engine: Engine; __workers: WorkerRecord[]; __file: File; __database: File }
       const engine = w.__engine
       await engine.init(init)
@@ -163,7 +168,7 @@ async function searchCopies(
         parameters,
         rescore,
         peptdeep: false,
-        uncertainMemory,
+        slowSteps,
       }
       const threads = engine.threadsFor(request)
       const started = performance.now()
@@ -186,7 +191,7 @@ async function searchCopies(
         proteinList: [...tables.proteins.accession].sort().join(' '),
       }
     },
-    { copies, init, parameters, rescore, uncertainMemory },
+    { copies, init, parameters, rescore, slowSteps },
   )
 }
 
@@ -300,13 +305,13 @@ test('a search of many files shows its threads in the progress, and Cancel stops
 })
 
 /**
- * The heap growth of a further file at 4 threads (settings/memory.ts `growthPerFile`, which the e2e
- * project cannot import): 0.2 GiB for files up to 75 MiB, 0.09 GiB from 733 MiB on, linear between.
+ * The heap growth of a further file in wasm32 (settings/memory.ts `growthPerFile`, which the e2e project
+ * cannot import): 0.05 GiB for files up to 75 MiB, 0.15 GiB from 733 MiB on, linear between.
  */
 function growthPerFile(bytes: number): number {
   const [MiB, GiB] = [2 ** 20, 2 ** 30]
   const t = Math.min(1, Math.max(0, (bytes - 75 * MiB) / ((733 - 75) * MiB)))
-  return 0.2 * GiB + (0.09 - 0.2) * GiB * t
+  return 0.05 * GiB + (0.15 - 0.05) * GiB * t
 }
 
 // A real-size check, run on demand: PROSE_BIG_MZML=<an mzML of several hundred MB> PROSE_BIG_FASTA=<its
@@ -323,11 +328,10 @@ test('searches three copies of a large file with the heap of one', async ({ page
   await page.waitForFunction(() => '__engine' in window)
   await pickFiles(page, big.mzML!, big.fasta!)
 
-  // a chunked semi- or non-specific search, as the app sends it (`uncertainMemory`)
-  const specific = parameters.enzyme !== 'unspecific cleavage' && (parameters['peptide:enzyme_specificity'] ?? 'full') === 'full'
-  const chunked = Number(parameters['database:chunk_size'] ?? 0) > 0 && !specific
-  const one = await searchCopies(page, 1, 4, parameters, true, chunked)
-  const three = await searchCopies(page, 3, 4, parameters, true, chunked)
+  // a semi- or non-specific search, as the app sends it (`slowSteps`: the watchdog waits longer)
+  const slow = parameters.enzyme === 'unspecific cleavage' || (parameters['peptide:enzyme_specificity'] ?? 'full') !== 'full'
+  const one = await searchCopies(page, 1, 4, parameters, true, slow)
+  const three = await searchCopies(page, 3, 4, parameters, true, slow)
   const MiB = 2 ** 20
   const report = (r: typeof one) => ({
     ...r,
@@ -342,12 +346,58 @@ test('searches three copies of a large file with the heap of one', async ({ page
   expect(three.perFile).toEqual([one.psms, one.psms, one.psms])
   expect(three.peptides).toBe(one.peptides)
   expect(three.proteinList).toBe(one.proteinList)
-  // the heap of one file and the growth of two more (the app's model, at most 0.2 GiB per file at 4
-  // threads): below what two more files would add if they stayed in the heap
-  // (not for a chunked semi- or non-specific search: it builds the chunk index again for every file, and
-  // its heap grows by 0.05–0.75 GB per file, whatever the files)
+  // the heap of one file and the growth of two more (the app's model, at most 0.15 GiB per file): below
+  // what two more files would add if they stayed in the heap (with OpenMS' allocator also for a chunked
+  // semi-tryptic search, whose heap no longer scatters)
   const size = await page.evaluate(() => (window as unknown as { __file: File }).__file.size)
-  if (!chunked) expect(three.worker.maxHeap - one.worker.maxHeap).toBeLessThan(2 * size + 2 * growthPerFile(size))
+  expect(three.worker.maxHeap - one.worker.maxHeap).toBeLessThan(2 * size + 2 * growthPerFile(size))
   // the watchdog's budget (60 s once the heap is fully grown, else 120 s) leaves room for the silent steps
   expect(Math.max(one.worker.maxSilentMs, three.worker.maxSilentMs)).toBeLessThan(60_000)
+})
+
+// A search above 3 GB in the app, run on demand: PROSE_LARGE_MZML=<an mzML> PROSE_LARGE_FASTA=<its FASTA>
+// PROSE_LARGE_PARAMETERS=<ProSE parameters as JSON, a preset on top of ProSE's defaults>. E.g. the
+// calibration's human semi-tryptic search (erwinia_tmt.mzML against human_ref.fasta, TMT settings, not
+// chunked: 8.6 GB measured, 6.9 GB estimated in wasm32): from New search, with the preset, it must run
+// in the 64-bit engine and finish. Logs the estimate, the heap, the longest silence and the time.
+const large = { mzML: process.env.PROSE_LARGE_MZML, fasta: process.env.PROSE_LARGE_FASTA }
+test('a search above 3 GB runs in the 64-bit engine and finishes', async ({ page }) => {
+  test.skip(!large.mzML || !large.fasta, 'set PROSE_LARGE_MZML and PROSE_LARGE_FASTA')
+  test.setTimeout(1_800_000)
+  const parameters = JSON.parse(process.env.PROSE_LARGE_PARAMETERS ?? '{}') as Record<string, unknown>
+  await page.addInitScript((parameters) => {
+    localStorage.setItem('prose.presets', JSON.stringify([{ id: 'user-large', name: 'Large check', parameters, builtin: false }]))
+  }, parameters)
+  await recordWorkers(page)
+  await page.goto('./')
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
+  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles(large.mzML!)
+  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles(large.fasta!)
+  await expect(page.getByTestId('fasta-proteins')).toContainText(/[\d,]+ proteins/, { timeout: 60_000 })
+  await page.getByLabel('Preset').click()
+  await page.getByRole('option', { name: 'Large check' }).click()
+  const plan = page.getByTestId('search-plan')
+  await expect(plan).toContainText('· 64-bit engine (up to 16 GB)')
+  const planText = (await plan.textContent())!
+  const estimate = Number(/estimated memory ([\d.]+) GB/.exec(planText)![1])
+
+  const started = Date.now()
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  await expect(page.getByTestId('search-engine')).toHaveText('64-bit', { timeout: 120_000 })
+  await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 1_700_000 })
+  const seconds = (Date.now() - started) / 1000
+  const psms = Number((await page.getByTestId('psm-count').textContent())!.replace(/[^\d]/g, ''))
+  await page.getByRole('tab', { name: 'Overview' }).click()
+  await expect(page.getByTestId('search-facts')).toContainText('64-bit')
+
+  const worker = await page.evaluate(() => (window as unknown as { __workers: WorkerRecord[] }).__workers.findLast((w) => w.name === 'openms-search')!)
+  const GiB = 2 ** 30
+  console.log(
+    `large: ${planText}; ${psms} PSMs; ${seconds.toFixed(0)} s; worker ${worker.variant}, ${worker.threads} threads, ` +
+      `heap ${(worker.maxHeap / GiB).toFixed(2)} GiB (estimate ${estimate} GB), longest silence ${(worker.maxSilentMs / 1000).toFixed(1)} s`,
+  )
+  expect(worker.variant).toBe('wasm64')
+  // more than wasm32 could have given it, and within the estimate
+  expect(worker.maxHeap).toBeGreaterThan(4 * GiB)
+  expect(worker.maxHeap / GiB).toBeLessThanOrEqual(estimate + 0.05)
 })
