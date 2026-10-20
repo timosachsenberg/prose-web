@@ -41,6 +41,8 @@
 
 const BUILD_ID = '__BUILD_ID__'
 const MODULE_ID = '__MODULE_ID__'
+/** The 64-bit module package (openms64/); stored by the worker from a later version on. */
+const MODULE64_ID = '__MODULE64_ID__'
 /** The app's shell, relative to the scope, stored on installation (all or nothing). */
 const SHELL = /* __SHELL__ */ []
 /** The example and the cRAP database, relative to the scope, stored when the app asks (STORE_DATA). */

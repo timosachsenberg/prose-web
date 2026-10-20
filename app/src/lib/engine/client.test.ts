@@ -3,6 +3,7 @@ import { EngineClient, EngineError, VIEWER_THREADS, type EngineClientOptions, ty
 import {
   fileTooLargeMessage,
   isFatal,
+  MAX_FILE_BYTES,
   isTrapMessage,
   thrownMessage,
   threadsForSearch,
@@ -696,7 +697,7 @@ describe('watchdog', () => {
     // reports keep it alive
     for (let i = 0; i < 4; i++) {
       await wait(40)
-      worker.reply({ id, type: 'progress', progress: progress('Searching f0.mzML (1 of 2)...', 0.1 * i), memory: { heapSize: 1e9, heapMax: 4e9 } })
+      worker.reply({ id, type: 'progress', progress: progress('Searching f0.mzML (1 of 2)...', 0.1 * i), memory: { heapSize: 1e9, heapMax: 4e9, maxFileSize: MAX_FILE_BYTES } })
     }
     expect(worker.terminated).toBe(false)
     // then silence
@@ -715,15 +716,15 @@ describe('watchdog', () => {
     const { search, worker, id } = await startSearch()
     worker.reply({ id, type: 'stage', stage: 'searching' })
     const max = 4096 * MiB
-    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.2), memory: { heapSize: 3000 * MiB, heapMax: max } })
+    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.2), memory: { heapSize: 3000 * MiB, heapMax: max, maxFileSize: MAX_FILE_BYTES } })
     await wait(60) // longer than nearMaxSilentMs, but the heap can still grow
     expect(worker.terminated).toBe(false)
     // 96 % of the maximum, but it can still grow by more than 64 MiB: the long budget
-    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.25), memory: { heapSize: 3940 * MiB, heapMax: max } })
+    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.25), memory: { heapSize: 3940 * MiB, heapMax: max, maxFileSize: MAX_FILE_BYTES } })
     await wait(60)
     expect(worker.terminated).toBe(false)
     // fully grown: the short budget
-    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.3), memory: { heapSize: max - 16 * MiB, heapMax: max } })
+    worker.reply({ id, type: 'progress', progress: progress('Scoring...', 0.3), memory: { heapSize: max - 16 * MiB, heapMax: max, maxFileSize: MAX_FILE_BYTES } })
     const started = performance.now()
     const error = await rejection(search)
     expect(performance.now() - started).toBeLessThan(500)
@@ -739,7 +740,7 @@ describe('watchdog', () => {
       await client.init(1)
       const { search, worker, id } = await startSearch()
       worker.reply({ id, type: 'stage', stage: 'searching' })
-      worker.reply({ id, type: 'progress', progress: progress('Building the index...', 0.1), memory: { heapSize: 4e9, heapMax: 4e9 } })
+      worker.reply({ id, type: 'progress', progress: progress('Building the index...', 0.1), memory: { heapSize: 4e9, heapMax: 4e9, maxFileSize: MAX_FILE_BYTES } })
       await wait(150) // longer than silentMs: a long step on one thread, not a hang
       expect(worker.terminated).toBe(false)
       worker.reply({ id, type: 'result', result: outcome })
@@ -767,7 +768,7 @@ describe('watchdog', () => {
     const { search, worker, id } = await startSearch(() => {}, { ...searchRequest, uncertainMemory: true })
     worker.reply({ id, type: 'stage', stage: 'searching' })
     // fully grown heap: 300 ms instead of 25; else 400 instead of 80
-    worker.reply({ id, type: 'progress', progress: progress('Searching database chunk 3...', 0.1), memory: { heapSize: 4e9, heapMax: 4e9 } })
+    worker.reply({ id, type: 'progress', progress: progress('Searching database chunk 3...', 0.1), memory: { heapSize: 4e9, heapMax: 4e9, maxFileSize: MAX_FILE_BYTES } })
     await wait(150)
     expect(worker.terminated).toBe(false)
     const started = performance.now()

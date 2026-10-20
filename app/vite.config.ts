@@ -12,6 +12,7 @@ const isolation = {
 }
 
 const openmsId = moduleId(fileURLToPath(new URL('./public/openms', import.meta.url)))
+const openms64Id = moduleId(fileURLToPath(new URL('./public/openms64', import.meta.url)))
 
 /** Stamps the service worker of the build (sw-stamp.ts). */
 function serviceWorker(): Plugin {
@@ -23,7 +24,7 @@ function serviceWorker(): Plugin {
       outDir = resolve(config.root, config.build.outDir)
     },
     closeBundle() {
-      stampServiceWorker(outDir, openmsId)
+      stampServiceWorker(outDir, { module: openmsId, module64: openms64Id })
     },
   }
 }
@@ -49,7 +50,7 @@ export default defineConfig({
   // GitHub Pages serves the app at /prose-web/; the desktop build sets VITE_BASE=./
   base: process.env.VITE_BASE ?? '/prose-web/',
   plugins: [tailwindcss(), svelte(), desktopPage(), serviceWorker()],
-  define: { __OPENMS_ID__: JSON.stringify(openmsId) },
+  define: { __OPENMS_ID__: JSON.stringify(openmsId), __OPENMS64_ID__: JSON.stringify(openms64Id) },
   resolve: {
     alias: { $lib: fileURLToPath(new URL('./src/lib', import.meta.url)) },
   },

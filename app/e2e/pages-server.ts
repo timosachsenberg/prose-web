@@ -95,17 +95,21 @@ export async function pagesServer(
   }
 }
 
+/** The ids of a build: its module packages (wasm32, wasm64) and the build. */
+export type BuildIds = { module: string; module64: string; build: string }
+
 /** The ids the build stamped into `<dist>/sw.js`. */
-export function stampedIds(dist: string): { module: string; build: string } {
+export function stampedIds(dist: string): BuildIds {
   const sw = readFileSync(join(dist, 'sw.js'), 'utf8')
   const id = (name: string) => new RegExp(`const ${name} = '([0-9a-f]{12})'`).exec(sw)![1]
-  return { module: id('MODULE_ID'), build: id('BUILD_ID') }
+  return { module: id('MODULE_ID'), module64: id('MODULE64_ID'), build: id('BUILD_ID') }
 }
 
 /**
  * A copy of the build `dist` as a later deployment B, as a real rebuild with another module makes it:
  * - the wasm carries one more custom section, the PeptDeep MS2 model one more (unknown) protobuf
- *   field and openms.mjs one more comment: other bytes, still valid;
+ *   field and openms.mjs one more comment: other bytes, still valid; the 64-bit module likewise, if
+ *   `ids.module64` is another than the build's;
  * - the page's and the engine worker's chunks get new hashed names (unless `rename` is false), and
  *   every reference to them follows;
  * - the ids are `ids` wherever the build has them (index.html, the worker chunk), and sw.js is stamped
@@ -114,19 +118,26 @@ export function stampedIds(dist: string): { module: string; build: string } {
  */
 export function fakeUpdate(
   dist: string,
-  ids: { module: string; build: string },
+  ids: BuildIds,
   options: { rename?: boolean; missing?: string[] } = {},
 ): string {
   const { rename = true, missing = [] } = options
   const out = mkdtempSync(join(tmpdir(), 'prose-update-'))
   cpSync(dist, out, { recursive: true })
   const old = stampedIds(dist)
-  const name = Buffer.from('prose-test-update')
-  const payload = Buffer.from(ids.module)
-  const body = Buffer.concat([Buffer.from([name.length]), name, payload])
-  appendFileSync(join(out, 'openms/openms.wasm'), Buffer.concat([Buffer.from([0, body.length]), body]))
+  /** One more custom section ("prose-test-update", with `payload`) at the end of a wasm. */
+  const section = (payload: string) => {
+    const name = Buffer.from('prose-test-update')
+    const body = Buffer.concat([Buffer.from([name.length]), name, Buffer.from(payload)])
+    return Buffer.concat([Buffer.from([0, body.length]), body])
+  }
+  appendFileSync(join(out, 'openms/openms.wasm'), section(ids.module))
   appendFileSync(join(out, 'openms/models/peptdeep_ms2_dynamic.onnx'), Buffer.from([0xc0, 0x3e, 0x01])) // field 1000 = 1
   appendFileSync(join(out, 'openms/openms.mjs'), `\n// deployment ${ids.module}\n`)
+  if (ids.module64 !== old.module64) {
+    appendFileSync(join(out, 'openms64/openms.wasm'), section(ids.module64))
+    appendFileSync(join(out, 'openms64/openms.mjs'), `\n// deployment ${ids.module64}\n`)
+  }
   const renames = new Map<string, string>()
   if (rename) {
     for (const f of readdirSync(join(out, 'assets'))) {
@@ -142,7 +153,7 @@ export function fakeUpdate(
     const path = join(out, f)
     let text = readFileSync(path, 'utf8')
     const before = text
-    text = text.replaceAll(old.module, ids.module).replaceAll(old.build, ids.build)
+    text = text.replaceAll(old.module, ids.module).replaceAll(old.module64, ids.module64).replaceAll(old.build, ids.build)
     for (const [from, to] of renames) text = text.replaceAll(from, to)
     if (text !== before) writeFileSync(path, text)
   }

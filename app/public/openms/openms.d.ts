@@ -79,26 +79,27 @@ declare var RuntimeExports: {
     removeRunDependency: (id: any) => void;
 };
 interface WasmModule {
-  __ZdlPvm(_0: number, _1: number): void;
-  __Znwm(_0: number): number;
   __ZdaPv(_0: number): void;
-  __ZdlPv(_0: number): void;
-  __Znam(_0: number): number;
-  __ZnwmSt11align_val_t(_0: number, _1: number): number;
   __ZdaPvm(_0: number, _1: number): void;
-  _emscripten_builtin_free(_0: number): void;
-  _emscripten_builtin_malloc(_0: number): number;
+  __ZdlPv(_0: number): void;
+  __ZdlPvm(_0: number, _1: number): void;
+  __Znam(_0: number): number;
+  __ZnamSt11align_val_t(_0: number, _1: number): number;
+  __Znwm(_0: number): number;
+  __ZnwmSt11align_val_t(_0: number, _1: number): number;
+  ___libc_calloc(_0: number, _1: number): number;
   ___libc_free(_0: number): void;
   ___libc_malloc(_0: number): number;
-  _strndup(_0: number, _1: number): number;
-  __ZnamSt11align_val_t(_0: number, _1: number): number;
-  ___libc_calloc(_0: number, _1: number): number;
   ___libc_realloc(_0: number, _1: number): number;
   _emscripten_builtin_calloc(_0: number, _1: number): number;
+  _emscripten_builtin_free(_0: number): void;
+  _emscripten_builtin_malloc(_0: number): number;
   _emscripten_builtin_realloc(_0: number, _1: number): number;
   _malloc_size(_0: number): number;
   _malloc_usable_size(_0: number): number;
   _reallocf(_0: number, _1: number): number;
+  _strdup(_0: number): number;
+  _strndup(_0: number, _1: number): number;
 }
 
 type EmbindString = ArrayBuffer|Uint8Array|Uint8ClampedArray|Int8Array|string;
@@ -705,7 +706,7 @@ export type IsotopePeaks = { mz: Float64Array; intensity: Float64Array };
 
 export type ThreadingInfo = { threaded: boolean; available: boolean; numThreads: number };
 
-export type MemoryInfo = { heapSize: number; heapMax: number };
+export type MemoryInfo = { heapSize: number; heapMax: number; maxFileSize: number };
 
 export type PeakFileOptions = { msLevels?: number[]; rtRange?: [number, number]; mzRange?: [number, number]; intensityRange?: [number, number]; metadataOnly?: boolean; fillData?: boolean; sortSpectraByMZ?: boolean; skipXMLChecks?: boolean };
 

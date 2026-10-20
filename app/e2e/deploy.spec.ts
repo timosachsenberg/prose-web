@@ -71,7 +71,7 @@ function storeKeys(page: Page, name: string): Promise<string[]> {
 
 /** The ids of a build; a fake later deployment B of `dist` (see pages-server.ts), removed after the test. */
 const A = () => stampedIds('dist')
-const B_IDS = { module: 'bbbbbbbbbbbb', build: 'bbbbbbbbbb02' }
+const B_IDS = { module: 'bbbbbbbbbbbb', module64: 'bbbbbbbbbb64', build: 'bbbbbbbbbb02' }
 
 /**
  * In `page`, a new engine worker from the page's own worker script (as the app starts one for the
