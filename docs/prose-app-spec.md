@@ -1,6 +1,7 @@
 # ProSE app: as-built specification (snapshot)
 
-Snapshot of 2026-10-19, taken while the work is still going on. It records what exists, why it is the
+Snapshot of 2026-10-19, taken while the work is still going on; the 64-bit engine (wasm64, OpenMS PR
+#10659) added on 2026-10-20 (§5.9, decisions §4.9). It records what exists, why it is the
 way it is, and how to build it again. Read it together with:
 
 - the design: [`superpowers/specs/2026-10-16-prose-app-design.md`](superpowers/specs/2026-10-16-prose-app-design.md)
@@ -161,7 +162,8 @@ Local trees used for the work:
    │  EngineClient (lib/engine/client.ts), one per app (lib/engine/app-engine.svelte.ts)
    │
    ├── search worker (module Worker, lib/engine/worker.ts)   ── a FRESH worker per search ──
-   │     OpenMS module (openms.mjs + openms.wasm, threaded, ONNX Runtime)
+   │     OpenMS module (openms.mjs + openms.wasm, threaded, ONNX Runtime): public/openms/ (wasm32,
+   │       4 GB), or public/openms64/ (wasm64, Memory64, 16 GB) for a search above 3 GB (§5.9)
    │       numThreads = min(hardwareConcurrency, 16) if crossOriginIsolated, else 1
    │       WasmFS memory backend: /input/<i>/<name>, /input/db/<name>, /models, /output
    │       ProSEAlgorithm.searchFiles() → ProSEResultSet (kept until the worker is replaced:
@@ -169,8 +171,8 @@ Local trees used for the work:
    │       results: tables() + spectra() as typed arrays, TRANSFERRED to the page once
    │
    └── viewer worker (lazy, 2 threads, long-lived)
-         its own OpenMS module; serves annotatePeaks() and predictMS2() only, so they never wait
-         behind a search and do not take the search module's heap
+         its own OpenMS module (always wasm32); serves annotatePeaks() and predictMS2() only, so they
+         never wait behind a search and do not take the search module's heap
 ```
 
 - **Isolation and threads.** The threaded module needs a cross-origin isolated page
@@ -181,10 +183,11 @@ Local trees used for the work:
 - **ONNX Runtime** runs in the threaded module on one global pool as large as the OpenMP team
   (`threads.js` reserves its Workers). The PeptDeep models (`peptdeep_ms2_dynamic.onnx` 16.2 MB,
   `peptdeep_rt_dynamic.onnx` 2.8 MB) are fetched from `openms/models/` into `/models` once per worker.
-- **Memory.** One module can address 4 GB (wasm32). Memory grows in 20 % steps and never shrinks;
-  allocator is mimalloc (`-sMALLOC=mimalloc`). Hence the fresh worker per search (B-R9, C-R13). Today
-  the inputs stay in the WasmFS memory backend, inside the 4 GB, for the whole search (B9 in progress
-  changes that, §4.11).
+- **Memory.** One module can address 4 GB (wasm32) or 16 GB (wasm64). Memory grows in 20 % steps and
+  never shrinks; the allocator is OpenMS' build of mimalloc (`OPENMS_WASM_MALLOC=openms-mimalloc`,
+  since the packages 3.7.0-pre.fd807dc89a of PR #10659; Emscripten's `-sMALLOC=mimalloc` before). Hence
+  the fresh worker per search (B-R9, C-R13). The inputs go in file by file (B9, C4b): only the file
+  being searched is in the heap.
 - **Data transfer.** Results reach the page as compact typed columns, never one object per PSM. The
   arrays are plain `ArrayBuffer`s and are transferred, not copied (checked with `structuredClone`).
 
@@ -217,8 +220,10 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   SHA-256 of every file but `sw.js`; `app/sw-stamp.ts`). The worker stores a response only if its
   bytes match (verified on a copy, before `put`); otherwise it stores nothing.
 - **Module** (`openms/`): every file is requested with `?v=<MODULE_ID>` (SHA-256 of `public/openms/`,
-  `__OPENMS_ID__`): `openms.mjs`, `openms.wasm` (through `locateFile`) and the PeptDeep models. Files of
-  its own version: cache-first from `openms-module-<MODULE_ID>`; on the first request fetched, verified,
+  `__OPENMS_ID__`): `openms.mjs`, `openms.wasm` (through `locateFile`) and the PeptDeep models. The
+  64-bit module (`openms64/`, §5.9) likewise with `?v=<MODULE64_ID>` (`__OPENMS64_ID__`), in a store of
+  its own, `openms64-module-<MODULE64_ID>`; it has no models (it uses `openms/models/` with the wasm32
+  id). Files of its own versions: cache-first from `openms-module-<MODULE_ID>` (`openms64-module-…`); on the first request fetched, verified,
   stored and answered from the store (the stored response itself, so Chrome's code cache applies:
   1.34 MB of compiled code beside the 44.8 MB wasm, engine start ≈ 1 s from the second visit, also for
   a wasm stored by an update's installation); `openms.wasm` is never re-wrapped. If the server has
@@ -236,6 +241,10 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   deployment landing mid-installation fails the `index.html` check). The example and `fasta/`
   (**DATA**) are stored when the app asks (`STORE_DATA`, once OpenMS has loaded); offline without them
   "Try the example" says "The example is not stored on this computer, and there is no connection…".
+- **The 64-bit module (W64).** In the manifest (size, SHA-256), but neither in the shell nor in an
+  update's installation: stored only when a search first uses it (then offline too). Without room it
+  is answered from the network, unstored, and STATUS says `module64Full` (not `storageFull`: the app
+  still works offline). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
 - **Updates (fix rounds 1–2).** A new version's worker installs **completely before it waits**: the
   shell and, because a previous version is active, the module (`openms.mjs`, `openms.wasm`), verified;
   DATA and the models the previous generation stored are carried over where the bytes are the new
@@ -243,8 +252,10 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   then waits; the top bar shows "Update ready · Reload" (disabled during a search); Reload posts
   `SKIP_WAITING` and reloads on `controllerchange`. Closing every tab of the old version also lets it
   take over (with its complete stores: offline works the next day).
-- **Generations (fix round 2).** A generation = `prose-app-<BUILD_ID>` + `openms-module-<MODULE_ID>`;
-  a marker in the app store records build, module, manifest, installation and activation times. Only
+- **Generations (fix round 2).** A generation = `prose-app-<BUILD_ID>` + `openms-module-<MODULE_ID>`
+  (+ `openms64-module-<MODULE64_ID>`, once used); a marker in the app store records build, module,
+  module64, manifest, installation and activation times. The cleanup keeps the module stores of both
+  kinds that this or the kept generation names, and drops the others. Only
   the active worker cleans (on activation and whenever a page says hello): it keeps the **previous**
   generation (the one activated before it) while its own is incomplete or a page of that build is open
   (it asks the pages for their build: `BUILD?`, answered by `sw-client`), and drops it otherwise; it
@@ -262,13 +273,15 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   and other project sites of the origin do not keep a previous generation (fix round 3).
 - **"Works offline"** comes from the worker's **STATUS** report: this build's shell and module stored
   and verified. The chip's title adds the PeptDeep models and the example ("PeptDeep models not stored
-  yet (stored when first used)").
+  yet (stored when first used)") and, where the browser has Memory64, the 64-bit engine ("The 64-bit
+  engine for large searches too." / "… not stored yet (stored when first used)." / "… not stored: the
+  browser's storage for this site is full.").
 - **Cleanup of the earlier site** on activation: in the demos' stores (`openms-(module|app)-<semver>`)
   the entries the earlier site left (the module and models in the scope's root, `examples/`); a store
   left empty goes, and `openms-meta` when no such store remains. The entries of `openms-demo/` stay.
   The app and the redirect pages unregister the earlier demos' workers (any scope within `examples/`:
   `examples/prose/`, `examples/browser/`, the desktop 0.2.0's `/examples/prose/`).
-- The worker's own fetches use `cache: "no-cache"`; the build stamps `BUILD_ID`, `MODULE_ID`, `SHELL`,
+- The worker's own fetches use `cache: "no-cache"`; the build stamps `BUILD_ID`, `MODULE_ID`, `MODULE64_ID`, `SHELL`,
   `DATA`, `MANIFEST` and the page's build meta.
 - **First visit**: `index.html` shows "Loading ProSE…"; `main.ts` mounts at once on an isolated page;
   otherwise it waits for the worker (shell only) and the page reloads once per tab (`sessionStorage`
@@ -787,15 +800,15 @@ virtualization is hand-written (`virtual.ts`).
 
 | Area | Files |
 |---|---|
-| Shell | `src/main.ts`, `src/App.svelte`, `src/app.css` (body 13px/1.45, `--text-sm` 0.8125rem), `lib/route.ts` + `lib/route.svelte.ts` (`navigate()`, hash `#/search`, `#/results/<id>`, `#/history`; unknown hashes rewritten with `replaceState`), `lib/components/TopBar.svelte`, `lib/debug.ts` (the one `?debug=` parser: `engine`, `large`, `small`) |
+| Shell | `src/main.ts`, `src/App.svelte`, `src/app.css` (body 13px/1.45, `--text-sm` 0.8125rem), `lib/route.ts` + `lib/route.svelte.ts` (`navigate()`, hash `#/search`, `#/results/<id>`, `#/history`; unknown hashes rewritten with `replaceState`), `lib/components/TopBar.svelte`, `lib/debug.ts` (the one `?debug=` parser: `engine`, `wasm64`, `large`, `large1`, `dense`, `small`) |
 | Design | `lib/design/model.ts`, `design-tsv.ts`, `sdrf.ts`, `paste.ts`, `tsv.ts` |
 | Formats | `lib/format/peptide.ts`, `fdr.ts`, `bytes.ts`, `settings.svelte.ts`; `components/PeptideSequence.svelte`, `FdrInput.svelte` |
-| Engine | `lib/engine/openms-types.ts` (the only file that names the package; re-exports the d.ts types), `protocol.ts`, `core.ts`, `worker.ts`, `client.ts`, `app-engine.svelte.ts` |
+| Engine | `lib/engine/openms-types.ts` (the only file that names the package; re-exports the d.ts types), `protocol.ts`, `core.ts`, `worker.ts`, `client.ts`, `app-engine.svelte.ts`, `variant.ts` (the two module builds: the Memory64 test, the choice, §5.9) |
 | Settings | `lib/settings/presets.ts`, `memory.ts`, `parameters.ts`, `modifications.ts`, `labels.ts` |
 | New search | `views/NewSearch.svelte`; `components/search/*` (DesignTable, DesignCell, DatabaseCard, SettingsCard, AllParametersDialog, RescoringCard, SearchFooter, PlanLine, SearchProgress, SearchError, SavePresetDialog, PasteDialog, EmptyState, Notice, NoticeList, ModificationsField, NumberField, RangeField, ToleranceField, ParameterField, ChoiceSelect); `lib/search/form.svelte.ts`, `session.svelte.ts`, `plan.svelte.ts`, `failure.ts`, `files.ts` |
 | Results | `views/Results.svelte`; `components/results/*` (DataTable, ProteinsTable, PeptidesTable, PsmsTable, FilterBar, ColumnsMenu, KeyFigures, ExportMenu, ProteinRefs, Marker, `cells.ts`); `lib/results/model.ts`, `filters.ts`, `columns.ts`, `csv.ts`, `view.svelte.ts`, `table-columns.ts`, `display.ts`, `figures.ts`, `virtual.ts`, `exports.ts`, `synthetic.ts`, `debug-result.ts`; `lib/download.ts` |
 | Service worker (C12) | `public/sw.js`, `lib/sw-client.ts` (+ test), `sw-stamp.ts` (build: ids, shell and data lists, the page's build meta), `e2e/deploy.spec.ts` + `e2e/pages-server.ts`, `src/globals.d.ts` (`__OPENMS_ID__`); site: `.github/workflows/pages.yml`, `.github/assemble-site.sh` |
-| Static | `public/openms/` (the module package), `public/example/DatabaseSuitability_in_spec.mzML` + `DatabaseSuitability_database.fasta`, `public/fasta/crap.fasta` (OpenMS's cRAP copy, 116 entries, md5 77d6226971ab42fa7d3727668bebc707, C-R3) |
+| Static | `public/openms/` (the module package, wasm32, with the PeptDeep models), `public/openms64/` (the 64-bit module package, §5.9), `public/example/DatabaseSuitability_in_spec.mzML` + `DatabaseSuitability_database.fasta`, `public/fasta/crap.fasta` (OpenMS's cRAP copy, 116 entries, md5 77d6226971ab42fa7d3727668bebc707, C-R3) |
 
 Config: `vite.config.ts` (`base: process.env.VITE_BASE ?? '/prose-web/'`, `$lib` alias, COOP/COEP on
 `server` and `preview` (`PROSE_PREVIEW_ISOLATION=off` drops them for `preview`), `define`
@@ -823,22 +836,29 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
 
 ### 5.2 Engine client and worker (C4, C4b)
 
-- **One `EngineClient` per app** (`app-engine.svelte.ts`), `startTimeoutMs` 180 000 until a module has
-  loaded once (first download of the 45 MB module), `restartTimeoutMs` 30 000 for every worker after
-  that; `?debug=engine` exposes it as `window.__engine` (no second client). OpenMS loads at app start
+- **One `EngineClient` per app** (`app-engine.svelte.ts`), `startTimeoutMs` 180 000 until a module of
+  that build has loaded once (first download of the 45 MB module; the 64-bit module's first load
+  likewise), `restartTimeoutMs` 30 000 for every worker of that build after that; `?debug=engine` exposes it as `window.__engine` (no second client). OpenMS loads at app start
   (the status chip, parameter list and dialog need it). Workers are named `openms-search` and
   `openms-viewer`. Search threads: all cores (≤ 16) when cross-origin isolated, else 1.
 - **Threads per search** (`threadsForSearch`, C4b): at most 4 (`MULTI_FILE_THREADS`) for more than 4
-  files, for more than 2 files with PeptDeep, and for a search whose memory estimate is `uncertain`
-  (chunked semi- or non-specific, `SearchRequest.uncertainMemory`), whatever the file count; else all.
-  A search with other threads than the current worker's gets a new worker. The progress shows the
-  threads ("16 threads", "4 threads (memory)" with a tooltip, `data-testid="search-threads"`).
+  files and for more than 2 files with PeptDeep; else all, in either module. (The cap for chunked
+  semi-/non-specific searches is gone: decisions "W64 thread cap".) A search with other threads or
+  another module than the current worker's gets a new worker. The progress shows the threads ("16
+  threads", "4 threads (memory)" with a tooltip, `data-testid="search-threads"`) and, for a search in
+  wasm64, "· 64-bit" (`data-testid="search-engine"`, with a title).
+- **Module per search** (W64, §5.9): `SearchRequest.engine` (`'wasm32' | 'wasm64'`, from the plan's
+  `chooseEngine`); the search worker's `init` gets `variant`, and the worker loads `openms/` or
+  `openms64/` with that package's `?v=`. `EngineInfo` gains `variant` and `maxFileBytes`,
+  `SearchOutcome` gains `variant`. Failures name the module: "The 64-bit engine could not be loaded
+  (…)", "… did not start within … s"; out-of-memory advice "a search can use at most the 16 GB of the
+  64-bit engine".
 - **Fresh worker per search** (C-R13): `search()` starts a new worker unless the current one has run
-  only init. The worker keeps the `ProSEResultSet` until replaced (idXML is stored lazily; `delete()` is
+  only init (and has the search's threads and module). The worker keeps the `ProSEResultSet` until replaced (idXML is stored lazily; `delete()` is
   pointless, memory never shrinks and the worker is discarded). `EngineClient.hasSearchResult` is false
   before a search, from the start of a new search, and after a trap.
 - **Viewer worker** (C-R14): created lazily on the first `annotate()`/`predict()`, `VIEWER_THREADS` 2,
-  needs no init, fetches the MS2 model lazily; restarts independently of the search worker. `idXML()`
+  always wasm32, needs no init, fetches the MS2 model lazily; restarts independently of the search worker. `idXML()`
   stays with the search worker.
 - **Paths**: inputs `/input/<i>/<name>`, database `/input/db/<name>`; `/input` is removed after the
   search (the result set already holds the peaks) and cleaned before writing. After a fatal error
@@ -858,9 +878,10 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
   the user's `File` with `FileReaderSync` in 16 MB pieces), with `allocateFile(path, size, capacity)`
   where `capacity` = the largest file's size (one block reused by every file); `releaseFile(i)`
   removes it (also after a failed write or search). Only the largest file must fit in the heap, next
-  to the search. A file (or the database) larger than `MAX_FILE_BYTES` = 2 GiB − 64 MiB is refused
-  before anything is written: "x.mzML is too large (2.5 GiB); a file can be at most 1.93 GiB." (a file
-  of exactly `MAX_FILE_BYTES` is accepted). While a file is written the stage is `reading` (an OOM or
+  to the search. A file (or the database) larger than the module holds (`getMemoryInfo().maxFileSize`:
+  `MAX_FILE_BYTES` = 2 GiB − 64 MiB in wasm32, `MAX_FILE_BYTES_64` = 16 GiB − 64 MiB in wasm64) is
+  refused before anything is written: "x.mzML is too large (2.5 GiB); a file can be at most 1.93 GiB."
+  (a file of exactly that size is accepted). While a file is written the stage is `reading` (an OOM or
   trap then advises fewer or smaller files), then `searching` again. Results are identical to all files
   written first (core test; in Chromium 3 × 733 MB gave the same 30,342 PSMs, 998 peptides, 451
   proteins as the all-at-once Node reference). idXML is read back with `readFileChunk` in 16 MB pieces.
@@ -883,22 +904,24 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
   OpenMS was restarted." | "Reload the page to start OpenMS again." — `database:chunk_size (e.g. 2000)`
   advice only for `searching`; "search fewer or smaller files" for `reading`; "the idXML of this search
   is no longer available" for `idXML`. OpenMS' own `OutOfMemory`/`bad_alloc` errors (the module lives
-  on, no restart) get `outOfMemoryMessage(stage, detail)`: "OpenMS ran out of memory <while …>
-  (<detail>). <advice by stage>". The restart (same role and threads) is verified within
-  `restartTimeoutMs`.
+  on, no restart) get `outOfMemoryMessage(stage, detail, variant)`: "OpenMS ran out of memory <while
+  …> (<detail>). <advice by stage and module>". The restart (same role, threads and module) is
+  verified within `restartTimeoutMs`.
 - **Watchdog** (C4b): armed by the search's `searching` stage, only when its module runs more than one
   thread (`info.threaded` and `info.threads > 1`); every progress or stage message re-arms it (also the
   `reading` stage of writing a file). Silence for 120 s, or 60 s once the reported heap is fully grown
   (`heapSize ≥ heapMax − 64 MiB`; the heap never shrinks, so "near 95 %" would hold for the rest of the
   search), ends the worker like a trap: "OpenMS stopped responding (likely out of memory); search fewer
-  files at a time. OpenMS was restarted." A search with `uncertainMemory` (chunked semi/none) gets 300 s
-  and 120 s: a non-specific chunk build (about 5 × the semi one) and Percolator on a large pool are
-  silent and unmeasured, and a false kill of a valid search is worse than a late hang report. Only the
+  files at a time. OpenMS was restarted." A search with `slowSteps` (every semi- or non-specific search,
+  chunked or not; was `uncertainMemory`, chunked only, W64) gets 300 s and 120 s: its index build is
+  silent (human semi-tryptic unchunked in wasm64, 16 threads: 48.7 s without a report), a non-specific
+  one about 5 × that, Percolator on a large pool unmeasured, and a false kill of a valid search is
+  worse than a late hang report. Only the
   search's own thread reports; chunk index builds, Percolator, PeptDeep, mzML parsing, writing a file
   and the final tables are silent: measured at most 5.8 s (3 × 733 MB TMT, 3 × 78 MB human
   semi-tryptic in chunks, 4 threads, Chromium).
 - **Cancel** (C4b): a no-op unless a search is in flight; terminates the search worker at once and
-  starts a new one with the threads of the cancelled search (no cooperative stop: the worker is never
+  starts a new one with the threads and module of the cancelled search (no cooperative stop: the worker is never
   reused after a search and holds nothing that outlives it); pending calls reject "The search was
   cancelled." / "The request was cancelled." (`EngineError.kind` `cancelled`), also those of a search
   whose worker trapped and is being restarted. Late answers of replaced workers are ignored. Load
@@ -1006,50 +1029,93 @@ them (§5.5.3).
 - The Percolator switch sets `SearchRequest.rescore` (ProSE `rescore`); on by default.
 - The PeptDeep switch requires Percolator: disabled while Percolator is off ("Needs Percolator: switch
   it on to use PeptDeep.") and without ONNX Runtime. **Off by default** (deviation from the mockup:
-  faster first search, 0.6 GB less memory, the example gains nothing). The instrument select
+  faster first search, 0.35 GB less memory (0.6 GB before openms-mimalloc), the example gains nothing). The instrument select
   (`peptdeep:instrument`) sits in the card.
 
 #### 5.3.5 Memory estimate (`settings/memory.ts`)
 
-The engine searches file by file (§5.2), so the inputs do not add up; each further file grows the heap
-(mimalloc reuses little of what the files before freed, the more threads, the more).
+Rewritten for the 64-bit engine (W64, decisions "W64 estimate"): the formula and constants of the
+calibration of both modules with OpenMS' allocator (`/scratch/sachsenb/wasm-logs/wasm64/packages/calibration.md`:
+Chromium 141, a Web Worker on an isolated page, `searchFiles` file by file as the app runs it, rescore
+and keepSpectra on, a fresh module per search, the TMT settings of `prose-bench/bench.sh`; 1–12 files
+of 75 and 733 MB, Erwinia and human, 4–16 threads, with and without PeptDeep, tryptic, semi-tryptic,
+chunked; the chunks of 5000/6000 in Node). The engine searches file by file (§5.2), so the inputs do not
+add up.
 
 ```
-formula = 0.25 GB
-        + 0.08 GB per 1,000 proteins × (1 full | 6 semi | 30 none) × 1.5^max(0, variableMods − 1)
-        + 2 × largest mzML + FASTA                                    (the file being searched + spectra)
-        + (files − 1) × threadFactor(threads) × growthPerFile(mean mzML size)
-        + (peptdeep ? 0.6 GB + (files − 1) × 10 MB × max(0, threads − 4) : 0)
-growthPerFile = 0.2 GB up to 75 MB, 0.09 GB from 733 MB on, linear between   (at 4 threads)
-threadFactor  = 0 at 1 thread, (t − 1)/3 up to 4, 1 + 0.035 × (t − 4) above   (1.14 at 8, 1.42 at 16)
-proteins = min(target proteins incl. contaminants, database:chunk_size if > 0)
-uncertain = chunk_size > 0 AND chunk_size < proteins AND specificity semi/none   (isUncertain;
-            proteins not counted yet: any chunk_size > 0 counts, so Start then still caps the threads)
-bytes = uncertain ? max(formula, 3.8 GB) : formula                   (UNCERTAIN_BYTES)
-level: 'over' if bytes > 4 GB, a file > MAX_FILE_BYTES, or (uncertain AND files ≥ 3);
-       'warn' if bytes > 3 GB or uncertain;  else 'ok'
-cause = 'inputs' if fileTooLarge or (inputs > database and not uncertain), else 'database'
-threads = threadsForSearch(engine threads, files, peptdeep, uncertain)   (§5.2)
+bytes = MODULE
+      + INDEX × proteins / 1000 × SPECIFICITY × MOD^max(0, variableMods − 1)      (the fragment index)
+        variableMods = indexModifications(…): protein-terminal entries do not count (W64)
+      + 2 × largest mzML + FASTA                         (the file being searched + its spectra)
+      + growth(files, mean mzML size)
+      + THREAD × max(0, threads − 4)                     (once, not per file)
+      + (peptdeep ? PEPTDEEP : 0)                        (flat: no file or thread term)
+chunked (0 < chunk_size < proteins), any specificity:
+  index = INDEX / 1000 × MOD^… × min(chunk_size × CHUNKED, proteins × SPECIFICITY)
+growth: g = G_SMALL at ≤ 75 MiB … G_LARGE at ≥ 733 MiB (linear between); files 2–5 add g each,
+        every further file g / 4
+proteins = target proteins incl. contaminants (not counted yet: 0)
+level: 'over' if bytes > LIMIT or a file > MAX_FILE; 'warn' if bytes > WARN; else 'ok'
+cause = 'inputs' if fileTooLarge or inputs > index, else 'database'
+threads = threadsForSearch(engine threads, files, peptdeep)   (§5.2)
 ```
 
-There is no storage mode and no `INPUT_BUDGET` any more (B9 chose per-file streaming, not OPFS; the
-engine's `inputBudget()`/`SEARCH_RESERVE` are gone): only a file above `MAX_FILE_BYTES` is refused.
-Calibrated on part B's file-by-file measurements in Chromium (1–12 copies of 74.5 MiB and 733 MiB at
-4/8/16 threads, with and without PeptDeep; within 0.92–1.13 of the measured heap) and C4b's: 1 and 3 ×
-733 MB TMT at 4 threads measured 2153 and 2377 MiB, estimated 2093 and 2277 MiB. A chunked semi- or
-non-specific search (`uncertain`) is not estimated by the formula: it rebuilds the chunk index for
-every file and its heap is set by allocator reuse, not by the chunk or the inputs (limitation 11), so
-the plan line shows "estimated memory about 3.8 GB of 4 GB (measured 2.3–3.8 GB)".
+| Constant (`MODULES`) | wasm32 | wasm64 |
+|---|---|---|
+| LIMIT / WARN | 4 GB / 3 GB | 16 GB / 14 GB |
+| MODULE | 0.20 GB | 0.40 GB |
+| INDEX per 1,000 proteins, tryptic | 0.03 GB (fit 28.4 MB) | 0.025 GB (fit 21.9 MB) |
+| SPECIFICITY full / semi / none | 1 / 10 / 50 | 1 / 15 / 75 |
+| CHUNKED full / semi / none | 2 / 20 / 100 | 32⁄15 / 32 / 160 |
+| MOD per further variable modification | 2 | 2 |
+| G_SMALL / G_LARGE | 0.05 / 0.15 GB | 0.06 / 0.15 GB |
+| THREAD per thread above 4 | 0.025 GB | 0.035 GB |
+| PEPTDEEP | 0.35 GB | 0.25 GB |
+| MAX_FILE | 2 GiB − 64 MiB | 16 GiB − 64 MiB |
 
-Tests: Erwinia (4,499 proteins, tryptic, 1 variable mod, 78 MB) 0.7–1.0 GB `ok`; human (20,652,
-tryptic) 1.8–2.4 GB; human semi `over`; one file at a time; growth by threads and file size; the
-measured multi-file searches; 1 GB × 6–12; a file too large; chunked semi/none = 3.8 GB, `warn`, `over`
-from 3 files. Footer advice by cause: `database:chunk_size (e.g. 2000) under All parameters`; "search
-fewer files at once"; the too-large message; for uncertain: "A chunked semi- or non-specific search
-needs about 3.8 GB of the 4 GB (a human semi-tryptic search in chunks of 2000 measured 2.3–3.8 GB): it
-may stop for lack of memory." and, from 3 files, "…, more with every file (… measured 2.3–3.7 GB for one
-file, 3.8 GB for three): with N files it will likely stop for lack of memory. Search fewer files at a
-time." Start stays enabled over budget (C-R15 accepted).
+Semi measured (human needs 14.2 in wasm64; Erwinia 8.7/10.7), CHUNKED semi measured (a chunk costs
+about twice the unchunked index per protein: every chunk builds its index again, and the memory is
+not handed back between chunks; so a chunk size near the protein count gains nothing, which the min()
+covers); non-specific and the other CHUNKED values are in proportion, unmeasured. MB/GB binary.
+
+**Which module** (`chooseEngine`, `engine/variant.ts`; the user's rule): the estimate with the wasm32
+constants (`estimate32`); above 3 GB (`SWITCH_BYTES`), or a file too large for wasm32, the search runs
+in wasm64 if the browser has Memory64 (`supportsMemory64`: `WebAssembly.validate` of the smallest
+module with a shared 64-bit memory, once per page) and the footer shows the estimate with the wasm64
+constants. `?debug=wasm64` forces wasm64 (where supported). What the calibration's searches do:
+human semi-tryptic in chunks of 5000, 6000, 7000, 8000 and unchunked switch (3.36, 3.96, 4.56, 5.16 and
+6.55 GB in wasm32); everything else stays, the largest 12 × 733 MB (2.63 GB) and human with 3 variable
+modifications (2.84 GB). The estimate is at or above every measured peak (by 0.03–1.1 GB), and above
+4 GB for every wasm32 search that failed.
+
+Gone: `UNCERTAIN_BYTES` (3.8 GB), `isUncertain`, `uncertain`, "`over` from 3 files" and the thread cap
+for chunked semi/none (openms-mimalloc removed the scattering they guarded against, decisions "W64
+estimate", "W64 thread cap"); `threadFactor`, the growth per file by threads and PeptDeep's file × thread
+term (the calibration found neither). No storage mode and no `INPUT_BUDGET` (B9 chose per-file
+streaming): only a file above the module's MAX_FILE is refused.
+
+The plan line: wasm32 "… · estimated memory 2.6 GB of 4 GB"; wasm64 "… · estimated memory 8.1 GB ·
+64-bit engine (up to 16 GB)". Advice (amber `warn`, red `over`), by module and cause:
+
+- wasm32 (only without Memory64 above 3 GB): "Close to the 4 GB limit: consider database:chunk_size
+  (e.g. 2000) under All parameters." / "…, mostly for the files: search fewer files at once.";
+  above 4 GB: "This browser cannot run the 64-bit engine, which a search above 4 GB needs: use a
+  Chromium-based browser (Chrome, Edge) or Firefox, smaller chunks (database:chunk_size under All
+  parameters) or fewer files at once." (a file too large: the too-large message, then that).
+- wasm64: "Close to the 16 GB limit of the 64-bit engine: set database:chunk_size (e.g. 2000) under All
+  parameters." (> 14 GB); "More than the 16 GB the 64-bit engine can use: set database:chunk_size (e.g.
+  2000) under All parameters, or use fewer variable modifications or a narrower specificity." (> 16
+  GB); "…, mostly for the files: search fewer files at once."; a file above 15.93 GiB: the too-large
+  message.
+
+Start stays enabled over budget (C-R15 accepted).
+
+Tests (`memory.test.ts`): the calibration table (23 searches, 56 measured peaks in both modules at
+4–16 threads: estimate ≥ peak and within 1.15 GB; every failed wasm32 search above 4 GB; exactly the
+five named searches cross 3 GB, `chooseEngine` agrees), the constants, each term, chunking, the growth
+schedule, the levels of both modules, a file too large in each. `plan.test.ts`: the module, the line and
+the advice with and without Memory64, the forced switch, `slowSteps`. Real large case (on demand,
+§5.9): human semi-tryptic unchunked in Chromium, 16 threads: estimate 8.8 GB, 8.66 GiB measured.
 
 #### 5.3.6 Footer, progress, errors, TopBar
 
@@ -1060,7 +1126,9 @@ time." Start stays enabled over budget (C-R15 accepted).
 - `SearchProgress`: the step label (with "File n of N" when `file ≥ 0`), a bar that is
   **indeterminate** while the fraction is 0 or has not moved for 2 s (staging, Percolator, chunked
   searches, engine start; static under reduced motion) and determinate otherwise ("48 % · 0:03"),
-  then the threads of the search ("· 16 threads", "· 4 threads (memory)", C4b).
+  then the threads of the search ("· 16 threads", "· 4 threads (memory)", C4b) and, in wasm64,
+  "· 64-bit" (title: "The 64-bit engine (Memory64): this search needs more memory than the 4 GB of the
+  standard engine; it can use up to 16 GB.").
   Cancel is available throughout, also while OpenMS is still loading (the run ends at once; the load
   continues in the background).
 - `SearchError`: a shadcn Alert above the footer, scrolled into view: "<context>: <summary>", with the
@@ -1219,9 +1287,43 @@ cache when results close; a 1 % debug variant. A read-only investigation compare
 | **C4b** (after B9; built, see §5.2 and §5.3.5) | Staging through B9's per-file streaming (`provideFile`/`releaseFile`, `allocateFile` with the largest file's size as capacity, `writeFileChunk`), so only the largest file must fit; files above `MAX_FILE_BYTES` refused; idXML read with `readFileChunk`; the memory estimate without storage mode (file by file, growth per file by threads and size; chunked semi/none shown as the measured 3.8 GB, `over` from 3 files); threads capped at 4 for many files, PeptDeep with > 2 files and chunked semi/none, shown in the progress; a watchdog for a hung module of more than one thread (120 s, 60 s with a fully grown heap; 300/120 s for chunked semi/none); Cancel terminates at once and restarts with the search's threads, also during a restart; no module call after a fatal error; stage advice for `OutOfMemory`/`bad_alloc`; 180 s start timeout for the first load, 30 s for restarts; progress ends at 95 % with "Pooling the files..."; e2e of many files, cancel, the threads in the UI, and an on-demand large-file check (`PROSE_BIG_MZML`) |
 | **C8** protein panel | `ProteinPanel`, `CoverageStrip`, `CoverageMap`, `ProteinPeptides` (mockup 4): selecting a protein opens its page on the right; coverage strip with modified sites (dots `#1baf7a`); coverage map in blocks of 10 residues, 40 per row; tabs Coverage · Peptides · PSMs; peptides with per-sample counts, expanding in place to their PSMs; a PSM opens the PSM view; "Open in PSM table" → chip "Protein: <accession> ✕"; Description hidden while the panel is open. e2e `a protein opens its coverage, peptides and PSMs`, `open in PSM table carries the filter` |
 | **C9** PSM view | `PsmView`, `FragmentLadder`, `SpectrumMirror`, `IonTable`, `MassErrorPlot`, `PsmFeatures`, `psm/svg-export.ts` (mockup 3): breadcrumb Proteins › protein › Peptides › peptide › PSM; sequence with fragment ladder and modified-residue labels; mirror spectrum with ion/charge/loss toggles, observed (top) against the **PeptDeep prediction** when `info.onnx` (NCE = `peptdeepNce` of the PSM's file, else the spectrum's `collisionEnergy`, else 30; instrument from the search) or the **theoretical** spectrum (`annotate(...).theoretical`, uniform height); annotation with `maxCharge` 2 for the mirror (B-R29), labels grouped per peak ("y1-NH3++ / z1++", B-R20); b/y ion table with matched cells highlighted; **fragment mass error plot**: m/z against ppm, tolerance band, dot size = intensity, one dot per match; cosine and spectral angle from the `ms2_cosine`/`ms2_spectral_angle` features when present; all PSM features; Prev/Next in the current sort; "Export spectrum (SVG)" (`exportSpectrumSvg`: standalone, inline styles, no external references). Peaks come from the stored spectra, so the view works for History and project files without the mzML. Ion colours b `#2a78d6`, y `#eb6834`, unmatched grey; direct labels, so colour is never the only cue |
-| **C10** Overview, Samples, QC, open search | `OverviewTab`, `SamplesTab`, `QcTab`, `DeltaMassPanel`: Overview = key figures and a per-file table (spectra, PSMs, Percolator applied/skipped, seconds); with `summary.openSearch` a delta-mass histogram and the mapped-PTM table; Samples = samples × (PSMs, peptides, proteins) grouped by condition; QC = target vs decoy score distribution, precursor-error histogram, PSMs per file. Hand-written SVG charts with direct labels or legends |
-| **C11** History and `.prose` | `persist/record.ts` (the record, pack/unpack, checks), `history.ts` (storage), `history.svelte.ts` (page state and actions), `backend.ts` (idb-keyval + OPFS; `memory-backend.ts` for tests), `project.ts` + `crc32.ts` (the `.prose` zip), `views/History.svelte`, `components/history/SaveNotice.svelte`. `SCHEMA_VERSION = 1`; `SearchRecord = { schema: 1; id; name; createdAt; appVersion; moduleVersion; design: DesignResolution; settings: { parameters; rescore; peptdeep; contaminants; presetId?; fixedMods; database }; psmFdr; proteinFdr; seconds; summary; tables; spectra }` (beyond the plan: `settings.fixedMods`, `settings.database`, `psmFdr`, `proteinFdr`, `seconds`, which a reopened result needs). Metadata (the manifest = the record without its arrays, the byte layout, the list fields) in IndexedDB via idb-keyval, the arrays as one OPFS file per search (`prose-history/<key>.bin`, written through `createWritable` in 8 MB pieces); a save over an existing id writes a new file and removes the old one after, so a failed save keeps the old entry. Saved automatically after each completed search only (a failed or cancelled search leaves History unchanged); `navigator.storage.estimate()` is checked first and a search that does not fit is not written ("Not saved to History: needs …, … free", amber notice on Results and History, "Not saved to History" in the top bar; the results stay usable); after the first save the browser is asked once to persist storage. Saves, deletes, renames and the cleanup of orphan files and `.crswap` leftovers (only files older than 5 min) take turns under the Web Lock `prose-history` (fallback: a queue in the tab); other tabs hear of changes over `BroadcastChannel("prose-history")` and History reads the list again when shown. History view: name, finished, files, PSMs (targets within the search PSM FDR), size; open, rename (inline; the open result takes the new name for Export › Project), delete (with confirmation); "Open project…" with its progress; storage use and the persistence answer. A reload of `#/results/<id>` reopens the search from History. Opening from History reuses `openStoredResult()` (keeping id and createdAt); a stored search has no engine result (no idXML). `.prose` = zip of `manifest.json` (marker `format: "prose-project"`, `byteOrder: "little"`, non-finite numbers as `{"$num": …}`) + one `.bin` per typed array or text column (UTF-8 with u32 lengths), written by ProSE's own zip writer (decisions "C11 zip container"); an array that deflate shrinks to no more than 85 % is deflated, else stored (decisions "C11 stored entries"); written and read in slices with pauses and progress ("Saving project n %", "Opening project… n %"). `readProject` of an unknown schema throws `ProjectVersionError("This project was saved by a newer version of ProSE (schema 2) …")` ("This search …" for a History entry); anything else wrong (not a zip, no manifest, missing/mis-sized/damaged entry by CRC, columns of the wrong length, offsets or references out of range, settings or design the views cannot read, summary of other files) is a `ProjectError` that says what, never a crash. Spectra are stored with the results (decided by the user; float32 is 0.06 ppm at m/z 2,000; spectra of PSMs outside the FDR are not kept, which the engine's `spectra()` already does); raw mzML is not. The Export menu's Project item is active (disabled during a CSV export). |
+| **C10** Overview, Samples, QC, open search | `OverviewTab`, `SamplesTab`, `QcTab`, `DeltaMassPanel`: Overview = key figures, the search's facts (since W64 also "Engine": "OpenMS 3.7 · 32-bit" / "· 64-bit") and a per-file table (spectra, PSMs, Percolator applied/skipped, seconds); with `summary.openSearch` a delta-mass histogram and the mapped-PTM table; Samples = samples × (PSMs, peptides, proteins) grouped by condition; QC = target vs decoy score distribution, precursor-error histogram, PSMs per file. Hand-written SVG charts with direct labels or legends |
+| **C11** History and `.prose` | `persist/record.ts` (the record, pack/unpack, checks), `history.ts` (storage), `history.svelte.ts` (page state and actions), `backend.ts` (idb-keyval + OPFS; `memory-backend.ts` for tests), `project.ts` + `crc32.ts` (the `.prose` zip), `views/History.svelte`, `components/history/SaveNotice.svelte`. `SCHEMA_VERSION = 1`; `SearchRecord = { schema: 1; id; name; createdAt; appVersion; moduleVersion; moduleVariant? (W64: 'wasm32' | 'wasm64'; absent = wasm32); design: DesignResolution; settings: { parameters; rescore; peptdeep; contaminants; presetId?; fixedMods; database }; psmFdr; proteinFdr; seconds; summary; tables; spectra }` (beyond the plan: `settings.fixedMods`, `settings.database`, `psmFdr`, `proteinFdr`, `seconds`, which a reopened result needs). Metadata (the manifest = the record without its arrays, the byte layout, the list fields) in IndexedDB via idb-keyval, the arrays as one OPFS file per search (`prose-history/<key>.bin`, written through `createWritable` in 8 MB pieces); a save over an existing id writes a new file and removes the old one after, so a failed save keeps the old entry. Saved automatically after each completed search only (a failed or cancelled search leaves History unchanged); `navigator.storage.estimate()` is checked first and a search that does not fit is not written ("Not saved to History: needs …, … free", amber notice on Results and History, "Not saved to History" in the top bar; the results stay usable); after the first save the browser is asked once to persist storage. Saves, deletes, renames and the cleanup of orphan files and `.crswap` leftovers (only files older than 5 min) take turns under the Web Lock `prose-history` (fallback: a queue in the tab); other tabs hear of changes over `BroadcastChannel("prose-history")` and History reads the list again when shown. History view: name, finished, files, PSMs (targets within the search PSM FDR), size; open, rename (inline; the open result takes the new name for Export › Project), delete (with confirmation); "Open project…" with its progress; storage use and the persistence answer. A reload of `#/results/<id>` reopens the search from History. Opening from History reuses `openStoredResult()` (keeping id and createdAt); a stored search has no engine result (no idXML). `.prose` = zip of `manifest.json` (marker `format: "prose-project"`, `byteOrder: "little"`, non-finite numbers as `{"$num": …}`) + one `.bin` per typed array or text column (UTF-8 with u32 lengths), written by ProSE's own zip writer (decisions "C11 zip container"); an array that deflate shrinks to no more than 85 % is deflated, else stored (decisions "C11 stored entries"); written and read in slices with pauses and progress ("Saving project n %", "Opening project… n %"). `readProject` of an unknown schema throws `ProjectVersionError("This project was saved by a newer version of ProSE (schema 2) …")` ("This search …" for a History entry); anything else wrong (not a zip, no manifest, missing/mis-sized/damaged entry by CRC, columns of the wrong length, offsets or references out of range, settings or design the views cannot read, summary of other files) is a `ProjectError` that says what, never a crash. Spectra are stored with the results (decided by the user; float32 is 0.06 ppm at m/z 2,000; spectra of PSMs outside the FDR are not kept, which the engine's `spectra()` already does); raw mzML is not. The Export menu's Project item is active (disabled during a CSV export). |
 | **C12** SW, Pages, desktop (deployed 2026-10-20 from ce51dae; §2.4, §8.8) | `app/public/sw.js` (from `examples/sw.js` with the `no-cache` fix; module files under `openms/`, cache-first, `openms.wasm` unwrapped; app files network-first, the shell stored on installation, the example and cRAP on request; COOP/COEP on navigations and worker scripts), `app/src/lib/sw-client.ts` (reload once when not isolated, 30 s cap, decision on `crossOriginIsolated`), `app/sw-stamp.ts` (stores `openms-module-<MODULE_ID>` and `prose-app-<BUILD_ID>` instead of both after `__BUILD_ID__`; `openms.mjs?v=<MODULE_ID>`; decisions "C12 store ids", "C12 `?v=`", "C12 precache"); `.github/workflows/pages.yml` running `.github/assemble-site.sh` → `_site/`: the app at `/prose-web/`, `/prose-web/examples/prose/` → redirect page to `../../` (also `examples/browser/` → `../../openms-demo/`; both unregister the old `examples/` worker), `/prose-web/openms-demo/` = the old `examples/browser/` with the root's module, `sw.js` and `sw-client.mjs` in one directory (paths and two races patched, "C12 site"), `data/`, `prose-single-file.html` and `README.md` unchanged. Pages source switches to "GitHub Actions" (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`). Root `index.html`: a pointer page without automatic redirect ("C12 root index"). Desktop: `desktop/build.sh` builds the app with `VITE_BASE=./` into the package's resources (not into `app/dist`), `neutralino.config.json` `url` `/`, version 0.3.0, README.txt for the app. The C7-deferred TopBar wrap at ≤ 900 px. Chip "· works offline"; without isolation the chip plus a notice on New search. e2e `deploy.spec.ts`: the SW isolates and caches (one reload, `crossOriginIsolated`, `openms-module-<MODULE_ID>` holds `openms.wasm`, the shell and the example stored), works offline after the first visit (its own `vite preview`, closed; reload, "Try the example" and a search), runs single-threaded without isolation ("1 thread" + "not cross-origin isolated", the notice, a search finishes). Fix round 1 (review of 0fbde6b): C1 module/wasm pairing across an update (`?v=` on wasm and models via `locateFile`, the worker stores only its own version), I1 blocked session storage, I2 shell-only installation + DATA on request + "Loading ProSE…", I3 deploy order, M1 waiting update with a Reload notice, M2 old stores and registrations, M3 all-or-nothing shell with a build check, M4 top bar (one row above 900 px, no overflow at 560 px or 900×540), M5 workflow (Node 24.19.0/npm 11.17.0, check + vitest before the build, deploy only from `main`), M6 e2e (refused/unsupported registration, PeptDeep under the worker, env restored). Fix round 3 (re-review of 78d4743: I-1 the update notice missed an installation already under way, I-2 a full storage stopped OpenMS from loading and blocked updates; minors: the PeptDeep 409 surfaced late, generic 409 messages, non-app windows kept the previous generation, fakeUpdate left openms.mjs unchanged): `watchUpdate` follows a running installation, `store()` never fails a response, room checked before the module, shell-only updates without room, one "A newer version of ProSE was deployed: reload the page." message (worker and a PeptDeep pre-check), app windows only; e2e for each (they fail on 78d4743). Fix round 2 (re-review of f576241: C-1 an unapplied update left offline broken, I-1 network-first stored another build's files, I-2 a lazily fetched model stored under the old version with new bytes, I-3 old tabs could not start workers after a deployment; TopBar overflow with the notice; unrealistic `fakeUpdate`; weak storage test): a build manifest (size + SHA-256) and "only verified bytes are stored", 409 for another version's bytes under this version's URL, complete updates (module stored before waiting, DATA and models carried over), generations with markers (one previous kept while its pages are open), not-OK falls back to the store, "works offline" from the worker's STATUS, the bar wraps instead of overflowing; e2e for C-1, I-1, I-2 and I-3 (they fail on f576241). Deploy (live e2e, desktop `0.3.0` with `gh release create`) **only after the re-review**; order: first switch Pages to GitHub Actions (`gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow`), then push `main`. The switch keeps the site deployed before live until the workflow deploys; the push runs the workflow, which deploys the app. In the other order, Pages in branch mode would publish `main`'s root (the pointer `index.html` and the repository's files, no app) until the switch |
+
+### 5.9 The 64-bit engine (W64, wasm64; 2026-10-20)
+
+OpenMS PR #10659 (draft, stacked on #10575) builds the module also for wasm64 (Memory64, at most 16 GB,
+files up to 16 GiB − 64 MiB) with one JavaScript API for both builds, and makes OpenMS' own build of
+mimalloc (`openms-mimalloc`) the allocator of every WebAssembly build. The app ships both packages of
+fd807dc89a and uses wasm64 only where a search needs it. Rulings: decisions §4.9.
+
+| Part | What |
+|---|---|
+| Packages | `public/openms/` `@openms/openms-wasm-mt@3.7.0-pre.fd807dc89a` (replaces 7abcb280e2), `public/openms64/` `@openms/openms-wasm64-mt@3.7.0-pre.fd807dc89a` (no models: both use `openms/models/`). Ids `__OPENMS_ID__`/`__OPENMS64_ID__` = `MODULE_ID`/`MODULE64_ID` (SHA-256 of each directory). |
+| Choice | `engine/variant.ts`: `supportsMemory64()` (`WebAssembly.validate(MEMORY64_PROBE)`, a shared 64-bit memory), `chooseEngine({ estimate32, fileTooLarge32, memory64, force })`: wasm64 above 3 GB (wasm32 constants) where supported; `?debug=wasm64` forces it. `search/plan.svelte.ts`: `memory64`, `forceWasm64`, `estimate32`, `engine`, `estimate` (in the chosen module), the line and the advice (§5.3.5); `startSearch` sends `engine` and `slowSteps`. |
+| Engine | §5.2: the search worker of the search's module, restarts keep it, the viewer stays wasm32, per-build start timeout, messages that name the module, the module's own file limit. |
+| Shown | Footer ("· 64-bit engine (up to 16 GB)", or why this browser cannot), progress ("· 64-bit"), Overview ("Engine"), History (a "64-bit" tag), the record and project file (`moduleVariant`), the chip's title (whether the 64-bit engine is stored). The status chip itself is unchanged. |
+| Service worker | §2.4: `openms64/` in the manifest, not in the shell nor an update's installation, stored on first use in `openms64-module-<MODULE64_ID>`, `?v=` pairing, generations and cleanup for both module stores, `module64Stored`/`module64Full` in STATUS, a room check before storing it. |
+| Desktop | Both modules in the package (`desktop/build.sh` checks them); version 0.4.0 (not released). Neutralino opens Chrome/Chromium/Edge, which have Memory64 from 133. |
+
+**Measured in the app (Chromium 141 of the Playwright SIF, 16 threads, from New search with a user
+preset of the calibration's TMT settings, semi-tryptic, not chunked; `e2e/engine.spec.ts` "a search above
+3 GB…", on demand with `PROSE_LARGE_MZML`/`PROSE_LARGE_FASTA`/`PROSE_LARGE_PARAMETERS`):**
+
+| Search | Footer (estimate) | Engine | Peak heap | Time | PSMs | Longest silent step |
+|---|---|---|---|---|---|---|
+| erwinia_tmt.mzML vs human_ref.fasta (20,652 + 116 cRAP) | 8.8 GB · 64-bit | wasm64 | 8.66 GiB | 54 s | 0 (none expected) | 48.7 s |
+| the same vs Erwinia + human (25,151 + 116) | 10.5 GB · 64-bit | wasm64 | 9.66 GiB | 66 s | 1,346 | 59.0 s |
+| as the first, with Acetyl (Protein N-term) as well (the default preset's modifications) | 16.6 GB (×2 rule) → 8.8 GB (not counted) | wasm64 | 8.56 GiB | 54 s | 0 | 49.0 s |
+
+The forced example (`?debug=wasm64`) gives the same 1,790 PSMs and 47 protein groups as wasm32
+(e2e `engine64.spec.ts`); in Node the same search gives identical PSM scores, q-values, peptides,
+spectra and predicted spectra in both modules (proteins and some lists of allowed values in another
+order: hashed containers, `core64.test.ts`).
+
+Costs: wasm64 is 8–22 % slower without PeptDeep at 4 threads (4–8 % with), 8–19 % at 16; its
+`openms.wasm` is 46.2 MB (7.72 MB brotli, 11.1 MB gzip), downloaded only when a search first needs it.
 
 ### 5.7 UX decisions the user made (brainstorming)
 
@@ -1238,6 +1340,19 @@ cache when results close; a 1 % debug variant. A read-only investigation compare
 | Multiplexed designs out of scope | §1.3 |
 
 ### 5.8 App tests
+
+At W64 (the 64-bit engine, 2026-10-20): vitest 46 files, 549 tests (new: `variant.test.ts`,
+`core64.test.ts` with the real 64-bit module in Node 24, `sw-stamp.test.ts`; the calibration table in
+`memory.test.ts`; the module in `client.test.ts`, `plan.test.ts`, `record.test.ts`, `history.test.ts`);
+`npm run check` 1051 files, 0 errors, 0 warnings; e2e 98 tests (96 run, 2 on demand: `PROSE_BIG_MZML`,
+`PROSE_LARGE_MZML`): `engine64.spec.ts` ×3 (the forced example in wasm64 = wasm32's 1,790 PSMs and 47
+protein groups, its `?v=`, progress, Overview, History; the footer above 3 GB; Memory64 unsupported),
+`deploy.spec.ts` ×21 (+2: wasm64 stored only on first use with its `?v=` and then offline; no room for
+it), the update test extended (an update does not install wasm64; the previous generation's goes with
+it). Each commit of the series passes check and vitest on its own. One pre-existing flake: `an engine
+error names the stage and the file…` attributes the parse error of the last file to "Pooling the files"
+when that file's step end arrives first (1 of 24 runs on da0c786 with the old module, 1 of 12 with the
+new one; follow-up).
 
 At C12 fix round 3: vitest 43 files, 516 tests; `npm run check` 1046 files, 0 errors, 0 warnings; e2e
 92 tests (91 pass, 1 on-demand skipped: `PROSE_BIG_MZML`), with `deploy.spec.ts` ×19: round 3 added
@@ -1277,8 +1392,8 @@ choice of per-file streaming (§4.11).
 | # | Item | State / owner |
 |---|---|---|
 | 1 | **OpenMS library bug, MzMLHandler skipChromatograms**: `MzMLHandler.cpp:160` takes `skip_chromatogram_` from `PeakFileOptions::getSkipChromatograms()` in `setOptions`, and `startElement()`/`onCharacters()` return early on `skip_spectrum_ \|\| skip_chromatogram_`, so `setSkipChromatograms(true)` returns every spectrum empty (default spectra: no native ID, MS level 1, no peaks). Since d49ba5f392a (2025-05-06). Class tests miss it (`MzMLFile_test.cpp:1910` checks only that chromatograms are gone; `FileHandler_test.cpp:930`). `SwathFile.cpp:266` sets it, via FileHandler for Thermo RAW (presumably unaffected; worth checking). The binding avoids the option | follow-up for the user, separate [FIX] with a test that spectra are intact |
-| 2 | **mimalloc upstream issue** (Emscripten 6.0.12, mimalloc 3.5.1): allocations above a 4 MiB chunk need fully free chunks, arenas are never released and grow exponentially, the OS fallback over-aligns to 16 MiB; any workload with large short-lived blocks grows the wasm heap. Also ORT: no CPU arena on 32-bit, memory pattern on by default | follow-up: issue at emscripten-core/emscripten; B9 may evaluate dlmalloc/emmalloc (B-R31) |
-| 3 | **Heap growth per search** (+116…212 MB per search at 8 threads), never released; within one search file by file, each further file grows the heap too: about 0.2 GB per further small file at 4 threads (12 × 75 MB measured 2.9 GB), 0.07–0.12 GB per 733 MB file, more with more threads and PeptDeep (C4b model, §5.3.5) | mitigated by a fresh worker per search and the 4-thread cap for many files (§5.2) |
+| 2 | **mimalloc upstream issue** (Emscripten 6.0.12, mimalloc 3.5.1): allocations above a 4 MiB chunk need fully free chunks, arenas are never released and grow exponentially, the OS fallback over-aligns to 16 MiB; any workload with large short-lived blocks grows the wasm heap. Also ORT: no CPU arena on 32-bit, memory pattern on by default | follow-up: issue at emscripten-core/emscripten; **worked around** by OpenMS' own build of mimalloc (`openms-mimalloc`, PR #10659, in the app since 3.7.0-pre.fd807dc89a: 20–47 % less heap in wasm32, no scattering; emmalloc's wasm64 limits reported as emscripten#28028) |
+| 3 | **Heap growth per search** (+116…212 MB per search at 8 threads), never released; within one search file by file, each further file grows the heap too: about 0.2 GB per further small file at 4 threads (12 × 75 MB measured 2.9 GB), 0.07–0.12 GB per 733 MB file, more with more threads and PeptDeep (C4b model, §5.3.5) | mitigated by a fresh worker per search and the 4-thread cap for many files (§5.2); with openms-mimalloc the growth levels off (12 × 75 MB 0.66 GB at 4 threads, 0.80 at 16), modelled by the new growth schedule (§5.3.5) |
 | 4 | **#10602's CI matrix has not run** (only cppcheck); the `TOPP_ProSE_13` tolerances (±1 protein, ±6 PSMs, from Test 6 without Percolator) are unverified on macOS/Windows; if CI differs, investigate before widening | keep watching; retarget after #10578 |
 | 5 | Inputs inside the 4 GB heap; staging ≈ 25 MB/s | resolved by B9 + C4b: file by file, only the largest file (≤ 2 GiB − 64 MiB) in the heap; 3 × 733 MB in 2377 MiB (one: 2153 MiB) in Chromium at 4 threads; `writeFileChunk` staging (1.2 s per 733 MB) |
 | 6 | `collisionEnergy` NaN for typical mzML (MS:1000045 is a precursor meta value) | B final fix wave |
@@ -1286,13 +1401,16 @@ choice of per-file streaming (§4.11).
 | 8 | Percolator has no progress step (≈ 10 s per file silent) | library change, not planned; the UI shows an indeterminate bar |
 | 9 | `mergeFileResults()` "Graph empty" with no PSM in any file | follow-up for #10602 (return an empty MergedResult); the binding works around it |
 | 10 | Mixed rescoring (one file with < 100 PSMs) fails the whole rescored search | library rule; the app maps the message |
-| 11 | Chunked semi- and non-specific searches are not bounded by the chunk or by the inputs. Human semi-tryptic in chunks of 2000, 78 MB erwinia_tmt, 4 threads, file by file, Chromium: 2.3, 2.4 and 3.7 GB for 1 file (three runs), 3.8 GB (3913 MiB of 4096) for 3 files (three runs); the formula gives 1.4/1.8 GB. Set by the chunk index rebuilt for every file (~11 builds per file) and how little of it the allocator reuses, not by the inputs; growth per file 0.05–0.75 GB, not repeatable. Node, 4 threads, 3 files: file by file 2243/3783 MiB in 102 s; all files at once (chunk-major, inputs host-mounted) 2695/2711 MiB in 49 s, one of three runs aborted | the estimate shows the measured 3.8 GB (`warn`, `over` from 3 files), threads capped at 4; follow-up: chunk-major (all at once) for small inputs would halve the time but not the memory |
+| 11 | Chunked semi- and non-specific searches are not bounded by the chunk or by the inputs. Human semi-tryptic in chunks of 2000, 78 MB erwinia_tmt, 4 threads, file by file, Chromium: 2.3, 2.4 and 3.7 GB for 1 file (three runs), 3.8 GB (3913 MiB of 4096) for 3 files (three runs); the formula gives 1.4/1.8 GB. Set by the chunk index rebuilt for every file (~11 builds per file) and how little of it the allocator reuses, not by the inputs; growth per file 0.05–0.75 GB, not repeatable. Node, 4 threads, 3 files: file by file 2243/3783 MiB in 102 s; all files at once (chunk-major, inputs host-mounted) 2695/2711 MiB in 49 s, one of three runs aborted | **resolved** by openms-mimalloc (W64): chunks of 2000 take 1.48–1.65 GB in wasm32 at 4–16 threads, 3 files no more than 1; the formula estimates chunked searches (§5.3.5); the floor, the file rule and the thread cap are gone |
 | 12 | `PeptDeepRescoring`'s own `batch_size` default stays 500 in wasm (only ProSEAlgorithm's changed); large unique 500-peptide batches untested | final fix wave shared constant |
 | 13 | predictMS2's first call ≈ 0.5 s; sessions never evicted | app should warm up early (C9) |
 | 14 | Node: 8 MB stacks × all cores for OpenMP and ORT | pre-existing, tight but passing |
 | 15 | `wasmfs_node.js` override must be dropped once emscripten#27825 is fixed (the `#warning` fires on other Emscripten versions) | follow-up |
 | 16 | `package.json` of the copied package lists `openms.data` and `README.md`, which the app copy does not ship (inherited) | deferred minor |
-| 17 | 63 MB per package update lands in git history of prose-web | accepted (C4 review minor) |
+| 17 | 63 MB per package update lands in git history of prose-web (with wasm64 about 110 MB per update of both) | accepted (C4 review minor) |
+| 18 | **Memory estimate calibrated on one spectra file and two databases** (W64): the index depends on the precursor masses of the spectra; non-specific searches and modifications other than Oxidation/Deamidated unmeasured; of the terminal ones only Acetyl (Protein N-term) measured (adds nothing: protein-terminal entries are not counted, decisions "W64 terminal modifications") | follow-up: calibrate with more varied spectra and other modifications |
+| 19 | **wasm64 is slower** (8–22 %) and a 46 MB download on first use; offline only after a first use; Safari has no Memory64 (above 4 GB the footer says so) | accepted (the user's rule: wasm32 by default) |
+| 20 | The thread cap for many files (> 4, or > 2 with PeptDeep) was justified by Emscripten's allocator (12 × 75 MB: 2.9 GB at 4 threads, 4.0 GB at 16); with openms-mimalloc 0.66 vs 0.80 GB | kept as it was (W64 changed only the chunked cap); a decision for the user |
 
 Deferred minors that matter (from the ledgers; full list in the decision log):
 
@@ -1436,20 +1554,26 @@ all logical cores; `OMP_NUM_THREADS=4` mimics the 4-vCPU CI runner.
 
 ### 8.6 Package the module into the app
 
+Both packages, as `/scratch/sachsenb/wasm-logs/wasm64/packages/make-packages.sh` makes them from
+OpenMS PR #10659 (the presets `wasm32-emscripten-mt-onnx-release` and `wasm64-emscripten-mt-onnx-release`;
+version 3.7.0-pre.<10-character hash of the commit the modules were built from>, B-R26, in the copies only):
+
 ```bash
-B=/scratch/sachsenb/openms-pr10564/build/wasm32-emscripten-mt-onnx/openms-wasm
-P=/scratch/sachsenb/prose-pages/app/public/openms
-mkdir -p $P/models
-cp $B/openms.mjs $B/openms.wasm $B/openms.d.ts $B/package.json $B/LICENSE $P/
-cp $B/models/peptdeep_ms2_dynamic.onnx $B/models/peptdeep_rt_dynamic.onnx $P/models/
-# version 3.7.0-pre.<short hash of the commit the module was built from> (B-R26), in the copy only
-V=3.7.0-pre.$(git -C /scratch/sachsenb/openms-pr10564 rev-parse --short=10 HEAD)
-node -e 'const f=process.argv[1],p=require(f);p.version=process.argv[2];require("fs").writeFileSync(f,JSON.stringify(p,null,2)+"\n")' $P/package.json $V
+P=/scratch/sachsenb/wasm-logs/wasm64/packages        # wasm32/, wasm64/ (make-packages.sh)
+A=/scratch/sachsenb/prose-pages/app/public
+cp $P/wasm32/{openms.mjs,openms.wasm,openms.d.ts,package.json,LICENSE} $A/openms/
+cp $P/wasm32/models/peptdeep_ms2_dynamic.onnx $P/wasm32/models/peptdeep_rt_dynamic.onnx $A/openms/models/
+mkdir -p $A/openms64
+cp $P/wasm64/{openms.mjs,openms.wasm,openms.d.ts,package.json,LICENSE} $A/openms64/
+# the 64-bit package has no models/: it uses openms/models/ (the files are identical, check with cmp)
+cmp $P/wasm64/models/peptdeep_ms2_dynamic.onnx $A/openms/models/peptdeep_ms2_dynamic.onnx
 ```
 
-Not copied: `README.md`, `serve.py`, `examples/`, the CCS model. Commit the copy in prose-web on its own
-("app: OpenMS module package <version>", as 6acff06; B-R3). `openms-types.ts` re-exports the types
-from `public/openms/openms.d.ts`, so `npm run check` catches contract changes.
+Not copied: `README.md`, `serve.py`, `examples/`, the CCS model. Commit the copies in prose-web on
+their own ("app: OpenMS module packages <version>", as 6acff06; B-R3). `openms-types.ts` re-exports
+the types from `public/openms/openms.d.ts`, so `npm run check` catches contract changes; the two
+`openms.d.ts` differ only in the raw export interface (OpenMS CI compares them). `core64.test.ts` runs
+the 64-bit module in Node 24 against the 32-bit one.
 
 ### 8.7 Build and test the app
 
@@ -1485,7 +1609,10 @@ Today (`main`): GitHub Pages serves the repository root of `main` (start page `i
 win_x64, mac_universal) and published with `gh release create`.
 
 For the app (C12, built; §2.4, §5.6). Pushing `main`, switching Pages and the release wait for the
-user's approval of screenshots:
+user's approval of screenshots. Since W64 the site is about 179 MB (both modules; 133 MB before) and a
+desktop zip about 41.7 MB (30.6 MB with one module); a first visit still downloads only the shell
+(1.1 MB) and the wasm32 module (44.5 MB, about 10.8 MB gzip), then the example and cRAP (6.6 MB); the
+64-bit module (46.4 MB, about 11.1 MB gzip) only with the first search that needs it.
 
 ```bash
 # the site, as .github/workflows/pages.yml builds it
@@ -1499,13 +1626,23 @@ mkdir -p /tmp/pages-root && ln -sfn $PWD/_site /tmp/pages-root/prose-web
 gh api -X PUT repos/timosachsenberg/prose-web/pages -f build_type=workflow
 git push origin main
 
-# desktop 0.3.0 (the app built with VITE_BASE=./ into the package)
+# desktop 0.4.0 since W64, both modules (the app built with VITE_BASE=./ into the package)
 NEU_CLI=/scratch/sachsenb/tools/node_modules/.bin/neu desktop/build.sh
 # Linux check: xvfb + Playwright's Chromium as the program's browser, remote debugging
 # (prose-bench/browser/desktop-check3.mjs <port> <prime|search>, run inside the Playwright SIF)
 xvfb-run -a sh -c './prose-linux_x64 --chrome-browser-binary=/ms-playwright/chromium-1194/chrome-linux/chrome \
   --chrome-args="--remote-debugging-port=9333 --no-sandbox --no-first-run" & node desktop-check3.mjs 9333 search'
 ```
+
+Checked on 2026-10-20 after W64 (6b099e7), not deployed: the local `_site` (`assemble-site.sh`, plain
+static server under `/prose-web/`) serves all 26 files of `sw.js`'s manifest with their size and SHA-256,
+both module ids are the hashes of their directories, the shell (11 files) holds neither module, both
+`openms.wasm` come as `application/wasm`; in Chromium the first visit stores only the shell and the
+wasm32 module (chip title: "The 64-bit engine for large searches not stored yet"), the example forced
+into wasm64 finds 1,790 PSMs and `openms64-module-<id>` then holds exactly its two files with their
+`?v=`. Desktop linux_x64 0.4.0 (fresh profile, xvfb, Playwright's Chromium 141): works offline at the
+first start; the example with PeptDeep in wasm64 1,790 PSMs in 24.8 s, the models stored once (wasm32
+package's id), the 64-bit module in its own store.
 
 Checked on 2026-10-20 after fix round 3, from the commit itself: the Pages check 20/20; the
 review's probes (`/tmp/c12rr2/probe`, B made by the review's own `mkb.mjs`, which also changes
@@ -1574,6 +1711,7 @@ Commit ranges are `base..head` on the task's branch (OpenMS: `claude/prose-merge
 | C10 | Overview, Samples, QC, open search | planned (C10) | — |
 | C11 | History and project files | done (review approved after fix round 1) | 67d35c0..0048e06 |
 | C12 | Service worker, Pages deployment, desktop | deployed 2026-10-20: Pages switched to the workflow, `main` = ce51dae (build 4d0e6fd34b7e), desktop 0.3.0 released; live checks passed (first visit isolated, 16 threads, works offline; example 1,790 PSMs; offline search; upgrade from 0.2.0) | 3b943ec..0fbde6b; fix round 1 0fbde6b..f576241; round 2 ..78d4743; round 3 (commit "app: service worker fix round 3") |
+| W64 | The 64-bit engine: packages 3.7.0-pre.fd807dc89a (wasm32 + wasm64), the choice above 3 GB with Memory64, the estimate of both modules recalibrated (no `uncertain`), the engine shown and recorded, the service worker storing wasm64 on first use, desktop 0.4.0 (§5.9, decisions §4.9) | done locally (not pushed, not deployed; screenshots for the user) | da0c786..6b099e7 (5 commits) and this docs commit, `prose-app` |
 | — | This as-built specification | snapshot; to be updated at the end (user request 2026-10-17) | this commit |
 
 Execution order (C-R2): A1–A5, C1, C2, C3, C5, B1–B7, C4, C6–C12; one implementer at a time per
