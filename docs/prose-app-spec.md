@@ -245,9 +245,10 @@ the user approved deploying once it passes): `app/public/sw.js`, derived from `e
   update's installation: stored only when a search first uses it (then offline too). Without room it
   is answered from the network, unstored, and STATUS says `module64Full` (not `storageFull`: the app
   still works offline), also after the worker restarts (kept in the generation marker, W64 r1). An
-  update's installation without room for its module drops the 64-bit stores (entry by entry; the
-  worker checks them by their keys and never holds their responses, so Chrome frees the bytes at once)
-  and tries again (W64 r1). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
+  update's installation without room for its module drops the 64-bit stores that no open page uses
+  (W64 r2: a tab of the previous build keeps its own), if that makes room (a check first, no credit
+  after it: Chrome frees deleted entries at once), entry by entry (the worker checks them by their keys
+  and never holds their responses), and tries again (W64 r1). STATUS reports `module64Stored`; "works offline" stays wasm32's shell and module.
 - **Updates (fix rounds 1–2).** A new version's worker installs **completely before it waits**: the
   shell and, because a previous version is active, the module (`openms.mjs`, `openms.wasm`), verified;
   DATA and the models the previous generation stored are carried over where the bytes are the new
@@ -909,7 +910,10 @@ PNG; layout and behaviour count, numbers do not; `style.css` holds their look):
   advice only for `searching`; "search fewer or smaller files" for `reading`; "the idXML of this search
   is no longer available" for `idXML`. OpenMS' own `OutOfMemory`/`bad_alloc` errors (the module lives
   on, no restart) get `outOfMemoryMessage(stage, detail, variant)`: "OpenMS ran out of memory <while
-  …> (<detail>). <advice by stage and module>". The restart (same role, threads and module) is
+  …> (<detail>). <advice by stage and module>" (the advice names the engine's limit; a search in chunks
+  is told to use smaller chunks, not to set database:chunk_size; the 32-bit engine without the 64-bit
+  one in this browser adds "Chrome, Edge or Firefox run larger searches in the 64-bit engine.", W64 r2).
+  The restart (same role, threads and module) is
   verified within `restartTimeoutMs`.
 - **Watchdog** (C4b): armed by the search's `searching` stage, only when its module runs more than one
   thread (`info.threaded` and `info.threads > 1`); every progress or stage message re-arms it (also the
@@ -1055,8 +1059,11 @@ bytes = MODULE
       + growth(files, mean mzML size)
       + THREAD × max(0, threads − 4)                     (once, not per file)
       + (peptdeep ? PEPTDEEP : 0)                        (flat: no file or thread term)
-chunked (0 < chunk_size < proteins), any specificity:
+chunked (0 < chunk_size < proteins), tryptic and semi-tryptic:
   index = INDEX / 1000 × MOD^… × min(chunk_size × CHUNKED, proteins × SPECIFICITY)
+non-specific: by the residues of the target proteins (cRAP's 38,459 included), not their number (W64 r2):
+  index = NONE × residues × MOD^…; chunked: min(NONE_CHUNK × chunk_size × residues / proteins, unchunked)
+  (residues not known: 555 per protein)
 growth: g = G_SMALL at ≤ 75 MiB … G_LARGE at ≥ 733 MiB (linear between); files 2–5 add g each,
         every further file g / 4
 proteins = target proteins incl. contaminants (not counted yet: 0)
@@ -1070,8 +1077,9 @@ threads = threadsForSearch(engine threads, files, peptdeep)   (§5.2)
 | LIMIT / WARN | 4 GB / 3 GB | 16 GB / 14 GB |
 | MODULE | 0.20 GB | 0.40 GB |
 | INDEX per 1,000 proteins, tryptic | 0.03 GB (fit 28.4 MB) | 0.025 GB (fit 21.9 MB) |
-| SPECIFICITY full / semi / none | 1 / 10 / 85 | 1 / 15 / 125 |
-| CHUNKED full / semi / none | 2 / 20 / 180 | 32⁄15 / 32 / 310 |
+| SPECIFICITY full / semi | 1 / 10 | 1 / 15 |
+| CHUNKED full / semi | 2 / 20 | 32⁄15 / 32 |
+| NONE / NONE_CHUNK, GB per million residues | 7.5 / 18.5 | 9.6 / 24.5 |
 | MOD per further variable modification | 2 | 2 |
 | G_SMALL / G_LARGE | 0.05 / 0.15 GB | 0.06 / 0.15 GB |
 | THREAD per thread above 4 | 0.025 GB | 0.035 GB |
@@ -1081,9 +1089,12 @@ threads = threadsForSearch(engine threads, files, peptdeep)   (§5.2)
 Semi measured (human needs 14.2 in wasm64; Erwinia 8.7/10.7), CHUNKED semi measured (a chunk costs
 about twice the unchunked index per protein: every chunk builds its index again, and the memory is
 not handed back between chunks; so a chunk size near the protein count gains nothing, which the min()
-covers); non-specific measured in fix round 1 (Erwinia: chunks of 250, 500, 1000 in both modules,
-unchunked in wasm64, 4 and 16 threads; decisions "W64 r1 non-specific"), its wasm32 unchunked factor
-above both proportions of wasm64's (unmeasurable: it aborts); CHUNKED full in proportion. MB/GB binary.
+covers); CHUNKED full in proportion. Non-specific: measured on both databases (Erwinia, fix round 1;
+human, fix round 2: per million residues of a chunk 13.6–18.1 GB needed in wasm32, 22.0–23.8 in wasm64,
+the same for both databases, while per protein human needed 1.6 times Erwinia's: its proteins are 555
+residues long against 324; the threads add little here, so the 4-thread runs set the wasm32 constant),
+unchunked in wasm64 on Erwinia (9.4 needed); wasm32 unchunked aborts on both, so NONE (wasm32) is above
+both proportions of wasm64's (7.25 and 6.4). MB/GB binary.
 
 **Which module** (`chooseEngine`, `engine/variant.ts`; the user's rule): the estimate with the wasm32
 constants (`estimate32`); above 3 GB (`SWITCH_BYTES`), or a file too large for wasm32, the search runs
@@ -1091,10 +1102,13 @@ in wasm64 if the browser has Memory64 (`supportsMemory64`: `WebAssembly.validate
 module with a shared 64-bit memory, once per page) and the footer shows the estimate with the wasm64
 constants. `?debug=wasm64` forces wasm64 (where supported). What the calibration's searches do:
 human semi-tryptic in chunks of 5000, 6000, 7000, 8000 and unchunked switch (3.36, 3.96, 4.56, 5.16 and
-6.55 GB in wasm32), and Erwinia non-specific in chunks of 500 and 1000 (3.35 and 6.05 GB; chunks of 250,
-2.0 GB, stay); everything else stays, the largest 12 × 733 MB (2.63 GB) and human with 3 variable
-modifications (2.84 GB). The estimate is at or above every measured peak (by 0.03–1.1 GB), and above
-4 GB for every wasm32 search that failed.
+6.55 GB in wasm32), and the non-specific ones: Erwinia in chunks of 500 and 1000 and unchunked (3.64,
+6.63, 11.6 GB; chunks of 250, 2.14 GB, stay), human in chunks of 250, 400, 500, 1000 (3.22 GB and up);
+everything else stays, the largest 12 × 733 MB (2.63 GB) and human with 3 variable modifications (2.84
+GB). The estimate is at or above every peak of the calibration table (by 0.03–1.4 GB) and above 4 GB for
+every wasm32 search of it that failed. It is a calibration on one spectra file against two databases,
+not a bound: fix round 1's non-specific constants, calibrated on Erwinia alone, under-estimated human by
+30–40 %.
 
 Gone: `UNCERTAIN_BYTES` (3.8 GB), `isUncertain`, `uncertain`, "`over` from 3 files" and the thread cap
 for chunked semi/none (openms-mimalloc removed the scattering they guarded against, decisions "W64
@@ -1103,10 +1117,14 @@ term (the calibration found neither). No storage mode and no `INPUT_BUDGET` (B9 
 streaming): only a file above the module's MAX_FILE is refused.
 
 The plan line: wasm32 "… · estimated memory 2.6 GB of 4 GB"; wasm64 "… · estimated memory 8.1 GB ·
-64-bit engine (up to 16 GB)", its title adding "Estimated 6.4 GB in the standard 32-bit engine, above 3
-GB: the search runs in the 64-bit engine." While the proteins are counted the line has no estimate
-("… · counting proteins…"); a search started then waits for the count ("Counting proteins…" as its
-step) and its engine is chosen on it (W64 r1). Advice (amber `warn`, red `over`), by module and cause:
+64-bit engine (up to 16 GB)", its title adding why: "Estimated 6.40 GB in the standard 32-bit engine,
+above 3 GB: the search runs in the 64-bit engine." (two decimals, rounded up), "x.mzML is larger than
+the 32-bit engine takes (1.93 GiB): …", or the debug switch. While the proteins are counted the line has
+no estimate ("… · counting proteins…"); a search started then waits for that count ("Counting
+proteins…" as its step; the count is held at Start, whatever the database is by then) and its engine is
+chosen on it (W64 r1, r2). A database that cannot be read: "… · the database cannot be read", the card
+says "cannot be read" (the reason in its title), and Start is disabled: "<name> cannot be read (…).
+Choose it again, or another FASTA file." (W64 r2; it counted as 0 proteins before). Advice (amber `warn`, red `over`), by module and cause:
 
 - wasm32 (only without Memory64 above 3 GB): "Close to the 4 GB limit: consider database:chunk_size
   (e.g. 2000) under All parameters." / "…, mostly for the files: search fewer files at once.";
@@ -1121,9 +1139,10 @@ step) and its engine is chosen on it (W64 r1). Advice (amber `warn`, red `over`)
 
 Start stays enabled over budget (C-R15 accepted).
 
-Tests (`memory.test.ts`): the calibration table (27 searches, 65 measured peaks in both modules at
-4–16 threads, the non-specific ones of fix round 1 included: estimate ≥ peak and within 1.15 GB; every
-failed wasm32 search above 4 GB; exactly the seven named searches cross 3 GB, `chooseEngine` agrees), the constants, each term, chunking, the growth
+Tests (`memory.test.ts`): the calibration table (31 searches, 71 measured peaks in both modules at
+4–16 threads, the non-specific ones of fix rounds 1 and 2 included: estimate ≥ peak and within 1.5 GB;
+the 6 failed wasm32 searches above 4 GB; exactly the twelve named searches cross 3 GB, human
+non-specific in chunks of 250 at 16 threads only (3.22 GB; 2.92 at 4), `chooseEngine` agrees), the constants, each term, chunking, the growth
 schedule, the levels of both modules, a file too large in each. `plan.test.ts`: the module, the line and
 the advice with and without Memory64, the forced switch, `slowSteps`. Real large case (on demand,
 §5.9): human semi-tryptic unchunked in Chromium, 16 threads: estimate 8.8 GB, 8.66 GiB measured.
@@ -1353,6 +1372,12 @@ Costs: wasm64 is 8–22 % slower without PeptDeep at 4 threads (4–8 % with), 8
 
 ### 5.8 App tests
 
+At W64 fix round 2: vitest 47 files, 562 tests (the residues in `files.test.ts`, the human
+non-specific rows in `memory.test.ts`, an unreadable database and a count held at Start in
+`plan.test.ts`, the chunked advice in `client.test.ts`); `npm run check` 1052 files, 0 errors; e2e 101
+tests (99 pass, 2 on demand), `deploy.spec.ts` ×23 (+ an update keeps the 64-bit engine an open tab of
+the previous version uses).
+
 At W64 fix round 1 (packages 76607e6451): vitest 47 files, 556 tests (new since W64: `session.test.ts`;
 the counted proteins in `plan.test.ts`, the non-specific measurements in `memory.test.ts`, the lazy
 64-bit restart in `client.test.ts`); `npm run check` 1052 files, 0 errors, 0 warnings; e2e 100 tests (98
@@ -1421,7 +1446,7 @@ choice of per-file streaming (§4.11).
 | 15 | `wasmfs_node.js` override must be dropped once emscripten#27825 is fixed (the `#warning` fires on other Emscripten versions) | follow-up |
 | 16 | `package.json` of the copied package lists `openms.data` and `README.md`, which the app copy does not ship (inherited) | deferred minor |
 | 17 | 63 MB per package update lands in git history of prose-web (with wasm64 about 110 MB per update of both) | accepted (C4 review minor) |
-| 18 | **Memory estimate calibrated on one spectra file and two databases** (W64): the index depends on the precursor masses of the spectra; non-specific searches measured on Erwinia only (W64 r1; wasm32 unchunked unmeasurable), modifications other than Oxidation/Deamidated unmeasured; of the terminal ones only Acetyl (Protein N-term) measured (adds nothing: protein-terminal entries are not counted, decisions "W64 terminal modifications") | follow-up: calibrate with more varied spectra and other modifications |
+| 18 | **Memory estimate calibrated on one spectra file and two databases** (W64): the index depends on the precursor masses of the spectra; non-specific searches measured on both, scaled by residues (W64 r2; wasm32 unchunked unmeasurable: it aborts), modifications other than Oxidation/Deamidated unmeasured; of the terminal ones only Acetyl (Protein N-term) measured (adds nothing: protein-terminal entries are not counted, decisions "W64 terminal modifications") | follow-up: calibrate with more varied spectra and other modifications |
 | 19 | **wasm64 is slower** (8–22 %) and a 46 MB download on first use; offline only after a first use; Safari has no Memory64 (above 4 GB the footer says so) | accepted (the user's rule: wasm32 by default) |
 | 20 | The thread cap for many files (> 4, or > 2 with PeptDeep) was justified by Emscripten's allocator (12 × 75 MB: 2.9 GB at 4 threads, 4.0 GB at 16); with openms-mimalloc 0.66 vs 0.80 GB | kept as it was (W64 changed only the chunked cap); a decision for the user |
 
@@ -1730,7 +1755,7 @@ Commit ranges are `base..head` on the task's branch (OpenMS: `claude/prose-merge
 | C10 | Overview, Samples, QC, open search | planned (C10) | — |
 | C11 | History and project files | done (review approved after fix round 1) | 67d35c0..0048e06 |
 | C12 | Service worker, Pages deployment, desktop | deployed 2026-10-20: Pages switched to the workflow, `main` = ce51dae (build 4d0e6fd34b7e), desktop 0.3.0 released; live checks passed (first visit isolated, 16 threads, works offline; example 1,790 PSMs; offline search; upgrade from 0.2.0) | 3b943ec..0fbde6b; fix round 1 0fbde6b..f576241; round 2 ..78d4743; round 3 (commit "app: service worker fix round 3") |
-| W64 | The 64-bit engine: packages 3.7.0-pre.fd807dc89a, then 76607e6451 (wasm32 + wasm64), the choice above 3 GB with Memory64, the estimate of both modules recalibrated (no `uncertain`), the engine shown and recorded, the service worker storing wasm64 on first use, desktop 0.4.0 (§5.9, decisions §4.9) | done locally, fix round 1 done (not pushed, not deployed; screenshots for the user) | da0c786..6b099e7 and 5746fe6 (docs); fix round 1 5746fe6..e0a5704 and the packages-and-docs commit after it, `prose-app` |
+| W64 | The 64-bit engine: packages 3.7.0-pre.fd807dc89a, then 76607e6451 (wasm32 + wasm64), the choice above 3 GB with Memory64, the estimate of both modules recalibrated (no `uncertain`), the engine shown and recorded, the service worker storing wasm64 on first use, desktop 0.4.0 (§5.9, decisions §4.9) | done locally, fix rounds 1 and 2 done (not pushed, not deployed; screenshots for the user) | da0c786..6b099e7 and 5746fe6 (docs); fix round 1 5746fe6..74ebe8b; fix round 2 the commits after 74ebe8b, `prose-app` |
 | — | This as-built specification | snapshot; to be updated at the end (user request 2026-10-17) | this commit |
 
 Execution order (C-R2): A1–A5, C1, C2, C3, C5, B1–B7, C4, C6–C12; one implementer at a time per
