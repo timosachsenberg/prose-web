@@ -48,7 +48,7 @@
         <Label for="peptdeep" class="text-[13px] font-semibold">PeptDeep predictions</Label>
         <p id="peptdeep-hint" class="mt-0.5 text-xs text-muted-foreground">
           Adds agreement with predicted fragment intensities and retention times as Percolator features. Loads 17 MB of
-          models once; needs about 0.6 GB more memory.
+          models once; needs about 0.35 GB more memory.
           {#if peptdeepBlocked === 'percolator'}
             <span class="text-foreground">Needs Percolator: switch it on to use PeptDeep.</span>
           {:else if peptdeepBlocked === 'onnx'}

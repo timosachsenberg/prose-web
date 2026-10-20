@@ -21,14 +21,12 @@
       <Progress class="mt-1.5 max-w-xl" value={p.indeterminate ? null : p.percent} aria-label="Search progress" />
     </div>
     <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
-      {p.indeterminate ? '' : `${p.percent} % · `}{p.elapsed}{#if p.threads}
-        · <span
+      {p.indeterminate ? '' : `${p.percent} % · `}{p.elapsed}{#if p.threads}{' · '}<span
           data-testid="search-threads"
           title={searchRun.threads?.capped
             ? 'Searches of many files use at most 4 threads: their memory grows with every file, the more, the more threads.'
             : undefined}>{p.threads}</span
-        >{/if}{#if p.engine}
-        · <span
+        >{/if}{#if p.engine}{' · '}<span
           data-testid="search-engine"
           title="The 64-bit engine (64-bit WebAssembly, up to 16 GB), for the searches estimated above 3 GB."
           >{p.engine}</span

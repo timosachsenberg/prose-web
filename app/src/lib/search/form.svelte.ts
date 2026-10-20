@@ -173,7 +173,8 @@ class SearchForm {
         if (this.database?.file === file) Object.assign(this.database, { proteins, residues })
       },
       (e: unknown) => {
-        if (this.database?.file === file) this.database.error = String((e as Error)?.message || e)
+        // (without a final period: it goes into the app's own sentence)
+        if (this.database?.file === file) this.database.error = String((e as Error)?.message || e).replace(/\.$/, '')
       },
     )
   }

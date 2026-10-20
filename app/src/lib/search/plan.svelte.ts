@@ -241,7 +241,7 @@ export async function startSearch(): Promise<void> {
             try {
               count = await counting
             } catch (e) {
-              throw new Error(`${databaseName} cannot be read (${String((e as Error)?.message || e)}).`)
+              throw new Error(`${databaseName} cannot be read (${String((e as Error)?.message || e).replace(/\.$/, '')}).`)
             }
             const proteins = count.proteins + (r.contaminants ? CRAP_PROTEINS : 0)
             const residues = count.residues + (r.contaminants ? CRAP_RESIDUES : 0)
