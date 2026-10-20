@@ -6,8 +6,9 @@
 // The formula and its constants are the calibration of both modules with OpenMS' allocator
 // (openms-mimalloc; OpenMS PR #10659, wasm-logs/wasm64/packages/calibration.md): Chromium, file by
 // file as the app searches, 1–12 files of 75 and 733 MB, Erwinia and human, 4 to 16 threads, with and
-// without PeptDeep, tryptic, semi-tryptic and in chunks. The estimate is at or above every measured
-// peak (by 0.03–1.1 GB).
+// without PeptDeep, tryptic, semi-tryptic and in chunks; non-specific (Erwinia, in chunks of 250–1000
+// and unchunked) measured for the app afterwards. The estimate is at or above every measured peak (by
+// 0.03–1.1 GB).
 //
 //   bytes = MODULE
 //         + INDEX per 1,000 proteins × SPECIFICITY × MOD^max(0, variable modifications − 1)
@@ -41,9 +42,9 @@ export interface ModuleConstants {
   module: number
   /** The fragment index per 1,000 proteins of a tryptic search with one variable modification. */
   index: number
-  /** The unchunked index relative to a tryptic one. Non-specific is not measured: 5 × semi, as before. */
+  /** The unchunked index relative to a tryptic one. */
   specificity: Record<Specificity, number>
-  /** The index per protein of a chunk, relative to INDEX (semi measured; the others in proportion). */
+  /** The index per protein of a chunk, relative to INDEX (semi and none measured; full: twice). */
   chunked: Record<Specificity, number>
   /** Each further variable modification (ProSE's single-residue entries) multiplies the index by this. */
   mod: number
@@ -64,8 +65,11 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
     warn: 3 * GB,
     module: 0.2 * GB,
     index: 0.03 * GB, // fit: 28.4 MB
-    specificity: { full: 1, semi: 10, none: 50 },
-    chunked: { full: 2, semi: 20, none: 100 },
+    // none: not measurable unchunked (Erwinia aborts); above both proportions of wasm64's 125 (310 × 180,
+    // 125 × 10 / 15)
+    specificity: { full: 1, semi: 10, none: 85 },
+    // none: Erwinia in chunks of 250 and 500, 4 and 16 threads (147–171 needed)
+    chunked: { full: 2, semi: 20, none: 180 },
     mod: 2,
     growthSmall: 0.05 * GB,
     growthLarge: 0.15 * GB,
@@ -78,8 +82,10 @@ export const MODULES: Record<EngineVariant, ModuleConstants> = {
     warn: 14 * GB,
     module: 0.4 * GB,
     index: 0.025 * GB, // fit: 21.9 MB
-    specificity: { full: 1, semi: 15, none: 75 },
-    chunked: { full: 32 / 15, semi: 32, none: 160 },
+    // none: Erwinia unchunked, 16 threads (122 needed)
+    specificity: { full: 1, semi: 15, none: 125 },
+    // none: Erwinia in chunks of 250, 500 and 1000, 4 and 16 threads (290–307 needed)
+    chunked: { full: 32 / 15, semi: 32, none: 310 },
     mod: 2,
     growthSmall: 0.06 * GB,
     growthLarge: 0.15 * GB,

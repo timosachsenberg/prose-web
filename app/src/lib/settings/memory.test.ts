@@ -22,6 +22,8 @@ type Search = {
   spectra?: keyof typeof SPECTRA
   files?: number
   semi?: boolean
+  /** Non-specific (`peptide:enzyme_specificity` none). */
+  none?: boolean
   mods?: number
   peptdeep?: boolean
   chunk?: number
@@ -52,10 +54,17 @@ const CALIBRATION: (Search & { wasm32?: Record<number, number | 'failed'>; wasm6
   { name: 'human, semi, chunks of 7000 (Node)', db: 'human', semi: true, chunk: 7000, wasm32: { 4: 'failed' } },
   { name: 'human, semi, chunks of 8000', db: 'human', semi: true, chunk: 8000, wasm32: { 4: 'failed' }, wasm64: { 4: 6584.9, 16: 7251.0 } },
   { name: 'human, semi-tryptic, not chunked', db: 'human', semi: true, wasm32: { 4: 'failed' }, wasm64: { 4: 8081.2, 16: 8861.0 } },
+  // measured for the app (W64 fix round 1, the same runner and settings): non-specific in chunks
+  { name: 'Erwinia, non-specific, chunks of 250', db: 'erwinia', none: true, chunk: 250, wasm32: { 16: 1977 }, wasm64: { 16: 2847 } },
+  { name: 'Erwinia, non-specific, chunks of 500', db: 'erwinia', none: true, chunk: 500, wasm32: { 4: 2937, 16: 2922 }, wasm64: { 4: 4495, 16: 4848 } },
+  { name: 'Erwinia, non-specific, chunks of 1000', db: 'erwinia', none: true, chunk: 1000, wasm32: { 16: 'failed' }, wasm64: { 4: 8343, 16: 8849 } },
+  { name: 'Erwinia, non-specific, not chunked', db: 'erwinia', none: true, wasm64: { 16: 15017 } },
 ]
 
 /** The searches the calibration says switch to wasm64 (estimate in wasm32 above 3 GB). */
 const SWITCH = [
+  'Erwinia, non-specific, chunks of 500',
+  'Erwinia, non-specific, chunks of 1000',
   'human, semi, chunks of 5000 (Node)',
   'human, semi, chunks of 6000 (Node)',
   'human, semi, chunks of 7000 (Node)',
@@ -75,7 +84,7 @@ function input(s: Search, threads: number, variant: 'wasm32' | 'wasm64'): Memory
     databaseBytes: db.bytes,
     threads,
     proteins: db.proteins,
-    specificity: s.semi ? 'semi' : 'full',
+    specificity: s.none ? 'none' : s.semi ? 'semi' : 'full',
     variableMods: s.mods ?? 1,
     peptdeep: s.peptdeep ?? false,
     chunkSize: s.chunk ?? 0,
@@ -97,16 +106,21 @@ describe('estimateMemory: the calibration', () => {
         }
       }
     }
-    expect(checked).toBe(56)
+    expect(checked).toBe(65)
   })
 
   it('is above 4 GB for every wasm32 search that failed', () => {
+    let failed = 0
     for (const s of CALIBRATION) {
-      if (s.wasm32?.[4] !== 'failed') continue
-      const estimate = estimateMemory(input(s, 4, 'wasm32'))
-      expect(estimate.bytes, s.name).toBeGreaterThan(4 * GB)
-      expect(estimate.level, s.name).toBe('over')
+      for (const [threads, heap] of Object.entries(s.wasm32 ?? {})) {
+        if (heap !== 'failed') continue
+        const estimate = estimateMemory(input(s, Number(threads), 'wasm32'))
+        expect(estimate.bytes, s.name).toBeGreaterThan(4 * GB)
+        expect(estimate.level, s.name).toBe('over')
+        failed++
+      }
     }
+    expect(failed).toBe(4)
   })
 
   it('crosses 3 GB in wasm32 exactly for the searches that switch to wasm64', () => {
@@ -156,12 +170,12 @@ describe('estimateMemory: the formula', () => {
 
   it('has the constants of both modules', () => {
     expect(MODULES.wasm32).toMatchObject({ limit: 4 * GB, warn: 3 * GB, module: 0.2 * GB, index: 0.03 * GB, mod: 2, thread: 0.025 * GB, peptdeep: 0.35 * GB, maxFile: MAX_FILE_BYTES })
-    expect(MODULES.wasm32.specificity).toEqual({ full: 1, semi: 10, none: 50 })
-    expect(MODULES.wasm32.chunked).toEqual({ full: 2, semi: 20, none: 100 })
+    expect(MODULES.wasm32.specificity).toEqual({ full: 1, semi: 10, none: 85 })
+    expect(MODULES.wasm32.chunked).toEqual({ full: 2, semi: 20, none: 180 })
     expect(MODULES.wasm64).toMatchObject({ limit: 16 * GB, warn: 14 * GB, module: 0.4 * GB, index: 0.025 * GB, mod: 2, thread: 0.035 * GB, peptdeep: 0.25 * GB, maxFile: MAX_FILE_BYTES_64 })
-    expect(MODULES.wasm64.specificity).toEqual({ full: 1, semi: 15, none: 75 })
+    expect(MODULES.wasm64.specificity).toEqual({ full: 1, semi: 15, none: 125 })
     expect(MODULES.wasm64.chunked.semi).toBe(32)
-    expect(MODULES.wasm64.chunked.none).toBeCloseTo(160)
+    expect(MODULES.wasm64.chunked.none).toBe(310)
     // wasm32 is the default
     expect(estimateMemory(human)).toEqual(estimateMemory({ ...human, variant: 'wasm32' }))
     expect(estimateMemory(human).variant).toBe('wasm32')
@@ -206,10 +220,10 @@ describe('estimateMemory: the formula', () => {
   it('scales the index by the specificity', () => {
     const full = estimateMemory(erwinia).database
     expect(estimateMemory({ ...erwinia, specificity: 'semi' }).database / full).toBeCloseTo(10)
-    expect(estimateMemory({ ...erwinia, specificity: 'none' }).database / full).toBeCloseTo(50)
+    expect(estimateMemory({ ...erwinia, specificity: 'none' }).database / full).toBeCloseTo(85)
     const full64 = estimateMemory({ ...erwinia, variant: 'wasm64' }).database
     expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'semi' }).database / full64).toBeCloseTo(15)
-    expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'none' }).database / full64).toBeCloseTo(75)
+    expect(estimateMemory({ ...erwinia, variant: 'wasm64', specificity: 'none' }).database / full64).toBeCloseTo(125)
   })
 
   it('builds a chunked index one chunk at a time, at twice the cost per protein, at most the unchunked index', () => {
@@ -225,7 +239,7 @@ describe('estimateMemory: the formula', () => {
     expect(estimateMemory({ ...semi, variant: 'wasm64', chunkSize: 2000 }).database).toBeCloseTo((0.025 * GB * 2000 * 32) / 1000, -3)
     // tryptic and non-specific likewise
     expect(estimateMemory({ ...human, chunkSize: 2000 }).database).toBeCloseTo((0.03 * GB * 2000 * 2) / 1000, -3)
-    expect(estimateMemory({ ...human, specificity: 'none', chunkSize: 200 }).database).toBeCloseTo((0.03 * GB * 200 * 100) / 1000, -3)
+    expect(estimateMemory({ ...human, specificity: 'none', chunkSize: 200 }).database).toBeCloseTo((0.03 * GB * 200 * 180) / 1000, -3)
   })
 
   it('grows with each further file: the 2nd to 5th by a quarter as much from the 6th on, more for larger files', () => {
