@@ -57,14 +57,14 @@ test('the example in the 64-bit engine finds the same PSMs as in the standard on
   await expect(page.getByTestId('search-plan')).toContainText(/estimated memory \d\.\d GB · 64-bit engine \(up to 16 GB\)/)
   await page.getByRole('button', { name: /^Start search/ }).click()
   await expect(page.getByTestId('search-engine')).toHaveText('64-bit', { timeout: 60_000 })
-  await expect(page.getByTestId('search-engine')).toHaveAttribute('title', /64-bit engine \(Memory64\)/)
+  await expect(page.getByTestId('search-engine')).toHaveAttribute('title', /64-bit engine \(64-bit WebAssembly, up to 16 GB\): this search's memory is estimated above 3 GB/)
   await expect(page).toHaveURL(/#\/results\/[^/]+$/, { timeout: 150_000 })
   expect(await count(page, 'psm-count')).toBe(psms32)
   expect(await count(page, 'protein-count')).toBe(proteins32)
   await page.getByRole('tab', { name: 'Overview' }).click()
   const engine = page.getByTestId('search-facts').locator('dd').filter({ hasText: '64-bit' })
   await expect(engine).toHaveText(/^OpenMS 3\.7 · 64-bit$/)
-  await expect(engine).toHaveAttribute('title', /the 64-bit module \(Memory64, up to 16 GB of memory\)/)
+  await expect(engine).toHaveAttribute('title', /the 64-bit engine \(64-bit WebAssembly, up to 16 GB of memory\)/)
 
   // its search worker loaded the 64-bit package, each file with that package's id; the page's own
   // engine (the status chip, the viewer) stays the standard one
@@ -108,8 +108,40 @@ async function largeSearch(page: Page) {
 
 test('a search above 3 GB runs in the 64-bit engine, said in the footer', async ({ page }) => {
   await largeSearch(page)
-  await expect(page.getByTestId('search-plan')).toContainText(/140,000 proteins \+ 116 cRAP \+ decoys · estimated memory \d\.\d GB · 64-bit engine \(up to 16 GB\)/)
+  const plan = page.getByTestId('search-plan')
+  await expect(plan).toContainText(/140,000 proteins \+ 116 cRAP \+ decoys · estimated memory \d\.\d GB · 64-bit engine \(up to 16 GB\)/)
+  // the number that chose it (the 64-bit estimate shown can be lower)
+  await expect(plan).toHaveAttribute('title', /\nEstimated \d\.\d GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine\.$/)
   await expect(page.getByRole('button', { name: /^Start search/ })).toBeEnabled()
+})
+
+test('a search started while the proteins are counted waits for the count and runs in the engine it asks for', async ({ page }) => {
+  test.setTimeout(120_000)
+  // a large FASTA's count takes long: the page's reads of its pieces take 8 s here
+  await page.addInitScript(() => {
+    const read = Blob.prototype.arrayBuffer
+    Blob.prototype.arrayBuffer = function (this: Blob) {
+      const slow = this.size > 1e6 && this.size <= 16 * 2 ** 20 && !(this instanceof File)
+      return slow ? new Promise<void>((r) => setTimeout(r, 8000)).then(() => read.call(this)) : read.call(this)
+    }
+  })
+  await page.goto('./')
+  await expect(page.getByTestId('engine-status')).toContainText('thread', { timeout: 120_000 })
+  await page.locator('input[type="file"][accept=".mzML,.mzml"]').first().setInputFiles('public/example/DatabaseSuitability_in_spec.mzML')
+  await page.locator('input[type="file"][accept^=".fasta"]').setInputFiles({ name: 'large.fasta', mimeType: 'text/plain', buffer: fasta(140_000) })
+  // no estimate before the count (it would be one of 0 proteins); Start stays enabled
+  await expect(page.getByTestId('search-plan')).toHaveText('1 file · counting proteins…')
+  await page.getByRole('button', { name: /^Start search/ }).click()
+  const progress = page.getByTestId('search-progress')
+  await expect(progress).toContainText('Counting proteins…')
+  await expect(page.getByTestId('search-engine')).toHaveCount(0)
+  // the count decides: the 64-bit engine
+  await expect(page.getByTestId('search-engine')).toHaveText('64-bit', { timeout: 30_000 })
+  await expect(progress).not.toContainText('Counting proteins…')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByText('The search was cancelled.')).toBeVisible()
+  await expect(page.getByTestId('search-plan')).toContainText('140,000 proteins + 116 cRAP + decoys · estimated memory')
+  await expect(page.getByTestId('search-plan')).toContainText('· 64-bit engine (up to 16 GB)')
 })
 
 test('without Memory64 a search above 4 GB stays in wasm32, and the footer says why', async ({ page }) => {

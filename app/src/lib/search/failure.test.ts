@@ -33,7 +33,7 @@ describe('describeFailure', () => {
   it('keeps the app\'s own messages whole', () => {
     const trap =
       'OpenMS stopped while searching (RuntimeError: memory access out of bounds), most likely out of memory: ' +
-      'a search can use at most the 4 GB a WebAssembly module can address. OpenMS was restarted.'
+      'a search can use at most the 4 GB of the standard 32-bit engine. OpenMS was restarted.'
     const f = describeFailure({ label: 'Scoring peptide models against spectra...', file: 0, files, silentMs: 0 }, trap)
     expect(f.summary).toBe(trap)
     expect(f.detail).toBeNull()

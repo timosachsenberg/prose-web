@@ -156,11 +156,28 @@ class SearchForm {
     }
   }
 
+  /** The count of the database's proteins (setDatabase); null if the file cannot be read. */
+  #counting: { file: File; count: Promise<number | null> } | null = null
+
   setDatabase(file: File) {
     this.database = { file, proteins: null }
-    void countProteins(file).then((n) => {
-      if (this.database?.file === file) this.database.proteins = n
+    const count = countProteins(file).then(
+      (n) => n,
+      () => null,
+    )
+    this.#counting = { file, count }
+    void count.then((n) => {
+      if (this.database?.file === file && n !== null) this.database.proteins = n
     })
+  }
+
+  /**
+   * The proteins of the database `file`: at once if counted, else when its count is done (a search
+   * started meanwhile waits for it); null if it cannot be read or is not the database any more.
+   */
+  async proteinsOf(file: File): Promise<number | null> {
+    if (this.database?.file === file && this.database.proteins !== null) return this.database.proteins
+    return this.#counting?.file === file ? this.#counting.count : null
   }
 
   /** Loads the example (two replicates of one file and its FASTA) in place of the current files. */

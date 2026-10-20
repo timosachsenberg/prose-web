@@ -209,7 +209,7 @@
                       <Badge
                         variant="outline"
                         class="h-[18px] shrink-0 px-1.5 text-[11px] font-normal text-muted-foreground"
-                        title="Searched with the 64-bit engine (Memory64): the search needed more than the 4 GB of the standard one."
+                        title="Searched with the 64-bit engine (64-bit WebAssembly, up to 16 GB): its memory was estimated above 3 GB."
                         data-testid="history-engine">64-bit</Badge>
                     {/if}
                   </span>

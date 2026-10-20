@@ -5,12 +5,21 @@ import type { SearchRequest } from '../engine/client'
 // router are replaced): the module of the search, its footer line and advice.
 
 const sent: SearchRequest[] = []
+/** The step before the search of the last start (counting the proteins), if any. */
+const preludes: string[] = []
 vi.mock('./session.svelte', () => ({
   searchRun: { status: 'idle' },
-  runSearch: vi.fn(async (request: SearchRequest) => {
-    sent.push(request)
-    return null
-  }),
+  // as the session runs it: the step before the search first, then the request it gives
+  runSearch: vi.fn(
+    async (request: SearchRequest, _meta: unknown, _check: unknown, prelude?: { label: string; run: (r: SearchRequest) => Promise<SearchRequest> }) => {
+      if (prelude) {
+        preludes.push(prelude.label)
+        request = await prelude.run(request)
+      }
+      sent.push(request)
+      return null
+    },
+  ),
 }))
 vi.mock('../route.svelte', () => ({ navigate: vi.fn() }))
 
@@ -28,6 +37,7 @@ function fill(proteins: number | null, parameters: Record<string, unknown>, mzml
 
 async function request(): Promise<SearchRequest> {
   sent.length = 0
+  preludes.length = 0
   await startSearch()
   expect(sent).toHaveLength(1)
   return sent[0]
@@ -73,6 +83,7 @@ describe('the module of a search', () => {
     expect(searchPlan.engine).toBe('wasm32')
     expect(searchPlan.estimate).toMatchObject({ variant: 'wasm32', level: 'ok' })
     expect(searchPlan.line).toMatch(/· estimated memory 0\.8 GB of 4 GB$/)
+    expect(searchPlan.lineTitle).toBe(searchPlan.line)
     expect(searchPlan.advice).toBeNull()
     expect((await request()).engine).toBe('wasm32')
   })
@@ -84,6 +95,11 @@ describe('the module of a search', () => {
     expect(searchPlan.engine).toBe('wasm64')
     expect(searchPlan.estimate).toMatchObject({ variant: 'wasm64', level: 'ok' })
     expect(searchPlan.line).toBe('1 file · 20,652 proteins + decoys · estimated memory 8.1 GB · 64-bit engine (up to 16 GB)')
+    // the number that chose it, in the line's title
+    expect(searchPlan.lineTitle).toBe(
+      '1 file · 20,652 proteins + decoys · estimated memory 8.1 GB · 64-bit engine (up to 16 GB)\n' +
+        'Estimated 6.4 GB in the standard 32-bit engine, above 3 GB: the search runs in the 64-bit engine.',
+    )
     expect(searchPlan.advice).toBeNull()
     expect(searchPlan.canStart).toBe(true)
     expect((await request()).engine).toBe('wasm64')
@@ -99,6 +115,30 @@ describe('the module of a search', () => {
     fill(20652, { ...semi, 'modifications:variable': ['Oxidation (M)'] })
     expect(searchPlan.estimate!.bytes).toBe(withAcetyl)
     expect(searchPlan.estimate?.level).toBe('ok')
+  })
+
+  test('a search started while the proteins are counted waits for the count, and chooses its engine on it', async () => {
+    fill(1000, semi)
+    // a FASTA of 20,652 proteins whose count is still running when Start is pressed
+    form.setDatabase(new File(['>p\nPEPTIDEK\n'.repeat(20652)], 'human.fasta'))
+    expect(form.database?.proteins).toBeNull()
+    // the footer has no estimate yet (it would be one of 0 proteins); Start stays enabled
+    expect(searchPlan.line).toBe('1 file · counting proteins…')
+    expect(searchPlan.canStart).toBe(true)
+    expect(searchPlan.engine).toBe('wasm32')
+    const r = await request()
+    expect(preludes).toEqual(['Counting proteins...'])
+    expect(form.database?.proteins).toBe(20652)
+    // 6.4 GB in wasm32: the 64-bit engine, as the footer now says
+    expect(r.engine).toBe('wasm64')
+    expect(searchPlan.engine).toBe('wasm64')
+    // counted already: no step before the search
+    expect((await request()).engine).toBe('wasm64')
+    expect(preludes).toEqual([])
+    // a small database counted while starting stays in wasm32
+    form.setDatabase(new File(['>p\nPEPTIDEK\n'.repeat(100)], 'small.fasta'))
+    expect((await request()).engine).toBe('wasm32')
+    expect(preludes).toEqual(['Counting proteins...'])
   })
 
   test('wasm64 warns above 14 GB and suggests database:chunk_size', () => {
@@ -157,6 +197,7 @@ describe('the module of a search', () => {
     searchPlan.forceWasm64 = true
     expect(searchPlan.engine).toBe('wasm64')
     expect(searchPlan.line).toMatch(/· 64-bit engine \(up to 16 GB\)$/)
+    expect(searchPlan.lineTitle).toMatch(/\nEstimated 0\.\d GB in the standard 32-bit engine; \?debug=wasm64 runs it in the 64-bit engine\.$/)
     expect((await request()).engine).toBe('wasm64')
     searchPlan.memory64 = false
     expect(searchPlan.engine).toBe('wasm32')

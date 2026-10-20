@@ -147,6 +147,13 @@ export function onSearchFinished(listener: FinishedListener): () => void {
   return () => finishedListeners.delete(listener)
 }
 
+/**
+ * A step before the search proper, e.g. counting the database's proteins, which decides the engine:
+ * shown as the search's step (`label`); it gives the request to run (`run`). Cancelling during it ends
+ * the run at once.
+ */
+export type Prelude = { label: string; run: (request: SearchRequest) => Promise<SearchRequest> }
+
 /** The run in flight: a cancelled or replaced run ignores what its promises bring later. */
 let runId = 0
 /** The request of the run has gone to the engine (cancelling then goes through the engine). */
@@ -169,14 +176,16 @@ function newId(): string {
 }
 
 /**
- * Runs a search with the app's engine (loading OpenMS first if needed; `check` then looks at the
- * request against what OpenMS offers, e.g. its modification names). Resolves with the id of the
- * opened result, or null if the search failed or was cancelled (`searchRun` says which).
+ * Runs a search with the app's engine (after `prelude`, if given; loading OpenMS first if needed;
+ * `check` then looks at the request against what OpenMS offers, e.g. its modification names).
+ * Resolves with the id of the opened result, or null if the search failed or was cancelled
+ * (`searchRun` says which).
  */
 export async function runSearch(
   request: SearchRequest,
   meta: Omit<OpenResult, 'id' | 'createdAt' | 'outcome' | 'engineResult'>,
   check?: (info: EngineInfo) => string | null,
+  prelude?: Prelude,
 ): Promise<string | null> {
   if (searchRun.status === 'running') return null
   const id = ++runId
@@ -184,7 +193,7 @@ export async function runSearch(
   const now = performance.now()
   Object.assign(searchRun, {
     status: 'running',
-    label: 'Starting OpenMS...',
+    label: prelude?.label ?? 'Starting OpenMS...',
     file: -1,
     files: request.files.map((f) => f.file.name),
     fraction: 0,
@@ -209,6 +218,12 @@ export async function runSearch(
     }
   }
   try {
+    if (prelude) {
+      request = await prelude.run(request)
+      if (id !== runId) return null // cancelled meanwhile
+      searchRun.engine = request.engine ?? 'wasm32'
+      searchRun.label = 'Starting OpenMS...'
+    }
     const info = await startEngine()
     if (id !== runId) return null // cancelled while OpenMS was loading
     const problem = check?.(info) ?? null
@@ -221,7 +236,9 @@ export async function runSearch(
       await checkModels()
       if (id !== runId) return null
     }
-    searchRun.label = 'Reading the files...'
+    // (the first search in the 64-bit engine downloads it, 46 MB: until it has loaded, the step says so)
+    searchRun.label =
+      request.engine === 'wasm64' && !engineClient().hasLoaded('wasm64') ? 'Loading the 64-bit engine...' : 'Reading the files...'
     searchRun.threads = engineClient().threadsFor(request)
     sent = true
     const outcome = await engineClient().search(request, onProgress)

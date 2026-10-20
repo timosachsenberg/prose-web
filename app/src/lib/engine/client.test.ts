@@ -853,12 +853,11 @@ describe('the 64-bit module', () => {
     expect(again.worker.variant).toBe('wasm64')
     client.cancel()
     expect((await rejection(again.search)).kind).toBe('cancelled')
-    expect(lastSearchWorker()).not.toBe(again.worker)
-    expect([lastSearchWorker().variant, lastSearchWorker().threads]).toEqual(['wasm64', 16])
+    expect(again.worker.terminated).toBe(true)
 
     // OpenMS' own out-of-memory error in wasm64
     const oom = await startSearch(() => {}, wasm64())
-    expect(oom.worker).toBe(lastSearchWorker())
+    expect([oom.worker.variant, oom.worker.threads]).toEqual(['wasm64', 16])
     oom.worker.reply({ id: oom.id, type: 'error', error: 'OutOfMemory: unable to allocate', trap: false, stage: 'searching' })
     expect((await rejection(oom.search)).message).toMatch(/^OpenMS ran out of memory while searching \(.*\)\. A search can use at most the 16 GB of the 64-bit engine\./)
   })
@@ -919,5 +918,52 @@ describe('the 64-bit module', () => {
     // a wasm32 search goes on in a wasm32 worker
     const next = await startSearch()
     expect(next.worker.variant).toBe('wasm32')
+  })
+})
+
+describe('the first use of the 64-bit module', () => {
+  test('knows whether a module has loaded (its first load downloads it)', async () => {
+    expect(client.hasLoaded('wasm32')).toBe(false)
+    await client.init(4)
+    expect(client.hasLoaded('wasm32')).toBe(true)
+    expect(client.hasLoaded('wasm64')).toBe(false)
+    const big = await startSearch(() => {}, { ...searchRequest, engine: 'wasm64' })
+    expect(client.hasLoaded('wasm64')).toBe(true)
+    big.worker.reply({ id: big.id, type: 'result', result: outcome })
+    await big.search
+  })
+
+  test('a cancel while it downloads starts no other 64-bit worker; the next search that needs one does', async () => {
+    await client.init(4)
+    loading = [false] // the 64-bit module still downloading
+    const search = client.search({ ...searchRequest, engine: 'wasm64' }, () => {})
+    await settle()
+    const downloading = lastSearchWorker()
+    expect(downloading.variant).toBe('wasm64')
+    client.cancel()
+    expect((await rejection(search)).kind).toBe('cancelled')
+    expect(downloading.terminated).toBe(true)
+    // no worker started in its place
+    await settle()
+    expect(lastSearchWorker()).toBe(downloading)
+    expect(client.hasSearchResult).toBe(false)
+    // a 32-bit search starts its own worker
+    const small = await startSearch()
+    expect(small.worker.variant).toBe('wasm32')
+    small.worker.reply({ id: small.id, type: 'result', result: outcome })
+    await small.search
+    // and the next 64-bit search a 64-bit one
+    const big = await startSearch(() => {}, { ...searchRequest, engine: 'wasm64' })
+    expect(big.worker.variant).toBe('wasm64')
+    expect(big.worker).not.toBe(downloading)
+  })
+
+  test('a cancelled 32-bit search still gets its worker back at once', async () => {
+    await client.init(4)
+    const { search, worker } = await startSearch()
+    client.cancel()
+    await rejection(search)
+    expect(lastSearchWorker()).not.toBe(worker)
+    expect(lastSearchWorker().variant).toBe('wasm32')
   })
 })

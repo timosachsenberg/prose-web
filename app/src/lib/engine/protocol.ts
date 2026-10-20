@@ -213,7 +213,7 @@ function searchMemory(variant: EngineVariant): string {
   const limit =
     variant === 'wasm64'
       ? 'a search can use at most the 16 GB of the 64-bit engine.'
-      : 'a search can use at most the 4 GB a WebAssembly module can address.'
+      : 'a search can use at most the 4 GB of the standard 32-bit engine.'
   return (
     `${limit} Search fewer files at a time, or set database:chunk_size (e.g. 2000) under All parameters to build ` +
     'and search the index in parts, or use fewer variable modifications or a narrower enzyme specificity.'

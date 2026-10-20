@@ -8,7 +8,7 @@
 </script>
 
 <div class="min-w-0 flex-1">
-  <p class="truncate text-xs text-muted-foreground" data-testid="search-plan">{plan.line}</p>
+  <p class="truncate text-xs text-muted-foreground" data-testid="search-plan" title={plan.lineTitle}>{plan.line}</p>
   {#if plan.problemShown}
     <p class="truncate text-xs text-foreground" id="start-problem" title={plan.problem}>{plan.problem}</p>
   {:else if plan.advice}

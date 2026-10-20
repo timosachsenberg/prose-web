@@ -33,11 +33,11 @@
     const version = result.stored?.moduleVersion ?? engineState.info?.version ?? ''
     const short = /^\d+\.\d+/.exec(version)?.[0] ?? version
     const variant = result.outcome.variant
-    const module =
-      variant === 'wasm64' ? 'the 64-bit module (Memory64, up to 16 GB of memory)' : 'the standard 32-bit module (up to 4 GB of memory)'
+    const description =
+      variant === 'wasm64' ? 'the 64-bit engine (64-bit WebAssembly, up to 16 GB of memory)' : 'the standard 32-bit engine (up to 4 GB of memory)'
     return {
       value: `${short ? `OpenMS ${short} · ` : ''}${engineLabel(variant)}`,
-      title: `${version ? `OpenMS ${version}, ` : ''}${module}`,
+      title: `${version ? `OpenMS ${version}, ` : ''}${description}`,
     }
   })
 

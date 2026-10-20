@@ -4,16 +4,16 @@
 
 import { debugFlag } from '../debug'
 import { engineState, searchThreads } from '../engine/app-engine.svelte'
-import type { EngineInfo, SearchRequest } from '../engine/client'
+import type { EngineInfo, EngineVariant, SearchRequest } from '../engine/client'
 import { fileTooLargeMessage, maxFileBytes, threadsForSearch } from '../engine/protocol'
-import { chooseEngine, supportsMemory64 } from '../engine/variant'
+import { chooseEngine, supportsMemory64, SWITCH_BYTES } from '../engine/variant'
 import { formatPercent } from '../format/fdr'
 import { navigate } from '../route.svelte'
 import { estimateMemory, formatMemory, indexModifications, type MemoryInput, type Specificity } from '../settings/memory'
 import { unknownModifications } from '../settings/modifications'
 import { copyValues, requestParameters } from '../settings/parameters'
 import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
-import { runSearch, searchRun, type OpenResult } from './session.svelte'
+import { runSearch, searchRun, type OpenResult, type Prelude } from './session.svelte'
 
 /** What to do instead where the browser has no Memory64 (Safari) and a search needs more than 4 GB. */
 const NO_MEMORY64 =
@@ -58,8 +58,8 @@ class SearchPlan {
   /** `?debug=wasm64`: every search runs in the 64-bit module (where the browser has it). */
   forceWasm64 = $state(typeof location !== 'undefined' && debugFlag(location.search) === 'wasm64')
 
-  /** What the estimate needs of the form, whatever the module. */
-  #memoryInput = $derived.by((): Omit<MemoryInput, 'variant'> | null => {
+  /** What the estimate needs of the form, whatever the module (0 proteins while they are counted). */
+  memoryInput = $derived.by((): Omit<MemoryInput, 'variant'> | null => {
     if (form.files.length === 0) return null
     const sizes = form.files.map((r) => r.file.size)
     return {
@@ -75,24 +75,26 @@ class SearchPlan {
   })
 
   /** The estimate in wasm32, which decides the module. */
-  estimate32 = $derived(this.#memoryInput && estimateMemory({ ...this.#memoryInput, variant: 'wasm32' }))
+  estimate32 = $derived(this.memoryInput && estimateMemory({ ...this.memoryInput, variant: 'wasm32' }))
 
   /** The module the search runs in (`chooseEngine`). */
-  engine = $derived(
-    this.estimate32 === null
-      ? 'wasm32'
-      : chooseEngine({
-          estimate32: this.estimate32.bytes,
-          fileTooLarge32: this.estimate32.fileTooLarge,
-          memory64: this.memory64,
-          force: this.forceWasm64,
-        }),
-  )
+  engine = $derived(this.memoryInput === null ? 'wasm32' : this.engineFor(this.memoryInput))
 
   /** The estimate in the module the search runs in. */
   estimate = $derived(
-    this.engine === 'wasm64' && this.#memoryInput ? estimateMemory({ ...this.#memoryInput, variant: 'wasm64' }) : this.estimate32,
+    this.engine === 'wasm64' && this.memoryInput ? estimateMemory({ ...this.memoryInput, variant: 'wasm64' }) : this.estimate32,
   )
+
+  /** The module of a search of `input` (`chooseEngine` on its wasm32 estimate, in this browser). */
+  engineFor(input: Omit<MemoryInput, 'variant'>): EngineVariant {
+    const estimate32 = estimateMemory({ ...input, variant: 'wasm32' })
+    return chooseEngine({
+      estimate32: estimate32.bytes,
+      fileTooLarge32: estimate32.fileTooLarge,
+      memory64: this.memory64,
+      force: this.forceWasm64,
+    })
+  }
 
   /**
    * "6 files in 3 samples · 20,652 proteins + 116 cRAP + decoys · estimated memory 2.6 GB of 4 GB", or
@@ -108,7 +110,9 @@ class SearchPlan {
       const decoys = form.value('decoys') === 'ignore' ? '' : ' + decoys'
       const crap = form.contaminants ? ` + ${CRAP_PROTEINS} cRAP` : ''
       parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap}${decoys}`)
-      if (this.estimate?.variant === 'wasm64') {
+      if (proteins === null) {
+        // no estimate before the count: it would be one of 0 proteins (a search started now waits for it)
+      } else if (this.estimate?.variant === 'wasm64') {
         parts.push(`estimated memory ${formatMemory(this.estimate.bytes)}`, '64-bit engine (up to 16 GB)')
       } else if (this.estimate) {
         parts.push(`estimated memory ${formatMemory(this.estimate.bytes)} of 4 GB`)
@@ -118,6 +122,21 @@ class SearchPlan {
     }
     if (form.isExample) parts.push(`example: ${formatPercent(Number(form.value('FDR:protein')))} protein FDR, small database`)
     return parts.join(' · ')
+  })
+
+  /**
+   * The line in full (the footer may cut it) and, for the 64-bit engine, the 32-bit estimate that chose
+   * it (the 64-bit one, shown, can be lower: "2.8 GB · 64-bit engine" for 3.1 GB in 32-bit).
+   */
+  lineTitle = $derived.by(() => {
+    const e32 = this.estimate32
+    if (this.estimate?.variant !== 'wasm64' || !e32 || form.database?.proteins == null) return this.line
+    const estimated = `Estimated ${formatMemory(e32.bytes)} in the standard 32-bit engine`
+    const why =
+      e32.bytes > SWITCH_BYTES || e32.fileTooLarge
+        ? `${estimated}, above 3 GB: the search runs in the 64-bit engine.`
+        : `${estimated}; ?debug=wasm64 runs it in the 64-bit engine.`
+    return `${this.line}\n${why}`
   })
 
   /** What the estimate advises, by its module and cause: the database's index or the input files. */
@@ -135,7 +154,7 @@ class SearchPlan {
     } else if (over && !wide && !this.memory64) {
       text = NO_MEMORY64
     } else {
-      const more = wide ? 'More than the 16 GB the 64-bit engine can use' : 'More than the 4 GB a browser search can use'
+      const more = wide ? 'More than the 16 GB the 64-bit engine can use' : 'More than the 4 GB of the 32-bit engine'
       const close = wide ? 'Close to the 16 GB limit of the 64-bit engine' : 'Close to the 4 GB limit'
       if (estimate.cause === 'inputs') {
         text = `${over ? more : close}, mostly for the files: search fewer files at once.`
@@ -190,6 +209,22 @@ export async function startSearch(): Promise<void> {
     const unknown = unknownModifications(values, info.parameters)
     return unknown.length > 0 ? unknownMessage(unknown) : null
   }
+  // started while the proteins are counted: the search waits for the count ("Counting proteins…"), and
+  // its engine is chosen on it (the form's estimate had 0 proteins)
+  const input = $state.snapshot(searchPlan.memoryInput)
+  const database = form.database.file
+  const prelude: Prelude | undefined =
+    form.database.proteins === null && input
+      ? {
+          label: 'Counting proteins...',
+          run: async (r) => {
+            const proteins = await form.proteinsOf(database)
+            if (proteins === null) return r
+            const crap = r.contaminants ? CRAP_PROTEINS : 0
+            return { ...r, engine: searchPlan.engineFor({ ...input, proteins: proteins + crap }) }
+          },
+        }
+      : undefined
   const id = await runSearch(
     request,
     {
@@ -207,6 +242,7 @@ export async function startSearch(): Promise<void> {
       },
     },
     check,
+    prelude,
   )
   if (id !== null) navigate({ view: 'results', id })
 }

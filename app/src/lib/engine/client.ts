@@ -238,6 +238,11 @@ export class EngineClient {
     }
   }
 
+  /** Whether a worker has loaded the module `variant` (its first load downloads it). */
+  hasLoaded(variant: EngineVariant): boolean {
+    return this.#loaded.has(variant)
+  }
+
   /**
    * The search worker holds the result of its search, so `idXML()` can write it: false before the
    * first search, from the start of a new search (whether it succeeds or not) and after a trap.
@@ -277,15 +282,21 @@ export class EngineClient {
 
   /**
    * Cancels the search in flight: its calls are rejected as cancelled at once, and its worker is ended
-   * and replaced by a new one with the same threads and module (ready for the same search again). The
-   * calls of a search whose worker stopped and is being restarted are cancelled too. Without a search in
-   * flight nothing happens; the viewer goes on.
+   * and replaced by a new one with the same threads and module (ready for the same search again); a
+   * 64-bit worker is not replaced (its module may still be downloading, 46 MB, which the user just
+   * cancelled): the next search that needs it starts one. The calls of a search whose worker stopped
+   * and is being restarted are cancelled too. Without a search in flight nothing happens; the viewer
+   * goes on.
    */
   cancel(): void {
     for (const p of this.#awaitingRestart) p.reject(new EngineError('cancelled', cancelled(p.type)))
     this.#awaitingRestart.clear()
     const session = this.#search
     if (!session || session.searches === 0) return
+    if (session.variant === 'wasm64') {
+      for (const p of this.#stop(session)) p.reject(new EngineError('cancelled', cancelled(p.type)))
+      return
+    }
     this.#start('search', session.threads, session.variant)
   }
 

@@ -25,12 +25,12 @@
         · <span
           data-testid="search-threads"
           title={searchRun.threads?.capped
-            ? 'Searches of many files, and chunked semi- or non-specific searches, use at most 4 threads: their memory grows with every file, the more, the more threads.'
+            ? 'Searches of many files use at most 4 threads: their memory grows with every file, the more, the more threads.'
             : undefined}>{p.threads}</span
         >{/if}{#if p.engine}
         · <span
           data-testid="search-engine"
-          title="The 64-bit engine (Memory64): this search needs more memory than the 4 GB of the standard engine; it can use up to 16 GB."
+          title="The 64-bit engine (64-bit WebAssembly, up to 16 GB): this search's memory is estimated above 3 GB."
           >{p.engine}</span
         >{/if}
     </span>
