@@ -49,6 +49,6 @@ The browser profile, its caches and the History of searches are in the user's ap
 directory (org.openms.prose in ~/.local/share, ~/Library/Application Support or %APPDATA%). History
 belongs to the port: on another --port the app starts with an empty History.
 
-Version 0.4.0: the ProSE app with the OpenMS modules 3.7.0-pre.fd807dc89a of OpenMS pull request
+Version 0.4.0: the ProSE app with the OpenMS modules 3.7.0-pre.76607e6451 of OpenMS pull request
 #10659 (the threaded modules with ONNX Runtime, 32-bit and 64-bit), a preview, not an OpenMS release.
 OpenMS: BSD 3-Clause license. Neutralinojs: MIT license.

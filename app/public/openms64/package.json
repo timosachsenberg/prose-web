@@ -1,6 +1,6 @@
 {
   "name": "@openms/openms-wasm64-mt",
-  "version": "3.7.0-pre.fd807dc89a",
+  "version": "3.7.0-pre.76607e6451",
   "description": "OpenMS, the C++ library for computational mass spectrometry, compiled to multi-threaded WebAssembly (OpenMP) with 64-bit memory (Memory64, up to 16 GB) for web applications and Node.js",
   "keywords": [
     "mass-spectrometry",
