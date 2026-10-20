@@ -1,6 +1,7 @@
 <script lang="ts">
   // The progress of the running search: its step (with the file), a bar that is indeterminate while the
-  // fraction does not move, the percentage, the elapsed time and the threads. `compact`: for the top bar.
+  // fraction does not move, the percentage, the elapsed time, the threads and, for a search in the 64-bit
+  // module, "64-bit". `compact`: for the top bar.
   import { Progress } from '$lib/components/ui/progress'
   import { searchProgress as p, searchRun } from '$lib/search/session.svelte'
   import { cn } from '$lib/utils'
@@ -26,6 +27,11 @@
           title={searchRun.threads?.capped
             ? 'Searches of many files, and chunked semi- or non-specific searches, use at most 4 threads: their memory grows with every file, the more, the more threads.'
             : undefined}>{p.threads}</span
+        >{/if}{#if p.engine}
+        · <span
+          data-testid="search-engine"
+          title="The 64-bit engine (Memory64): this search needs more memory than the 4 GB of the standard engine; it can use up to 16 GB."
+          >{p.engine}</span
         >{/if}
     </span>
   </div>

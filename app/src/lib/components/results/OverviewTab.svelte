@@ -1,8 +1,10 @@
 <script lang="ts">
-  // The Overview tab: what was searched and how (the settings that matter for reading the numbers), a
-  // table of the searched files with what the search reports of each, and, for an open search, the mass
-  // shifts the PSMs carry. The key figures stand above the tabs.
+  // The Overview tab: what was searched and how (the settings that matter for reading the numbers, and
+  // the engine: OpenMS' version and module), a table of the searched files with what the search reports
+  // of each, and, for an open search, the mass shifts the PSMs carry. The key figures stand above the tabs.
   import * as Table from '$lib/components/ui/table'
+  import { engineState } from '$lib/engine/app-engine.svelte'
+  import { engineLabel } from '$lib/engine/variant'
   import { formatPercent, formatQ } from '$lib/format/fdr'
   import { formatCount } from '$lib/results/display'
   import { fileRows, formatSeconds, totalsOf } from '$lib/results/overview'
@@ -26,7 +28,20 @@
     return settings.peptdeep && applied > 0 ? `${percolator} with PeptDeep predictions` : percolator
   })
 
-  const facts = $derived([
+  // the module that searched: OpenMS' version (that of this session's engine, or the stored search's)
+  const engine = $derived.by(() => {
+    const version = result.stored?.moduleVersion ?? engineState.info?.version ?? ''
+    const short = /^\d+\.\d+/.exec(version)?.[0] ?? version
+    const variant = result.outcome.variant
+    const module =
+      variant === 'wasm64' ? 'the 64-bit module (Memory64, up to 16 GB of memory)' : 'the standard 32-bit module (up to 4 GB of memory)'
+    return {
+      value: `${short ? `OpenMS ${short} · ` : ''}${engineLabel(variant)}`,
+      title: `${version ? `OpenMS ${version}, ` : ''}${module}`,
+    }
+  })
+
+  const facts: { name: string; value: string; title?: string }[] = $derived([
     { name: 'Database', value: `${settings.database}${settings.contaminants ? ' + contaminants' : ''}` },
     { name: 'Search', value: summary.openSearch ? 'Open search (wide precursor window)' : 'Standard precursor window' },
     { name: 'PSM FDR', value: fdr(summary.psmFdr) },
@@ -34,6 +49,7 @@
     { name: 'Fixed modifications', value: settings.fixedMods.length > 0 ? settings.fixedMods.join(', ') : 'none' },
     { name: 'Rescoring', value: rescoring },
     { name: 'Total time', value: formatSeconds(result.outcome.seconds) },
+    { name: 'Engine', ...engine },
   ])
 
   const head = 'h-auto border-b px-2.5 py-1.5 font-medium text-muted-foreground'
@@ -48,7 +64,7 @@
       {#each facts as fact (fact.name)}
         <div class="min-w-0">
           <dt class="text-muted-foreground">{fact.name}</dt>
-          <dd class="truncate" title={fact.value}>{fact.value}</dd>
+          <dd class="truncate" title={fact.title ?? fact.value}>{fact.value}</dd>
         </div>
       {/each}
     </dl>

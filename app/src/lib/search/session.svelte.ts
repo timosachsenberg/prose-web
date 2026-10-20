@@ -7,12 +7,14 @@ import { checkModels, engineClient, startEngine } from '../engine/app-engine.sve
 import {
   EngineError,
   type EngineInfo,
+  type EngineVariant,
   type SearchOutcome,
   type SearchProgress,
   type SearchRequest,
   type SearchThreads,
 } from '../engine/client'
 import { NEWER_VERSION, RELOAD, threadsLabel } from '../engine/protocol'
+import { engineLabel } from '../engine/variant'
 import { releaseResultsView } from '../results/view.svelte'
 import { describeFailure, type Failure } from './failure'
 
@@ -56,6 +58,8 @@ export const searchRun = $state<{
   fraction: number
   /** The threads the search runs with (once OpenMS is loaded): fewer for many files, for the memory. */
   threads: SearchThreads | null
+  /** The module the search runs in. */
+  engine: EngineVariant
   /** When the fraction last moved, when the search started, and now (performance.now(); ticks while running). */
   movedAt: number
   startedAt: number
@@ -71,6 +75,7 @@ export const searchRun = $state<{
   files: [],
   fraction: 0,
   threads: null,
+  engine: 'wasm32',
   movedAt: 0,
   startedAt: 0,
   now: 0,
@@ -102,6 +107,8 @@ class ProgressView {
   })
   /** "16 threads", "4 threads (memory)"; null until OpenMS is loaded. */
   threads = $derived(searchRun.threads ? threadsLabel(searchRun.threads) : null)
+  /** "64-bit" for a search in the 64-bit module; null in the default one. */
+  engine = $derived(searchRun.engine === 'wasm64' ? engineLabel('wasm64') : null)
 }
 
 export const searchProgress = new ProgressView()
@@ -182,6 +189,7 @@ export async function runSearch(
     files: request.files.map((f) => f.file.name),
     fraction: 0,
     threads: null,
+    engine: request.engine ?? 'wasm32',
     movedAt: now,
     startedAt: now,
     failure: null,

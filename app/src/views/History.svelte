@@ -4,6 +4,7 @@
   // while a search runs, and reads the list again when it is shown (another tab may have changed it).
   import SaveNotice from '$lib/components/history/SaveNotice.svelte'
   import * as Alert from '$lib/components/ui/alert'
+  import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
@@ -202,7 +203,16 @@
                     }}
                     onblur={() => commitRename(entry)} />
                 {:else}
-                  <span class="block truncate" title={entry.name} data-column="name">{entry.name}</span>
+                  <span class="flex min-w-0 items-center gap-2">
+                    <span class="block min-w-0 truncate" title={entry.name} data-column="name">{entry.name}</span>
+                    {#if entry.variant === 'wasm64'}
+                      <Badge
+                        variant="outline"
+                        class="h-[18px] shrink-0 px-1.5 text-[11px] font-normal text-muted-foreground"
+                        title="Searched with the 64-bit engine (Memory64): the search needed more than the 4 GB of the standard one."
+                        data-testid="history-engine">64-bit</Badge>
+                    {/if}
+                  </span>
                 {/if}
               </Table.Cell>
               <Table.Cell class="{cell} whitespace-nowrap text-left" data-column="date">
