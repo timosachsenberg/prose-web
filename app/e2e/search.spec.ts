@@ -12,7 +12,7 @@ test('example search end to end', async ({ page }) => {
   await expect(page.getByText('Spectra and database stay on this computer')).toBeVisible()
   await expect(page.getByRole('link', { name: /Windows/ })).toHaveAttribute(
     'href',
-    /releases\/latest\/download\/prose-desktop-win_x64\.zip$/,
+    /releases\/latest\/download\/ProSE-windows-x64-setup\.exe$/,
   )
 
   await page.getByRole('button', { name: 'Try the example' }).click()
