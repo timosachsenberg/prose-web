@@ -16,6 +16,7 @@
     { file: 'ProSE-windows-x64-setup.exe', label: 'Windows (x64)' },
     { file: 'ProSE-macos-arm64.dmg', label: 'macOS (Apple silicon)' },
     { file: 'ProSE-linux-x64.AppImage', label: 'Linux (x64)' },
+    { file: 'ProSE-linux-arm64.AppImage', label: 'Linux (arm64)' },
   ]
 </script>
 
