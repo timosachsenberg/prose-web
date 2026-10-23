@@ -8,11 +8,11 @@ test('example search end to end', async ({ page }) => {
   test.setTimeout(180_000)
   await page.goto('./')
 
-  // the empty state: the example, the desktop downloads and the privacy note
+  // the empty state: the example, the desktop app (its releases page) and the privacy note
   await expect(page.getByText('Spectra and database stay on this computer')).toBeVisible()
-  await expect(page.getByRole('link', { name: /Windows/ })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Desktop app (Windows, macOS, Linux)' })).toHaveAttribute(
     'href',
-    /releases\/latest\/download\/ProSE-windows-x64-setup\.exe$/,
+    'https://github.com/timosachsenberg/prose-web/releases/latest',
   )
 
   await page.getByRole('button', { name: 'Try the example' }).click()

@@ -10,14 +10,8 @@
 
   let addInput = $state<HTMLInputElement | null>(null)
 
-  const releases = 'https://github.com/timosachsenberg/prose-web/releases/latest/download'
-  // the native desktop app (desktop-native-v* releases): stable asset names, so "latest" always works
-  const downloads = [
-    { file: 'ProSE-windows-x64-setup.exe', label: 'Windows (x64)' },
-    { file: 'ProSE-macos-arm64.dmg', label: 'macOS (Apple silicon)' },
-    { file: 'ProSE-linux-x64.AppImage', label: 'Linux (x64)' },
-    { file: 'ProSE-linux-arm64.AppImage', label: 'Linux (arm64)' },
-  ]
+  // the native desktop app: the page of the latest desktop-native-v* release, whose packages carry the version
+  const desktopReleases = 'https://github.com/timosachsenberg/prose-web/releases/latest'
 </script>
 
 <Card.Root size="sm" class="gap-3 rounded-lg shadow-none">
@@ -58,13 +52,9 @@
     </p>
     <NoticeList items={form.notices.map((message, k) => ({ message, onDismiss: () => form.notices.splice(k, 1) }))} />
     <p class="text-xs text-muted-foreground">
-      Desktop app (native engine, no memory limit, works offline):
-      {#each downloads as d (d.file)}
-        <a class="text-foreground underline-offset-2 hover:underline" href="{releases}/{d.file}">{d.label}</a>{' · '}
-      {/each}
-      <a class="text-foreground underline-offset-2 hover:underline" href="https://github.com/timosachsenberg/prose-web/releases/latest"
-        >all downloads</a
-      >
+      <a class="text-foreground underline-offset-2 hover:underline" href={desktopReleases}
+        >Desktop app (Windows, macOS, Linux)</a
+      >: native engine, no memory limit, works offline.
     </p>
   </Card.Content>
 </Card.Root>
