@@ -10,8 +10,9 @@
 
   let addInput = $state<HTMLInputElement | null>(null)
 
-  // the native desktop app: the page of the latest desktop-native-v* release, whose packages carry the version
-  const desktopReleases = 'https://github.com/timosachsenberg/prose-web/releases/latest'
+  // the native desktop app (its own repository, prose-gui): the page of the latest desktop-native-v* release,
+  // whose packages carry the version
+  const desktopReleases = 'https://github.com/timosachsenberg/prose-gui/releases/latest'
 </script>
 
 <Card.Root size="sm" class="gap-3 rounded-lg shadow-none">

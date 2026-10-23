@@ -12,7 +12,7 @@ test('example search end to end', async ({ page }) => {
   await expect(page.getByText('Spectra and database stay on this computer')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Desktop app (Windows, macOS, Linux)' })).toHaveAttribute(
     'href',
-    'https://github.com/timosachsenberg/prose-web/releases/latest',
+    'https://github.com/timosachsenberg/prose-gui/releases/latest',
   )
 
   await page.getByRole('button', { name: 'Try the example' }).click()

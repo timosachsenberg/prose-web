@@ -1,5 +1,11 @@
 # ProSE in the browser
 
+> **The native ProSE desktop app has moved to
+> [timosachsenberg/prose-gui](https://github.com/timosachsenberg/prose-gui)** (its downloads:
+> [latest release](https://github.com/timosachsenberg/prose-gui/releases/latest)). This repository is retired
+> and kept read-only; the web app below stays online, and the older `desktop-0.x` releases (WebAssembly engine)
+> remain here.
+
 **https://timosachsenberg.github.io/prose-web/**
 
 The OpenMS search engine ProSE compiled to WebAssembly, with its web application, in-process
